@@ -5,9 +5,10 @@ solve(game):
     pieces = game.pieces
     placements[i] = all valid (row, col, mask) for piece i
 
-    # Sort: fewest placements first, group duplicates together
+    # Sort: fewest placements first, group duplicates by shape
     sorted_pieces = sort pieces by (len(placements), shape)
     is_dup[i] = (sorted_pieces[i].shape == sorted_pieces[i-1].shape)
+    single_cell_start = index where trailing 1x1 pieces begin
 
     # Precompute suffix arrays (indexed by piece position in sorted order)
     remaining_bits[i]      = sum of cell_count for pieces[i..n]
@@ -22,32 +23,43 @@ backtrack(board, piece_idx, min_placement):
     if piece_idx == n:
         return board.min_flips == 0
 
-    # --- Pruning checks (all O(1) via cached/precomputed values) ---
+    # --- 1x1 endgame: solve remaining single-cell pieces directly ---
+    if piece_idx >= single_cell_start:
+        for each non-zero cell at value d:
+            assign (M-d) pieces to that cell
+        return total_assigned == remaining_pieces
 
-    # 1. Active planes: each piece removes at most 1
+    # --- Pruning checks ---
+
+    # Active planes: each piece removes at most 1
     if board.active_planes > n - piece_idx:  PRUNE
 
-    # 2. Min-flips budget: remaining piece area must cover needed flips
+    # Min-flips budget: remaining piece area must cover needed flips
     if remaining_bits[piece_idx] < board.min_flips:  PRUNE
 
-    # 3. Modular: supply and demand must agree mod M
-    if remaining_bits[piece_idx] % M != board.min_flips % M:  PRUNE
+    # (Modular check is an invariant — only validated once at root)
 
-    # 4. Per-cell coverage: every non-zero cell must be reachable enough times
+    # Per-cell coverage: every non-zero cell must be reachable enough times
     for d in 1..M:
         needed = M - d
         if any cell in plane[d] has suffix_coverage[piece_idx] < needed:  PRUNE
 
-    # 5. Jaggedness: boundary complexity must be achievable
+    # Jaggedness: boundary complexity must be achievable
     if board.jaggedness > remaining_perimeter[piece_idx]:  PRUNE
+
+    # Cell locking: cells at 0 with coverage < M can't be touched
+    locked = board.plane(0) & ~suffix_coverage[piece_idx].coverage_ge(M)
 
     # --- Try placements ---
     for (pl_idx, (row, col, mask)) in placements[piece_idx]:
 
-        # 6. Duplicate symmetry: skip placements before predecessor's
+        # Duplicate symmetry: skip placements before predecessor's
         if pl_idx < min_placement:  SKIP
 
-        board.apply(mask)      # increments covered cells by 1 mod M
+        # Cell locking: skip placements that touch locked cells
+        if (mask & locked) != 0:  SKIP
+
+        board.apply(mask)
 
         # If next piece is a duplicate, constrain its search
         next_min = pl_idx if is_dup[piece_idx + 1] else 0
@@ -55,7 +67,7 @@ backtrack(board, piece_idx, min_placement):
         if backtrack(board, piece_idx + 1, next_min):
             return true
 
-        board.undo(mask)       # decrements covered cells by 1 mod M
+        board.undo(mask)
 
     return false
 ```
@@ -65,7 +77,7 @@ backtrack(board, piece_idx, min_placement):
 ```
 Board:
     planes[0..M]    : Bitboard per digit value (mutually exclusive)
-    min_flips       : u32, incrementally maintained
+    min_flips       : u32, incrementally maintained on apply/undo
     active_planes   : u8, recomputed after each apply/undo
 
 Bitboard:
@@ -74,4 +86,10 @@ Bitboard:
 CoverageCounter:
     6 × Bitboard layers = binary count per cell (supports up to 63)
     coverage_ge(k) returns a Bitboard mask in O(1) bitwise ops
+    Precomputed as suffix sums over piece reaches
 ```
+
+## Invariant
+`(remaining_bits - min_flips) % M` is constant throughout the search.
+Each placement changes it by `-M * zeros_hit ≡ 0 (mod M)`.
+Only needs to be checked once at the root for input validation.

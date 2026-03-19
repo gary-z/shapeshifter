@@ -30,8 +30,22 @@ impl CoverageCounter {
         }
     }
 
+    /// Subtract a reach bitboard (each bit subtracts 1 from that cell's count).
+    /// Binary subtraction with borrow across layers.
+    /// Caller must ensure counts don't go negative.
+    pub fn subtract(&mut self, reach: Bitboard) {
+        let mut borrow = reach;
+        for layer in &mut self.layers {
+            let new = *layer ^ borrow;
+            borrow = !*layer & borrow;
+            *layer = new;
+            if borrow.is_zero() {
+                break;
+            }
+        }
+    }
+
     /// Returns a bitboard where bit is set iff that cell's count >= k.
-    /// Only supports k in 1..=4 (sufficient for M <= 5).
     pub fn coverage_ge(&self, k: u8) -> Bitboard {
         match k {
             0 => !Bitboard::ZERO, // all bits set

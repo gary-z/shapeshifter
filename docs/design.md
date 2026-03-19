@@ -42,25 +42,30 @@ At each node, if the total popcount of remaining pieces is less than `min_flips`
 - **apply**: `delta = M * popcount(plane[0] & mask) - popcount(mask)`
 - **undo**: `delta = popcount(mask) - M * popcount(plane[1] & mask)`
 
-### 4. Global modular check
-`remaining_piece_bits % M` must equal `min_flips % M`. If not, no arrangement of remaining pieces can produce the exact number of increments needed. This is essentially free (one modulo comparison on cached values).
+Note: `(remaining_bits - min_flips) % M` is an invariant (changes by `-M * zeros_hit` per placement, which is 0 mod M). So the modular check only needs to be done once at the root to validate input, not per-node.
 
-### 5. Active planes pruning
+### 4. Active planes pruning
 Each piece placement can reduce the number of active (non-zero) planes by at most 1. If `active_planes > remaining_pieces`, prune.
 
-### 6. Per-cell coverage pruning
+### 5. Per-cell coverage pruning
 For each piece, precompute its "reach" — the union of all cells it can cover across all valid placements. Suffix coverage counts are stored as 6-layer binary bitboard counters (`CoverageCounter`), enabling O(1) parallel threshold checks across all cells.
 
 At each node, for each non-zero plane d, check that every cell in that plane has coverage ≥ `(M-d)` among remaining pieces. A single bitwise operation per threshold: `(plane[d] & !coverage_ge(M-d)).is_zero()`.
 
 This subsumes unreachable-cell detection (coverage < 1).
 
-### 7. Jaggedness pruning
+### 6. Jaggedness pruning
 **Jaggedness** = count of adjacent cell pairs with different values. A solved board has jaggedness 0. Each piece placement can change jaggedness by at most ±perimeter(piece), because only perimeter edges (between covered/uncovered cells) can affect adjacency matches.
 
 Therefore: `jaggedness(board) <= sum(perimeter(remaining_pieces))`. If violated, prune.
 
 Computed efficiently with bitboards: matching pairs = `sum_d popcount(plane[d] & (plane[d] >> 1))` for horizontal + `>> 15` for vertical. Piece perimeters use the same trick: `cells*4 - 2 * (popcount(shape & (shape >> 1)) + popcount(shape & (shape >> 15)))`.
+
+### 7. Cell locking
+Cells at 0 where `coverage < M` among remaining pieces can never wrap back to 0 if touched. All placements overlapping these cells are filtered out. Computed as `board.plane(0) & !coverage_ge(M)` — a single bitwise operation.
+
+### 8. 1x1 endgame
+When all remaining pieces are single-cell (sorted last due to having the most placements), solve directly: each non-zero cell at value d gets `(M-d)` pieces assigned. O(cells), no search. Eliminates ~3–6 trailing levels of backtracking per search path.
 
 ## Performance
 
@@ -68,16 +73,16 @@ Tested with 20 random seeds per level, 1s timeout:
 
 | Levels | Board | M | Pieces | Solve Rate | Avg Time |
 |--------|-------|---|--------|------------|----------|
-| 1–35 | ≤6×6 | 2 | 2–16 | **100%** | < 16ms |
+| 1–35 | ≤6×6 | 2 | 2–16 | **100%** | < 15ms |
 | 36–45 | 6×6–8×7 | 2–3 | 14–19 | **90–100%** | < 105ms |
-| 46–60 | 8×7–8×8 | 3–4 | 16–20 | **80–95%** | < 284ms |
-| 61–70 | 10×10 | 3–4 | 17–23 | **75–100%** | < 321ms |
-| 71–80 | 10×11 | 3–4 | 18–24 | **60–100%** | < 533ms |
-| 81–90 | 12×12 | 3–4 | 20–25 | **60–100%** | < 519ms |
-| 91–96 | 14×13 | 4–5 | 23–26 | **90–100%** | < 159ms |
-| 97 | 14×13 | 5 | 28 | **95%** | 227ms |
-| 98 | 14×13 | 5 | 30 | **65%** | 476ms |
-| 99 | 14×13 | 5 | 32 | **50%** | 652ms |
-| 100 | 14×14 | 5 | 36 | **25%** | 778ms |
+| 46–60 | 8×7–8×8 | 3–4 | 16–20 | **75–95%** | < 280ms |
+| 61–70 | 10×10 | 3–4 | 17–23 | **75–100%** | < 333ms |
+| 71–80 | 10×11 | 3–4 | 18–24 | **50–100%** | < 571ms |
+| 81–90 | 12×12 | 3–4 | 20–25 | **60–100%** | < 504ms |
+| 91–96 | 14×13 | 4–5 | 23–26 | **85–100%** | < 174ms |
+| 97 | 14×13 | 5 | 28 | **100%** | 237ms |
+| 98 | 14×13 | 5 | 30 | **60%** | 509ms |
+| 99 | 14×13 | 5 | 32 | **45%** | 663ms |
+| 100 | 14×14 | 5 | 36 | **25%** | 776ms |
 
 Higher M paradoxically helps: more digit states mean more constraints and tighter pruning.
