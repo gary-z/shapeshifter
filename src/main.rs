@@ -10,7 +10,6 @@ mod solver;
 use rayon::prelude::*;
 use std::time::Duration;
 
-/// Run solver with a hard timeout. Returns Some(elapsed) if completed, None if timed out.
 fn solve_with_timeout(game: &game::Game, timeout: Duration) -> Option<Duration> {
     use std::sync::mpsc;
     use std::thread;

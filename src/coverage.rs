@@ -58,7 +58,31 @@ impl CoverageCounter {
             }
             // >= 4: bit2+ set (value is at least 4 = 0b100)
             4 => self.layers[2] | self.layers[3] | self.layers[4] | self.layers[5],
-            _ => unreachable!("coverage_ge only supports k <= 4"),
+            // >= 5: (bit0 & bit2) | (bit1 & bit2) | bit3+ (5=101, 6=110, 7=111, 8+=bit3+)
+            5 => {
+                ((self.layers[0] | self.layers[1]) & self.layers[2])
+                    | self.layers[3]
+                    | self.layers[4]
+                    | self.layers[5]
+            }
+            // >= 6: (bit1 & bit2) | bit3+
+            6 => {
+                (self.layers[1] & self.layers[2])
+                    | self.layers[3]
+                    | self.layers[4]
+                    | self.layers[5]
+            }
+            // >= 7: (bit0 & bit1 & bit2) | bit3+
+            7 => {
+                (self.layers[0] & self.layers[1] & self.layers[2])
+                    | self.layers[3]
+                    | self.layers[4]
+                    | self.layers[5]
+            }
+            // >= 8: bit3+
+            8 => self.layers[3] | self.layers[4] | self.layers[5],
+            // Higher thresholds: unlikely to matter but handle gracefully.
+            _ => Bitboard::ZERO,
         }
     }
 }

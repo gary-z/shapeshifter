@@ -133,11 +133,23 @@ fn backtrack(
         return false;
     }
 
+    // Compute locked mask: cells at 0 where remaining coverage < M.
+    // These cells can't absorb a full wrap, so they must get 0 more hits.
+    let zero_plane = board.plane(0);
+    let coverage = &suffix_coverage[piece_idx];
+    let can_wrap = coverage.coverage_ge(m);
+    let locked_mask = zero_plane & !can_wrap;
+
     let placements = &all_placements[piece_idx];
     let mut board = board.clone();
     for (pl_idx, &(row, col, mask)) in placements.iter().enumerate() {
         // Skip placements before min_placement (duplicate symmetry breaking).
         if pl_idx < min_placement {
+            continue;
+        }
+
+        // Skip placements that touch locked cells.
+        if !(mask & locked_mask).is_zero() {
             continue;
         }
 
