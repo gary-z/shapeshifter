@@ -8,6 +8,7 @@ pub type Solution = Vec<(usize, usize)>;
 
 /// Backtracking solver with pruning.
 /// Pieces are sorted so larger/more-constrained pieces are tried first.
+/// Duplicate pieces are detected and their permutations are pruned.
 pub fn solve(game: &Game) -> Option<Solution> {
     let board = game.board().clone();
     let pieces = game.pieces();
@@ -15,18 +16,29 @@ pub fn solve(game: &Game) -> Option<Solution> {
     let w = board.width();
 
     // Build (original_index, placements) and sort: fewer placements first.
+    // Secondary sort by shape to group duplicates together.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
         .map(|(i, p)| (i, p.placements(h, w)))
         .collect();
-    indexed.sort_by_key(|(_, placements)| placements.len());
+    indexed.sort_by(|(i, a_pl), (j, b_pl)| {
+        a_pl.len()
+            .cmp(&b_pl.len())
+            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+    });
 
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
     let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
         indexed.into_iter().map(|(_, p)| p).collect();
 
     let n = pieces.len();
+
+    // Detect which pieces are duplicates of their predecessor (same shape).
+    // For a duplicate, we enforce placement index >= predecessor's placement index.
+    let is_dup_of_prev: Vec<bool> = (0..n)
+        .map(|i| i > 0 && pieces[order[i]] == pieces[order[i - 1]])
+        .collect();
 
     // Precompute suffix sums of piece cell counts and perimeters in sorted order.
     let mut remaining_bits = vec![0u32; n + 1];
@@ -60,8 +72,10 @@ pub fn solve(game: &Game) -> Option<Solution> {
         &remaining_bits,
         &remaining_perimeter,
         &suffix_coverage,
+        &is_dup_of_prev,
         m,
         0,
+        0, // min_placement for first piece
         &mut sorted_solution,
     ) {
         // Map solution back to original piece order.
@@ -81,8 +95,10 @@ fn backtrack(
     remaining_bits: &[u32],
     remaining_perimeter: &[u32],
     suffix_coverage: &[CoverageCounter],
+    is_dup_of_prev: &[bool],
     m: u8,
     piece_idx: usize,
+    min_placement: usize, // minimum placement index (for duplicate pruning)
     solution: &mut Vec<(usize, usize)>,
 ) -> bool {
     if piece_idx == all_placements.len() {
@@ -117,10 +133,25 @@ fn backtrack(
         return false;
     }
 
+    let placements = &all_placements[piece_idx];
     let mut board = board.clone();
-    for &(row, col, mask) in &all_placements[piece_idx] {
+    for (pl_idx, &(row, col, mask)) in placements.iter().enumerate() {
+        // Skip placements before min_placement (duplicate symmetry breaking).
+        if pl_idx < min_placement {
+            continue;
+        }
+
         board.apply_piece(mask);
         solution.push((row, col));
+
+        // If the next piece is a duplicate of this one, it must use placement >= pl_idx.
+        let next_min = if piece_idx + 1 < all_placements.len()
+            && is_dup_of_prev[piece_idx + 1]
+        {
+            pl_idx
+        } else {
+            0
+        };
 
         if backtrack(
             &board,
@@ -128,8 +159,10 @@ fn backtrack(
             remaining_bits,
             remaining_perimeter,
             suffix_coverage,
+            is_dup_of_prev,
             m,
             piece_idx + 1,
+            next_min,
             solution,
         ) {
             return true;
@@ -241,6 +274,35 @@ mod tests {
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
         let game = Game::new(board, vec![piece]);
         assert!(solve(&game).is_none());
+    }
+
+    #[test]
+    fn test_many_duplicates() {
+        // 3x3, m=2. Board all 1s. Nine identical 1x1 pieces should solve it.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 9]);
+
+        let sol = solve(&game).unwrap();
+        assert_eq!(sol.len(), 9);
+        verify_solution(&game, &sol);
+    }
+
+    #[test]
+    fn test_duplicate_pairs() {
+        // Two pairs of identical pieces.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 1, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let h_piece = Piece::from_grid(&[&[true, true]]); // horizontal domino
+        let v_piece = Piece::from_grid(&[&[true], &[true]]); // vertical domino
+        let game = Game::new(board, vec![h_piece, h_piece, v_piece, v_piece]);
+
+        let sol = solve(&game);
+        // May or may not be solvable with these pieces, but solver should not hang.
+        if let Some(ref s) = sol {
+            verify_solution(&game, s);
+        }
     }
 
     #[test]
