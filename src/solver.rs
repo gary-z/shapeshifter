@@ -128,6 +128,8 @@ pub fn solve(game: &Game) -> Option<Solution> {
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
             .cmp(&b_pl.len())
+            .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
+            .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
             .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
     });
 
