@@ -280,22 +280,30 @@ fn backtrack(
 
     // Prune: each piece can eliminate at most one active plane.
     if board.active_planes() as usize > remaining {
+        #[cfg(feature = "debug_pruning")]
+        if piece_idx == 0 { eprintln!("PRUNE active_planes: {} > {}", board.active_planes(), remaining); }
         return false;
     }
 
     // Prune: if remaining piece bits can't cover the minimum flips needed.
     let min_flips = board.min_flips_needed();
     if remaining_bits[piece_idx] < min_flips {
+        #[cfg(feature = "debug_pruning")]
+        if piece_idx == 0 { eprintln!("PRUNE min_flips: {} < {}", remaining_bits[piece_idx], min_flips); }
         return false;
     }
 
     // Prune: insufficient coverage per cell.
     if !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
+        #[cfg(feature = "debug_pruning")]
+        if piece_idx == 0 { eprintln!("PRUNE coverage at piece_idx={}", piece_idx); }
         return false;
     }
 
     // Prune: jaggedness exceeds total remaining perimeter.
     if board.jaggedness() > remaining_perimeter[piece_idx] {
+        #[cfg(feature = "debug_pruning")]
+        if piece_idx == 0 { eprintln!("PRUNE jaggedness: {} > {}", board.jaggedness(), remaining_perimeter[piece_idx]); }
         return false;
     }
 
@@ -309,8 +317,22 @@ fn backtrack(
             board, locked_mask, reaches, perimeters, cell_counts,
             m, piece_idx,
         ) {
+            #[cfg(feature = "debug_pruning")]
+            if piece_idx == 0 { eprintln!("PRUNE component check at piece_idx={}", piece_idx); }
             return false;
         }
+    }
+
+    #[cfg(feature = "debug_pruning")]
+    if piece_idx < 3 {
+        let mut surv = 0usize;
+        for (i, &(_, _, mask)) in all_placements[piece_idx].iter().enumerate() {
+            if i >= min_placement && (mask & locked_mask).is_zero() {
+                surv += 1;
+            }
+        }
+        eprintln!("piece_idx={} placements={} surviving={} locked_bits={} min_placement={}",
+            piece_idx, all_placements[piece_idx].len(), surv, locked_mask.count_ones(), min_placement);
     }
 
     // Micro-opt: unavoidable waste for the current piece. If every valid placement

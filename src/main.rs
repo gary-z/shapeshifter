@@ -5,77 +5,55 @@ mod game;
 mod generate;
 mod level;
 mod piece;
+mod puzzle;
 mod solver;
 
-use rayon::prelude::*;
-use std::time::Duration;
-
-fn solve_with_timeout(game: &game::Game, timeout: Duration) -> Option<Duration> {
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Instant;
-
-    let game = game.clone();
-    let (tx, rx) = mpsc::channel();
-
-    thread::spawn(move || {
-        let start = Instant::now();
-        let _result = solver::solve(&game);
-        let elapsed = start.elapsed();
-        let _ = tx.send(elapsed);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(elapsed) => Some(elapsed),
-        Err(_) => None,
-    }
-}
+use std::time::Instant;
 
 fn main() {
-    let timeout = Duration::from_secs(1);
-    let num_seeds = 20u64;
+    let args: Vec<String> = std::env::args().collect();
 
-    println!(
-        "{:<6} {:<4} {:<5} {:<5} {:<6} {:<8} {:<10} {:<10}",
-        "Level", "M", "Rows", "Cols", "Pcs", "Solved", "Rate", "AvgTime"
-    );
-    println!("{}", "-".repeat(62));
+    if args.len() < 2 {
+        eprintln!("Usage: {} <puzzle.json> [--assets-dir <path>]", args[0]);
+        std::process::exit(1);
+    }
 
-    let results: Vec<_> = (1..=100u32)
-        .into_par_iter()
-        .map(|lvl| {
-            let spec = level::get_level(lvl).unwrap();
-            let mut solved = 0u64;
-            let mut total_time = Duration::ZERO;
+    let path = &args[1];
 
-            for seed in 0..num_seeds {
-                let mut rng =
-                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = generate::generate_game(&spec, &mut rng);
+    // Default assets dir: same name as json but with _files suffix
+    let default_assets = path.replace(".json", "_files");
+    let assets_dir = args.iter()
+        .position(|a| a == "--assets-dir")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or(&default_assets);
 
-                match solve_with_timeout(&game, timeout) {
-                    Some(elapsed) => {
-                        solved += 1;
-                        total_time += elapsed;
-                    }
-                    None => {
-                        total_time += timeout;
-                    }
-                }
-            }
+    let puz = puzzle::PuzzleJson::load(path);
+    let game = puz.to_game();
 
-            let rate = (solved as f64 / num_seeds as f64) * 100.0;
-            let avg = total_time / num_seeds as u32;
-            (lvl, spec.shifts, spec.rows, spec.columns, spec.shapes, solved, rate, avg)
-        })
-        .collect();
+    eprintln!("Loaded level {}: {}x{}, M={}, {} pieces",
+        puz.level, puz.rows, puz.columns, puz.m, puz.pieces.len());
 
-    for &(lvl, shifts, rows, cols, shapes, solved, rate, avg) in &results {
-        println!(
-            "{:<6} {:<4} {:<5} {:<5} {:<6} {:<8} {:<10.1}% {:<10.3?}",
-            lvl, shifts, rows, cols, shapes,
-            format!("{}/{}", solved, num_seeds),
-            rate, avg
-        );
+    let start = Instant::now();
+    let solution = solver::solve(&game);
+    let elapsed = start.elapsed();
+
+    match solution {
+        Some(sol) => {
+            eprintln!("Solved in {:.3?}", elapsed);
+            let html = puzzle::generate_html_guide(&puz, &game, &sol, assets_dir);
+            // Output to <input>_solution.html, or data/solution.html if input is data/puzzle.json
+            let out_path = if path.ends_with("puzzle.json") {
+                path.replace("puzzle.json", "solution.html")
+            } else {
+                path.replace(".json", "_solution.html")
+            };
+            std::fs::write(&out_path, &html).expect("failed to write HTML");
+            eprintln!("Solution written to {}", out_path);
+        }
+        None => {
+            eprintln!("No solution found ({:.3?})", elapsed);
+            std::process::exit(1);
+        }
     }
 }
