@@ -28,5 +28,23 @@ Each piece is a bitboard with bits set at its filled cells, anchored at (0,0). T
 - **Population count**: count set bits
 - **Bounds checking**: verify a shifted piece doesn't exceed board dimensions (no bits set outside valid region)
 
-## Solver Strategy (future)
-Backtracking search over piece placements with pruning. Details TBD.
+## Solver Strategy
+Backtracking search over piece placements with two key optimizations:
+
+### Min-flips pruning
+The board tracks a cached `min_flips` value: the minimum total cell-increments needed to solve, computed as `sum_{d=1}^{M-1} (M - d) * popcount(planes[d])`. This is maintained incrementally during `apply_piece`/`undo_piece` in O(1):
+- **apply**: `delta = M * popcount(plane[0] & mask) - popcount(mask)` (cells at 0 wrap to cost M-1; all others decrease by 1)
+- **undo**: `delta = popcount(mask) - M * popcount(plane[1] & mask)`
+
+At each backtracking step, if the total popcount of remaining pieces is less than `min_flips`, the branch is pruned.
+
+### Piece ordering
+Pieces are sorted by number of valid placements (fewest first). Larger/more-constrained pieces are placed early, reducing the branching factor at the top of the search tree. Smaller pieces placed later benefit more from min-flips pruning since less budget remains.
+
+### Performance
+| Levels | Board | M | Pieces | Worst-case time |
+|--------|-------|---|--------|-----------------|
+| 1–25   | ≤4×4  | 2 | 2–16   | < 1ms           |
+| 26–30  | 4×4   | 3 | 11–15  | < 1ms           |
+| 31–40  | 6×6   | 2–3 | 12–18 | < 204ms       |
+| 41–48  | 8×7   | 2–3 | 15–18 | < 654ms       |

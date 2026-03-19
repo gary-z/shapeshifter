@@ -1,24 +1,71 @@
+use crate::bitboard::Bitboard;
 use crate::board::Board;
+use crate::coverage::{has_sufficient_coverage, precompute_suffix_coverage, CoverageCounter};
 use crate::game::Game;
 
-/// A solution is a list of (row, col) placements, one per piece in order.
+/// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
 
-/// Brute-force backtracking solver.
+/// Backtracking solver with pruning.
+/// Pieces are sorted so larger/more-constrained pieces are tried first.
 pub fn solve(game: &Game) -> Option<Solution> {
     let board = game.board().clone();
     let pieces = game.pieces();
-    let mut solution = Vec::with_capacity(pieces.len());
-
-    // Precompute all valid placements for each piece.
     let h = board.height();
     let w = board.width();
-    let all_placements: Vec<Vec<(usize, usize, _)>> = pieces
+
+    // Build (original_index, placements) and sort: fewer placements first.
+    let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
-        .map(|p| p.placements(h, w))
+        .enumerate()
+        .map(|(i, p)| (i, p.placements(h, w)))
+        .collect();
+    indexed.sort_by_key(|(_, placements)| placements.len());
+
+    let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+    let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
+        indexed.into_iter().map(|(_, p)| p).collect();
+
+    let n = pieces.len();
+
+    // Precompute suffix sums of piece cell counts in sorted order.
+    let mut remaining_bits = vec![0u32; n + 1];
+    for i in (0..n).rev() {
+        remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
+    }
+
+    // Precompute per-piece reach: union of all placement masks.
+    let reaches: Vec<Bitboard> = all_placements
+        .iter()
+        .map(|placements| {
+            let mut reach = Bitboard::ZERO;
+            for &(_, _, mask) in placements {
+                reach |= mask;
+            }
+            reach
+        })
         .collect();
 
-    if backtrack(&board, &all_placements, 0, &mut solution) {
+    // Precompute suffix coverage in binary bitboard layers.
+    let suffix_coverage = precompute_suffix_coverage(&reaches);
+
+    let m = board.m();
+
+    let mut sorted_solution = Vec::with_capacity(n);
+    if backtrack(
+        &board,
+        &all_placements,
+        &remaining_bits,
+        &suffix_coverage,
+        m,
+        0,
+        &mut sorted_solution,
+    ) {
+        // Map solution back to original piece order.
+        let mut solution = vec![(0, 0); n];
+        for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
+            solution[order[sorted_idx]] = (row, col);
+        }
         Some(solution)
     } else {
         None
@@ -27,12 +74,38 @@ pub fn solve(game: &Game) -> Option<Solution> {
 
 fn backtrack(
     board: &Board,
-    all_placements: &[Vec<(usize, usize, crate::bitboard::Bitboard)>],
+    all_placements: &[Vec<(usize, usize, Bitboard)>],
+    remaining_bits: &[u32],
+    suffix_coverage: &[CoverageCounter],
+    m: u8,
     piece_idx: usize,
-    solution: &mut Solution,
+    solution: &mut Vec<(usize, usize)>,
 ) -> bool {
     if piece_idx == all_placements.len() {
         return board.is_solved();
+    }
+
+    let remaining = all_placements.len() - piece_idx;
+
+    // Prune: each piece can eliminate at most one active plane.
+    if board.active_planes() as usize > remaining {
+        return false;
+    }
+
+    // Prune: if remaining piece bits can't cover the minimum flips needed.
+    let min_flips = board.min_flips_needed();
+    if remaining_bits[piece_idx] < min_flips {
+        return false;
+    }
+
+    // Prune: total remaining increments must match needed increments mod M.
+    if remaining_bits[piece_idx] % m as u32 != min_flips % m as u32 {
+        return false;
+    }
+
+    // Prune: insufficient coverage per cell.
+    if !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
+        return false;
     }
 
     let mut board = board.clone();
@@ -40,7 +113,15 @@ fn backtrack(
         board.apply_piece(mask);
         solution.push((row, col));
 
-        if backtrack(&board, all_placements, piece_idx + 1, solution) {
+        if backtrack(
+            &board,
+            all_placements,
+            remaining_bits,
+            suffix_coverage,
+            m,
+            piece_idx + 1,
+            solution,
+        ) {
             return true;
         }
 
@@ -58,7 +139,6 @@ mod tests {
     use crate::game::Game;
     use crate::piece::Piece;
 
-    /// Verify a solution by replaying it and checking the board is solved.
     fn verify_solution(game: &Game, solution: &Solution) {
         let mut board = game.board().clone();
         for (i, &(row, col)) in solution.iter().enumerate() {
@@ -70,7 +150,6 @@ mod tests {
 
     #[test]
     fn test_trivial_solve() {
-        // 3x3, m=2. One 1x1 piece. Board has a single 1, rest 0.
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -84,7 +163,6 @@ mod tests {
 
     #[test]
     fn test_two_pieces() {
-        // 3x3, m=2. Two 1x1 pieces. Board has two 1s.
         let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -97,8 +175,6 @@ mod tests {
 
     #[test]
     fn test_no_solution() {
-        // 3x3, m=3. Board all 1s. One 1x1 piece can only increment one cell.
-        // After placing: one cell becomes 2, rest stay 1. Not solvable.
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
@@ -122,5 +198,49 @@ mod tests {
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
         let sol = solve(&game).unwrap();
         verify_solution(&game, &sol);
+    }
+
+    #[test]
+    fn test_min_flips_pruning() {
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.min_flips_needed(), 9);
+
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece]);
+        assert!(solve(&game).is_none());
+    }
+
+    #[test]
+    fn test_solution_maps_to_original_order() {
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let p0 = Piece::from_grid(&[&[true]]);
+        let p1 = Piece::from_grid(&[&[true, true]]);
+        let game = Game::new(board, vec![p0, p1]);
+
+        let sol = solve(&game).unwrap();
+        assert_eq!(sol.len(), 2);
+        verify_solution(&game, &sol);
+    }
+
+    #[test]
+    fn test_coverage_pruning_unreachable() {
+        let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[0, 0, 1]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
+        let game = Game::new(board, vec![piece]);
+        assert!(solve(&game).is_none());
+    }
+
+    #[test]
+    fn test_generated_levels_solvable() {
+        for level in [1, 5, 10, 20, 25, 30] {
+            let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
+            let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
+            let sol = solve(&game);
+            assert!(sol.is_some(), "level {level} should be solvable");
+            verify_solution(&game, &sol.unwrap());
+        }
     }
 }

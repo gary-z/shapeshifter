@@ -40,6 +40,23 @@ impl Bitboard {
         self.limbs[0] == 0 && self.limbs[1] == 0 && self.limbs[2] == 0 && self.limbs[3] == 0
     }
 
+    /// Return the index of the lowest set bit, or 256 if none.
+    pub const fn lowest_set_bit(&self) -> u32 {
+        if self.limbs[0] != 0 {
+            return self.limbs[0].trailing_zeros();
+        }
+        if self.limbs[1] != 0 {
+            return 64 + self.limbs[1].trailing_zeros();
+        }
+        if self.limbs[2] != 0 {
+            return 128 + self.limbs[2].trailing_zeros();
+        }
+        if self.limbs[3] != 0 {
+            return 192 + self.limbs[3].trailing_zeros();
+        }
+        256
+    }
+
     /// Count the number of set bits.
     pub const fn count_ones(&self) -> u32 {
         self.limbs[0].count_ones()

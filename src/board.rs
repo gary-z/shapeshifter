@@ -16,6 +16,11 @@ pub struct Board {
     height: u8,
     /// Board width.
     width: u8,
+    /// Cached minimum total cell-increments needed to solve.
+    /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
+    min_flips: u32,
+    /// Number of non-zero planes (planes[d] for d>0 that have any bits set).
+    active_planes: u8,
 }
 
 impl Board {
@@ -38,11 +43,23 @@ impl Board {
             }
         }
 
+        let mut min_flips = 0u32;
+        let mut active_planes = 0u8;
+        for d in 1..m as usize {
+            let cnt = planes[d].count_ones();
+            min_flips += (m as u32 - d as u32) * cnt;
+            if cnt > 0 {
+                active_planes += 1;
+            }
+        }
+
         Self {
             planes,
             m,
             height: height as u8,
             width: width as u8,
+            min_flips,
+            active_planes,
         }
     }
 
@@ -67,6 +84,8 @@ impl Board {
             m,
             height,
             width,
+            min_flips: 0,
+            active_planes: 0,
         }
     }
 
@@ -100,45 +119,70 @@ impl Board {
 
     /// Returns true if every cell is 0 (the board is solved).
     pub fn is_solved(&self) -> bool {
-        for d in 1..self.m as usize {
-            if !self.planes[d].is_zero() {
-                return false;
-            }
-        }
-        true
+        self.min_flips == 0
     }
 
     /// Apply a piece placement: increment all cells under `piece_mask` by 1 (mod M).
     /// Each plane rotates: cells at digit d move to digit (d+1) % M.
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
-        let m = self.m as usize;
-        // Cells at value (M-1) that are under the piece wrap to 0.
+        let m = self.m as u32;
+        // Incremental min_flips update:
+        // Cells at 0 go to 1 (cost 0 → M-1), all others decrease by 1.
+        // delta = M * popcount(plane[0] & mask) - popcount(mask)
+        let zeros_hit = (self.planes[0] & piece_mask).count_ones();
+        self.min_flips = self.min_flips + m * zeros_hit - piece_mask.count_ones();
+
+        let m = m as usize;
         let top = self.planes[m - 1] & piece_mask;
-        // Shift each plane up: plane[d] loses bits going to d+1, gains bits from d-1.
-        // Work backwards to avoid overwriting.
         let mut i = m - 1;
         while i > 0 {
-            // Cells in plane[i-1] under the mask move to plane[i].
             let moving = self.planes[i - 1] & piece_mask;
-            // plane[i] keeps cells NOT under the mask, gains cells from plane[i-1].
             self.planes[i] = (self.planes[i] & !piece_mask) | moving;
             i -= 1;
         }
-        // plane[0] keeps cells NOT under the mask, gains wrapped cells from plane[M-1].
         self.planes[0] = (self.planes[0] & !piece_mask) | top;
+        self.recount_active_planes();
     }
 
     /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
     pub fn undo_piece(&mut self, piece_mask: Bitboard) {
-        let m = self.m as usize;
-        // Cells at value 0 under the piece wrap to M-1.
+        let m = self.m as u32;
+        // Incremental min_flips update:
+        // Cells at 1 go to 0 (cost M-1 → 0), all others increase by 1.
+        // delta = popcount(mask) - M * popcount(plane[1] & mask)
+        let ones_hit = (self.planes[1] & piece_mask).count_ones();
+        self.min_flips = self.min_flips + piece_mask.count_ones() - m * ones_hit;
+
+        let m = m as usize;
         let bottom = self.planes[0] & piece_mask;
-        // Shift each plane down.
         for i in 0..m - 1 {
             let moving = self.planes[i + 1] & piece_mask;
             self.planes[i] = (self.planes[i] & !piece_mask) | moving;
         }
         self.planes[m - 1] = (self.planes[m - 1] & !piece_mask) | bottom;
+        self.recount_active_planes();
+    }
+
+    fn recount_active_planes(&mut self) {
+        let mut count = 0u8;
+        for d in 1..self.m as usize {
+            if !self.planes[d].is_zero() {
+                count += 1;
+            }
+        }
+        self.active_planes = count;
+    }
+
+    /// Number of non-zero planes (planes with d > 0 that have any bits set).
+    /// Each piece placement can reduce this by at most 1.
+    pub fn active_planes(&self) -> u8 {
+        self.active_planes
+    }
+
+    /// Minimum total cell-increments needed to solve (cached, O(1)).
+    /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
+    pub fn min_flips_needed(&self) -> u32 {
+        self.min_flips
     }
 
     /// Bitboard mask of all valid cells on this board.
