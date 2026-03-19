@@ -10,21 +10,34 @@ use crate::piece::Piece;
 fn random_piece(rng: &mut impl Rng, max_h: u8, max_w: u8) -> Piece {
     let max_h = max_h.min(5) as usize;
     let max_w = max_w.min(5) as usize;
+    let max_area = max_h * max_w;
 
     loop {
-        // Pick bounding box dimensions (at least 1x1).
-        let h = rng.random_range(1..=max_h);
-        let w = rng.random_range(1..=max_w);
+        // Pick target size from a distribution centered around 5-6,
+        // matching observed piece sizes in higher-level Neopets puzzles.
+        // Weights for sizes 1..=25 (index 0 unused).
+        const WEIGHTS: [u32; 12] = [1, 2, 4, 6, 10, 8, 7, 4, 3, 2, 2, 1];
+        let max_size = max_area.min(WEIGHTS.len());
+        let total_weight: u32 = WEIGHTS[..max_size].iter().sum();
+        let mut roll = rng.random_range(0..total_weight);
+        let mut target = 1;
+        for (i, &w) in WEIGHTS[..max_size].iter().enumerate() {
+            if roll < w {
+                target = i + 1;
+                break;
+            }
+            roll -= w;
+        }
 
-        // Start with a random seed cell inside the bounding box.
+        // Use a 5x5 bounding box and grow to the target size.
+        let h = max_h;
+        let w = max_w;
         let mut grid = vec![vec![false; w]; h];
         let seed_r = rng.random_range(0..h);
         let seed_c = rng.random_range(0..w);
         grid[seed_r][seed_c] = true;
         let mut filled = vec![(seed_r, seed_c)];
 
-        // Grow by randomly adding neighbors of existing cells.
-        let target = rng.random_range(1..=(h * w));
         while filled.len() < target {
             // Pick a random filled cell and try to expand from it.
             let &(r, c) = &filled[rng.random_range(0..filled.len())];

@@ -289,9 +289,6 @@ fn backtrack(
         return false;
     }
 
-    // Note: remaining_bits % M == min_flips % M is an invariant (never changes),
-    // so it's only checked once at the root, not per-node.
-
     // Prune: insufficient coverage per cell.
     if !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
         return false;
@@ -316,7 +313,33 @@ fn backtrack(
         }
     }
 
+    // Micro-opt: unavoidable waste for the current piece. If every valid placement
+    // hits at least Z zero cells, the budget must absorb M*Z waste.
+    // Equivalent to the min_flips check at depth+1, but avoids iterating all placements.
     let placements = &all_placements[piece_idx];
+    let zero_plane = board.plane(0);
+    let mut min_zero_hit = u32::MAX;
+    for (pl_idx, &(_, _, mask)) in placements.iter().enumerate() {
+        if pl_idx < min_placement {
+            continue;
+        }
+        if !(mask & locked_mask).is_zero() {
+            continue;
+        }
+        let z = (mask & zero_plane).count_ones();
+        if z < min_zero_hit {
+            min_zero_hit = z;
+        }
+        if min_zero_hit == 0 {
+            break;
+        }
+    }
+    if min_zero_hit > 0 && min_zero_hit < u32::MAX {
+        if remaining_bits[piece_idx] < min_flips + m as u32 * min_zero_hit {
+            return false;
+        }
+    }
+
     let mut board = board.clone();
     for (pl_idx, &(row, col, mask)) in placements.iter().enumerate() {
         if pl_idx < min_placement {
