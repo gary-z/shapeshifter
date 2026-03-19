@@ -1,0 +1,218 @@
+use crate::bitboard::Bitboard;
+
+/// A puzzle piece defined by its filled cells, anchored at (0, 0).
+/// The shape is stored as a Bitboard using the 15-column stride layout.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Piece {
+    /// Bitboard with bits set at the piece's filled cells, anchored at (0, 0).
+    shape: Bitboard,
+    /// Height of the piece's bounding box.
+    height: u8,
+    /// Width of the piece's bounding box.
+    width: u8,
+}
+
+impl Piece {
+    /// Create a piece from a 2D grid of booleans (true = filled).
+    /// The grid must be non-empty, fit within 5x5, and be tight (no empty border rows/cols).
+    pub fn from_grid(grid: &[&[bool]]) -> Self {
+        let height = grid.len();
+        assert!(height >= 1 && height <= 5, "piece height must be in [1, 5]");
+        let width = grid[0].len();
+        assert!(width >= 1 && width <= 5, "piece width must be in [1, 5]");
+
+        let mut shape = Bitboard::ZERO;
+        for (r, row) in grid.iter().enumerate() {
+            assert_eq!(row.len(), width, "all rows must have the same width");
+            for (c, &filled) in row.iter().enumerate() {
+                if filled {
+                    shape.set_bit((r * 15 + c) as u32);
+                }
+            }
+        }
+
+        assert!(!shape.is_zero(), "piece must have at least one filled cell");
+
+        Self {
+            shape,
+            height: height as u8,
+            width: width as u8,
+        }
+    }
+
+    pub const fn shape(&self) -> Bitboard {
+        self.shape
+    }
+
+    pub const fn height(&self) -> u8 {
+        self.height
+    }
+
+    pub const fn width(&self) -> u8 {
+        self.width
+    }
+
+    /// Number of filled cells in the piece.
+    pub const fn cell_count(&self) -> u32 {
+        self.shape.count_ones()
+    }
+
+    /// Return the piece's shape shifted to board position (row, col).
+    pub fn placed_at(&self, row: usize, col: usize) -> Bitboard {
+        let offset = (row * 15 + col) as u32;
+        self.shape << offset
+    }
+
+    /// Iterate over all valid placement positions on a board of the given dimensions.
+    /// Returns (row, col, shifted_shape) for each valid position.
+    pub fn placements(&self, board_height: u8, board_width: u8) -> Vec<(usize, usize, Bitboard)> {
+        let max_row = board_height as usize - self.height as usize;
+        let max_col = board_width as usize - self.width as usize;
+        let mut result = Vec::new();
+        for r in 0..=max_row {
+            for c in 0..=max_col {
+                result.push((r, c, self.placed_at(r, c)));
+            }
+        }
+        result
+    }
+}
+
+impl std::fmt::Debug for Piece {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Piece({}x{})", self.height, self.width)?;
+        for r in 0..self.height as usize {
+            for c in 0..self.width as usize {
+                let index = (r * 15 + c) as u32;
+                if self.shape.get_bit(index) {
+                    write!(f, "#")?;
+                } else {
+                    write!(f, ".")?;
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_single_cell_piece() {
+        let piece = Piece::from_grid(&[&[true]]);
+        assert_eq!(piece.height(), 1);
+        assert_eq!(piece.width(), 1);
+        assert_eq!(piece.cell_count(), 1);
+        assert!(piece.shape().get_bit(0));
+    }
+
+    #[test]
+    fn test_l_shaped_piece() {
+        // ##
+        // #.
+        let piece = Piece::from_grid(&[&[true, true], &[true, false]]);
+        assert_eq!(piece.height(), 2);
+        assert_eq!(piece.width(), 2);
+        assert_eq!(piece.cell_count(), 3);
+        assert!(piece.shape().get_bit(0));        // (0,0)
+        assert!(piece.shape().get_bit(1));        // (0,1)
+        assert!(piece.shape().get_bit(15));       // (1,0)
+        assert!(!piece.shape().get_bit(16));      // (1,1) empty
+    }
+
+    #[test]
+    fn test_placed_at() {
+        let piece = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let placed = piece.placed_at(2, 3);
+        assert!(placed.get_bit(2 * 15 + 3));     // (2,3)
+        assert!(placed.get_bit(2 * 15 + 4));     // (2,4)
+        assert!(placed.get_bit(3 * 15 + 3));     // (3,3)
+        assert!(!placed.get_bit(3 * 15 + 4));    // (3,4) empty
+        assert_eq!(placed.count_ones(), 3);
+    }
+
+    #[test]
+    fn test_placements_count() {
+        // 1x1 piece on a 3x3 board -> 9 placements
+        let piece = Piece::from_grid(&[&[true]]);
+        let placements = piece.placements(3, 3);
+        assert_eq!(placements.len(), 9);
+    }
+
+    #[test]
+    fn test_placements_2x2_on_3x3() {
+        // 2x2 piece on 3x3 board -> 2*2 = 4 placements
+        let piece = Piece::from_grid(&[&[true, true], &[true, true]]);
+        let placements = piece.placements(3, 3);
+        assert_eq!(placements.len(), 4);
+    }
+
+    #[test]
+    fn test_placements_exact_fit() {
+        // 3x3 piece on 3x3 board -> 1 placement
+        let piece = Piece::from_grid(&[
+            &[true, true, true],
+            &[true, true, true],
+            &[true, true, true],
+        ]);
+        let placements = piece.placements(3, 3);
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].0, 0);
+        assert_eq!(placements[0].1, 0);
+    }
+
+    #[test]
+    fn test_placements_positions_correct() {
+        let piece = Piece::from_grid(&[&[true]]);
+        let placements = piece.placements(3, 3);
+        // Verify corners
+        assert!(placements.iter().any(|&(r, c, _)| r == 0 && c == 0));
+        assert!(placements.iter().any(|&(r, c, _)| r == 0 && c == 2));
+        assert!(placements.iter().any(|&(r, c, _)| r == 2 && c == 0));
+        assert!(placements.iter().any(|&(r, c, _)| r == 2 && c == 2));
+    }
+
+    #[test]
+    fn test_t_shaped_piece() {
+        // ###
+        // .#.
+        let piece = Piece::from_grid(&[&[true, true, true], &[false, true, false]]);
+        assert_eq!(piece.height(), 2);
+        assert_eq!(piece.width(), 3);
+        assert_eq!(piece.cell_count(), 4);
+    }
+
+    #[test]
+    fn test_5x5_piece() {
+        let row = &[true, true, true, true, true];
+        let piece = Piece::from_grid(&[row, row, row, row, row]);
+        assert_eq!(piece.height(), 5);
+        assert_eq!(piece.width(), 5);
+        assert_eq!(piece.cell_count(), 25);
+    }
+
+    #[test]
+    fn test_debug_output() {
+        let piece = Piece::from_grid(&[&[true, false], &[true, true]]);
+        let s = format!("{:?}", piece);
+        assert!(s.contains("Piece(2x2)"));
+        assert!(s.contains("#."));
+        assert!(s.contains("##"));
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one filled cell")]
+    fn test_empty_piece() {
+        Piece::from_grid(&[&[false, false], &[false, false]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "piece height")]
+    fn test_too_tall() {
+        let row = &[true];
+        Piece::from_grid(&[row, row, row, row, row, row]);
+    }
+}
