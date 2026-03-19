@@ -28,10 +28,12 @@ pub fn solve(game: &Game) -> Option<Solution> {
 
     let n = pieces.len();
 
-    // Precompute suffix sums of piece cell counts in sorted order.
+    // Precompute suffix sums of piece cell counts and perimeters in sorted order.
     let mut remaining_bits = vec![0u32; n + 1];
+    let mut remaining_perimeter = vec![0u32; n + 1];
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
+        remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
     }
 
     // Precompute per-piece reach: union of all placement masks.
@@ -56,6 +58,7 @@ pub fn solve(game: &Game) -> Option<Solution> {
         &board,
         &all_placements,
         &remaining_bits,
+        &remaining_perimeter,
         &suffix_coverage,
         m,
         0,
@@ -76,6 +79,7 @@ fn backtrack(
     board: &Board,
     all_placements: &[Vec<(usize, usize, Bitboard)>],
     remaining_bits: &[u32],
+    remaining_perimeter: &[u32],
     suffix_coverage: &[CoverageCounter],
     m: u8,
     piece_idx: usize,
@@ -108,6 +112,11 @@ fn backtrack(
         return false;
     }
 
+    // Prune: jaggedness exceeds total remaining perimeter.
+    if board.jaggedness() > remaining_perimeter[piece_idx] {
+        return false;
+    }
+
     let mut board = board.clone();
     for &(row, col, mask) in &all_placements[piece_idx] {
         board.apply_piece(mask);
@@ -117,6 +126,7 @@ fn backtrack(
             &board,
             all_placements,
             remaining_bits,
+            remaining_perimeter,
             suffix_coverage,
             m,
             piece_idx + 1,

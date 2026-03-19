@@ -185,6 +185,45 @@ impl Board {
         self.min_flips
     }
 
+    /// Count of adjacent cell pairs (horizontal + vertical) with different values.
+    /// A solved board has jaggedness = 0.
+    pub fn jaggedness(&self) -> u32 {
+        let h = self.height as usize;
+        let w = self.width as usize;
+
+        // Build masks for valid horizontal and vertical pair origins.
+        // Horizontal: cell (r, c) paired with (r, c+1), so c < w-1.
+        // Vertical: cell (r, c) paired with (r+1, c), so r < h-1.
+        let mut h_mask = Bitboard::ZERO;
+        let mut v_mask = Bitboard::ZERO;
+        for r in 0..h {
+            for c in 0..w {
+                let bit = (r * 15 + c) as u32;
+                if c + 1 < w {
+                    h_mask.set_bit(bit);
+                }
+                if r + 1 < h {
+                    v_mask.set_bit(bit);
+                }
+            }
+        }
+
+        // Count matching pairs: adjacent cells in the same plane.
+        let mut matching = 0u32;
+        for d in 0..self.m as usize {
+            let p = self.planes[d];
+            // Horizontal: p & (p >> 1), masked to valid pair origins.
+            matching += (p & (p >> 1) & h_mask).count_ones();
+            // Vertical: p & (p >> 15), masked to valid pair origins.
+            matching += (p & (p >> 15) & v_mask).count_ones();
+        }
+
+        // Total valid pairs - matching = jaggedness.
+        let total_h = h_mask.count_ones();
+        let total_v = v_mask.count_ones();
+        (total_h + total_v) - matching
+    }
+
     /// Bitboard mask of all valid cells on this board.
     pub fn valid_mask(&self) -> Bitboard {
         let mut mask = Bitboard::ZERO;
@@ -395,5 +434,171 @@ mod tests {
     fn test_invalid_height() {
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0]]; // height 2
         Board::from_grid(grid, 2);
+    }
+
+    // --- Jaggedness tests ---
+
+    #[test]
+    fn test_jaggedness_solved_board() {
+        // All zeros: every adjacent pair matches. Jaggedness = 0.
+        let board = Board::new_solved(3, 3, 2);
+        assert_eq!(board.jaggedness(), 0);
+    }
+
+    #[test]
+    fn test_jaggedness_uniform_nonzero() {
+        // All 1s: every adjacent pair matches. Jaggedness = 0.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 0);
+    }
+
+    #[test]
+    fn test_jaggedness_single_cell_different() {
+        // 3x3, m=2. Only (0,0)=1, rest=0.
+        // (0,0) differs from (0,1) horizontally and (1,0) vertically. Jaggedness = 2.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 2);
+    }
+
+    #[test]
+    fn test_jaggedness_corner_cell() {
+        // 3x3, m=2. Only (2,2)=1 (bottom-right corner).
+        // Neighbors: (2,1) horizontal, (1,2) vertical. Both are 0. Jaggedness = 2.
+        let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[0, 0, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 2);
+    }
+
+    #[test]
+    fn test_jaggedness_center_cell() {
+        // 3x3, m=2. Only (1,1)=1 (center).
+        // 4 neighbors: (0,1), (2,1), (1,0), (1,2) all 0. Jaggedness = 4.
+        let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 1, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_horizontal_stripe() {
+        // 3x3, m=2. Top row all 1, rest 0.
+        // Horizontal pairs in row 0: (0,0)-(0,1) match, (0,1)-(0,2) match. +0
+        // Vertical pairs from row 0 to 1: 3 pairs, all differ. +3
+        // Rest: rows 1-2 all 0, all match. +0
+        // Jaggedness = 3.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_vertical_stripe() {
+        // 3x3, m=2. Left column all 1, rest 0.
+        // Vertical: col 0 pairs match. +0
+        // Horizontal: row 0: (0,0)=1 vs (0,1)=0 differ. Same for rows 1,2. +3
+        // Jaggedness = 3.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[1, 0, 0], &[1, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_checkerboard() {
+        // 3x3, m=2. Checkerboard pattern: every adjacent pair differs.
+        // 0 1 0
+        // 1 0 1
+        // 0 1 0
+        // Horizontal pairs: 3 rows × 2 pairs = 6, all differ. +6
+        // Vertical pairs: 2 row-gaps × 3 cols = 6, all differ. +6
+        // Jaggedness = 12.
+        let grid: &[&[u8]] = &[&[0, 1, 0], &[1, 0, 1], &[0, 1, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 12);
+    }
+
+    #[test]
+    fn test_jaggedness_m3_two_values() {
+        // 3x3, m=3. Two different nonzero values are still "jagged."
+        // 1 2 1
+        // 0 0 0
+        // 0 0 0
+        // Row 0 horizontal: (1,2) differ, (2,1) differ. +2
+        // Row 0-1 vertical: (1,0), (2,0), (1,0) all differ. +3
+        // Rows 1-2: all 0, match. +0
+        // Rows 1 horizontal: all 0. +0
+        // Jaggedness = 5.
+        let grid: &[&[u8]] = &[&[1, 2, 1], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 3);
+        assert_eq!(board.jaggedness(), 5);
+    }
+
+    #[test]
+    fn test_jaggedness_m3_all_different() {
+        // 3x3, m=3. Each cell a different value (cycling).
+        // 0 1 2
+        // 1 2 0
+        // 2 0 1
+        // Horizontal: (0,1)≠(0,2)≠, (1,2)≠, etc. Let me count:
+        // Row 0: 0-1 differ, 1-2 differ. +2
+        // Row 1: 1-2 differ, 2-0 differ. +2
+        // Row 2: 2-0 differ, 0-1 differ. +2
+        // Vertical:
+        // Col 0: 0-1 differ, 1-2 differ. +2
+        // Col 1: 1-2 differ, 2-0 differ. +2
+        // Col 2: 2-0 differ, 0-1 differ. +2
+        // Jaggedness = 12.
+        let grid: &[&[u8]] = &[&[0, 1, 2], &[1, 2, 0], &[2, 0, 1]];
+        let board = Board::from_grid(grid, 3);
+        assert_eq!(board.jaggedness(), 12);
+    }
+
+    #[test]
+    fn test_jaggedness_rectangular_board() {
+        // 4x3 board, m=2. All 1s except bottom row.
+        // 1 1 1
+        // 1 1 1
+        // 1 1 1
+        // 0 0 0
+        // Horizontal: all pairs in same rows match. +0
+        // Vertical: rows 0-1, 1-2 all match. Row 2-3: 3 pairs differ. +3
+        // Jaggedness = 3.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_after_apply_piece() {
+        // Start solved (jaggedness=0), apply a piece, check jaggedness increases.
+        let mut board = Board::new_solved(3, 3, 2);
+        assert_eq!(board.jaggedness(), 0);
+
+        // Place a 2x2 piece at (0,0). Board becomes:
+        // 1 1 0
+        // 1 1 0
+        // 0 0 0
+        let mut piece = Bitboard::ZERO;
+        piece.set_bit(0);
+        piece.set_bit(1);
+        piece.set_bit(15);
+        piece.set_bit(16);
+        board.apply_piece(piece);
+
+        // Horizontal: (0,1)-(0,2) differ, (1,1)-(1,2) differ. +2
+        // Vertical: (1,0)-(2,0) differ, (1,1)-(2,1) differ. +2
+        // Jaggedness = 4.
+        assert_eq!(board.jaggedness(), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_two_isolated_cells() {
+        // 3x3, m=2. (0,0)=1 and (2,2)=1, rest=0.
+        // (0,0): 2 differing edges.
+        // (2,2): 2 differing edges.
+        // No overlap. Jaggedness = 4.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(board.jaggedness(), 4);
     }
 }

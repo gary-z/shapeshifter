@@ -57,6 +57,19 @@ impl Piece {
         self.shape.count_ones()
     }
 
+    /// Perimeter of the piece: count of edges between filled and unfilled cells
+    /// (within the bounding box grid, using cardinal adjacency).
+    /// This is a fixed property of the shape, independent of placement.
+    pub fn perimeter(&self) -> u32 {
+        let s = self.shape;
+        // Count internal edges (shared between two filled cells) in each direction.
+        // Each shift + AND finds adjacent filled pairs; multiply by 2 since each
+        // internal edge removes 2 from the perimeter (one from each side).
+        let h_internal = (s & (s >> 1)).count_ones();  // horizontal pairs
+        let v_internal = (s & (s >> 15)).count_ones(); // vertical pairs
+        s.count_ones() * 4 - (h_internal + v_internal) * 2
+    }
+
     /// Return the piece's shape shifted to board position (row, col).
     pub fn placed_at(&self, row: usize, col: usize) -> Bitboard {
         let offset = (row * 15 + col) as u32;
@@ -214,5 +227,91 @@ mod tests {
     fn test_too_tall() {
         let row = &[true];
         Piece::from_grid(&[row, row, row, row, row, row]);
+    }
+
+    // --- Perimeter tests ---
+
+    #[test]
+    fn test_perimeter_single_cell() {
+        // #  -> perimeter = 4
+        let piece = Piece::from_grid(&[&[true]]);
+        assert_eq!(piece.perimeter(), 4);
+    }
+
+    #[test]
+    fn test_perimeter_domino_horizontal() {
+        // ##  -> perimeter = 6 (4+4 - 2 shared edges)
+        let piece = Piece::from_grid(&[&[true, true]]);
+        assert_eq!(piece.perimeter(), 6);
+    }
+
+    #[test]
+    fn test_perimeter_domino_vertical() {
+        // #
+        // #  -> perimeter = 6
+        let piece = Piece::from_grid(&[&[true], &[true]]);
+        assert_eq!(piece.perimeter(), 6);
+    }
+
+    #[test]
+    fn test_perimeter_2x2_square() {
+        // ##
+        // ##  -> perimeter = 8
+        let piece = Piece::from_grid(&[&[true, true], &[true, true]]);
+        assert_eq!(piece.perimeter(), 8);
+    }
+
+    #[test]
+    fn test_perimeter_l_shape() {
+        // ##
+        // #.  -> perimeter = 8 (3 cells, 2 internal edges, 3*4 - 2*2 = 8)
+        let piece = Piece::from_grid(&[&[true, true], &[true, false]]);
+        assert_eq!(piece.perimeter(), 8);
+    }
+
+    #[test]
+    fn test_perimeter_t_shape() {
+        // ###
+        // .#.  -> 4 cells, 3 internal edges. 4*4 - 3*2 = 10
+        let piece = Piece::from_grid(&[&[true, true, true], &[false, true, false]]);
+        assert_eq!(piece.perimeter(), 10);
+    }
+
+    #[test]
+    fn test_perimeter_straight_line_5() {
+        // #####  -> 5 cells, 4 internal edges. 5*4 - 4*2 = 12
+        let piece = Piece::from_grid(&[&[true, true, true, true, true]]);
+        assert_eq!(piece.perimeter(), 12);
+    }
+
+    #[test]
+    fn test_perimeter_3x3_square() {
+        // ###
+        // ###
+        // ###  -> 9 cells, 12 internal edges. 9*4 - 12*2 = 12
+        let row = &[true, true, true];
+        let piece = Piece::from_grid(&[row, row, row]);
+        assert_eq!(piece.perimeter(), 12);
+    }
+
+    #[test]
+    fn test_perimeter_plus_shape() {
+        // .#.
+        // ###
+        // .#.  -> 5 cells, 4 internal edges. 5*4 - 4*2 = 12
+        let piece = Piece::from_grid(&[
+            &[false, true, false],
+            &[true, true, true],
+            &[false, true, false],
+        ]);
+        assert_eq!(piece.perimeter(), 12);
+    }
+
+    #[test]
+    fn test_perimeter_5x5_full() {
+        // 25 cells, 40 internal edges. 25*4 - 40*2 = 20
+        let row = &[true, true, true, true, true];
+        let piece = Piece::from_grid(&[row, row, row, row, row]);
+        assert_eq!(piece.perimeter(), 20);
     }
 }
