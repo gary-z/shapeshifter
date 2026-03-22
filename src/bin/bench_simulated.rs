@@ -77,7 +77,8 @@ fn main() {
                 timeout += 1;
                 println!(
                     "{:<8} {:<5} {:<6} {:<6} {:>12} {:>12} {:<8}",
-                    level, g, n_pieces, board_desc, "-", ">60s", "TIMEOUT"
+                    level, g, n_pieces, board_desc, "-",
+                    format!(">{}s", TIMEOUT.as_secs()), "TIMEOUT"
                 );
             }
         }
