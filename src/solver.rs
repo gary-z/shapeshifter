@@ -520,9 +520,13 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     // Precompute suffix sums/maxes of piece properties.
     let mut remaining_bits = vec![0u32; n + 1];
     let mut remaining_perimeter = vec![0u32; n + 1];
+    let mut remaining_h_perimeter = vec![0u32; n + 1];
+    let mut remaining_v_perimeter = vec![0u32; n + 1];
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
         remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
+        remaining_h_perimeter[i] = remaining_h_perimeter[i + 1] + pieces[order[i]].h_perimeter();
+        remaining_v_perimeter[i] = remaining_v_perimeter[i + 1] + pieces[order[i]].v_perimeter();
     }
 
     let bh = h as usize;
@@ -695,6 +699,8 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &sorted_cell_counts,
         &remaining_bits,
         &remaining_perimeter,
+        &remaining_h_perimeter,
+        &remaining_v_perimeter,
         &line_families,
         &suffix_coverage,
         &is_dup_of_prev,
@@ -775,6 +781,8 @@ fn backtrack(
     cell_counts: &[u32],
     remaining_bits: &[u32],
     remaining_perimeter: &[u32],
+    remaining_h_perimeter: &[u32],
+    remaining_v_perimeter: &[u32],
     line_families: &[LineFamily; 6],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
@@ -873,8 +881,16 @@ fn backtrack(
     }
 
     // Prune: jaggedness exceeds total remaining perimeter.
-    if config.jaggedness && board.jaggedness() > remaining_perimeter[piece_idx] {
-        return false;
+    if config.jaggedness {
+        // Split jaggedness into horizontal and vertical, check each independently.
+        // Tighter than the combined check because h_perim only affects h_jagg.
+        let (h_jagg, v_jagg) = board.split_jaggedness(h, w);
+        if h_jagg > remaining_h_perimeter[piece_idx] {
+            return false;
+        }
+        if v_jagg > remaining_v_perimeter[piece_idx] {
+            return false;
+        }
     }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
@@ -963,6 +979,8 @@ fn backtrack(
             cell_counts,
             remaining_bits,
             remaining_perimeter,
+            remaining_h_perimeter,
+            remaining_v_perimeter,
             line_families,
             suffix_coverage,
             is_dup_of_prev,

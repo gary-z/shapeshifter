@@ -203,13 +203,21 @@ impl Piece {
     /// (within the bounding box grid, using cardinal adjacency).
     /// This is a fixed property of the shape, independent of placement.
     pub fn perimeter(&self) -> u32 {
+        self.h_perimeter() + self.v_perimeter()
+    }
+
+    /// Horizontal perimeter: boundary edges between horizontally adjacent cells.
+    pub fn h_perimeter(&self) -> u32 {
         let s = self.shape;
-        // Count internal edges (shared between two filled cells) in each direction.
-        // Each shift + AND finds adjacent filled pairs; multiply by 2 since each
-        // internal edge removes 2 from the perimeter (one from each side).
-        let h_internal = (s & (s >> 1)).count_ones();  // horizontal pairs
-        let v_internal = (s & (s >> 15)).count_ones(); // vertical pairs
-        s.count_ones() * 4 - (h_internal + v_internal) * 2
+        let h_internal = (s & (s >> 1)).count_ones();
+        s.count_ones() * 2 - h_internal * 2
+    }
+
+    /// Vertical perimeter: boundary edges between vertically adjacent cells.
+    pub fn v_perimeter(&self) -> u32 {
+        let s = self.shape;
+        let v_internal = (s & (s >> 15)).count_ones();
+        s.count_ones() * 2 - v_internal * 2
     }
 
     /// Return the piece's shape shifted to board position (row, col).
