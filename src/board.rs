@@ -187,18 +187,8 @@ impl Board {
 
     /// Split jaggedness into (horizontal, vertical) components.
     /// Horizontal = mismatching (r,c)-(r,c+1) pairs. Vertical = (r,c)-(r+1,c) pairs.
-    pub fn split_jaggedness(&self, h: u8, w: u8) -> (u32, u32) {
-        let h = h as usize;
-        let w = w as usize;
-        let mut h_mask = Bitboard::ZERO;
-        let mut v_mask = Bitboard::ZERO;
-        for r in 0..h {
-            for c in 0..w {
-                let bit = (r * 15 + c) as u32;
-                if c + 1 < w { h_mask.set_bit(bit); }
-                if r + 1 < h { v_mask.set_bit(bit); }
-            }
-        }
+    /// Takes precomputed masks to avoid rebuilding them per call.
+    pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> (u32, u32) {
         let mut h_matching = 0u32;
         let mut v_matching = 0u32;
         for d in 0..self.m as usize {
@@ -206,7 +196,7 @@ impl Board {
             h_matching += (p & (p >> 1) & h_mask).count_ones();
             v_matching += (p & (p >> 15) & v_mask).count_ones();
         }
-        (h_mask.count_ones() - h_matching, v_mask.count_ones() - v_matching)
+        (h_total - h_matching, v_total - v_matching)
     }
 
     /// Count of adjacent cell pairs (horizontal + vertical) with different values.

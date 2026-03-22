@@ -689,6 +689,19 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let line_families = [rows_family, cols_family, diags_family, antidiags_family, zigzag_r_family, zigzag_l_family];
 
+    // Precompute jaggedness masks.
+    let mut jagg_h_mask = Bitboard::ZERO;
+    let mut jagg_v_mask = Bitboard::ZERO;
+    for r in 0..bh {
+        for c in 0..bw {
+            let bit = (r * 15 + c) as u32;
+            if c + 1 < bw { jagg_h_mask.set_bit(bit); }
+            if r + 1 < bh { jagg_v_mask.set_bit(bit); }
+        }
+    }
+    let jagg_h_total = jagg_h_mask.count_ones();
+    let jagg_v_total = jagg_v_mask.count_ones();
+
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
     let found = backtrack(
@@ -701,6 +714,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &remaining_perimeter,
         &remaining_h_perimeter,
         &remaining_v_perimeter,
+        jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total,
         &line_families,
         &suffix_coverage,
         &is_dup_of_prev,
@@ -783,6 +797,7 @@ fn backtrack(
     remaining_perimeter: &[u32],
     remaining_h_perimeter: &[u32],
     remaining_v_perimeter: &[u32],
+    jagg_h_mask: Bitboard, jagg_h_total: u32, jagg_v_mask: Bitboard, jagg_v_total: u32,
     line_families: &[LineFamily; 6],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
@@ -884,7 +899,7 @@ fn backtrack(
     if config.jaggedness {
         // Split jaggedness into horizontal and vertical, check each independently.
         // Tighter than the combined check because h_perim only affects h_jagg.
-        let (h_jagg, v_jagg) = board.split_jaggedness(h, w);
+        let (h_jagg, v_jagg) = board.split_jaggedness(jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total);
         if h_jagg > remaining_h_perimeter[piece_idx] {
             return false;
         }
@@ -981,6 +996,7 @@ fn backtrack(
             remaining_perimeter,
             remaining_h_perimeter,
             remaining_v_perimeter,
+            jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total,
             line_families,
             suffix_coverage,
             is_dup_of_prev,
