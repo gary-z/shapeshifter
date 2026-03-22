@@ -316,12 +316,71 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         .map(|i| i + 1)
         .unwrap_or(0);
 
-    // Precompute suffix sums of piece cell counts and perimeters in sorted order.
+    // Precompute suffix sums of piece cell counts, perimeters, and global thicknesses.
     let mut remaining_bits = vec![0u32; n + 1];
     let mut remaining_perimeter = vec![0u32; n + 1];
+    let mut remaining_max_row_thick = vec![0u32; n + 1];
+    let mut remaining_max_col_thick = vec![0u32; n + 1];
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
         remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
+        remaining_max_row_thick[i] = remaining_max_row_thick[i + 1] + pieces[order[i]].max_row_thickness();
+        remaining_max_col_thick[i] = remaining_max_col_thick[i + 1] + pieces[order[i]].max_col_thickness();
+    }
+
+    // Precompute per-row and per-col suffix budgets.
+    // For each board row r and piece i, the max cells piece i can deliver to row r
+    // depends on which piece-rows can align with board-row r.
+    let bh = h as usize;
+    let bw = w as usize;
+    let mut row_budget = vec![vec![0u32; bh]; n + 1]; // row_budget[piece_idx][row]
+    let mut col_budget = vec![vec![0u32; bw]; n + 1]; // col_budget[piece_idx][col]
+    for i in (0..n).rev() {
+        let piece = &pieces[order[i]];
+        let ph = piece.height() as usize;
+        let pw = piece.width() as usize;
+
+        // Compute row thicknesses for this piece.
+        let mut row_thick = [0u32; 5];
+        for pr in 0..ph {
+            let row_bits = (piece.shape() >> (pr as u32 * 15)).limbs[0] & ((1u64 << pw) - 1);
+            row_thick[pr] = row_bits.count_ones();
+        }
+
+        // Compute col thicknesses for this piece.
+        let mut col_thick = [0u32; 5];
+        for pc in 0..pw {
+            for pr in 0..ph {
+                if piece.shape().get_bit((pr * 15 + pc) as u32) {
+                    col_thick[pc] += 1;
+                }
+            }
+        }
+
+        for r in 0..bh {
+            // Which piece-rows can land on board-row r?
+            let p_min = if r + ph > bh { r + ph - bh } else { 0 };
+            let p_max = r.min(ph - 1);
+            let mut max_t = 0u32;
+            for p in p_min..=p_max {
+                if row_thick[p] > max_t {
+                    max_t = row_thick[p];
+                }
+            }
+            row_budget[i][r] = row_budget[i + 1][r] + max_t;
+        }
+
+        for c in 0..bw {
+            let q_min = if c + pw > bw { c + pw - bw } else { 0 };
+            let q_max = c.min(pw - 1);
+            let mut max_t = 0u32;
+            for q in q_min..=q_max {
+                if col_thick[q] > max_t {
+                    max_t = col_thick[q];
+                }
+            }
+            col_budget[i][c] = col_budget[i + 1][c] + max_t;
+        }
     }
 
     // Precompute per-piece reach: union of all placement masks.
@@ -345,6 +404,14 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let m = board.m();
 
+    // Precompute column masks for per-col budget checks.
+    let mut col_masks = vec![Bitboard::ZERO; bw];
+    for c in 0..bw {
+        for r in 0..bh {
+            col_masks[c].set_bit((r * 15 + c) as u32);
+        }
+    }
+
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
     let found = backtrack(
@@ -355,6 +422,11 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &sorted_cell_counts,
         &remaining_bits,
         &remaining_perimeter,
+        &remaining_max_row_thick,
+        &remaining_max_col_thick,
+        &row_budget,
+        &col_budget,
+        &col_masks,
         &suffix_coverage,
         &is_dup_of_prev,
         m,
@@ -432,6 +504,11 @@ fn backtrack(
     cell_counts: &[u32],
     remaining_bits: &[u32],
     remaining_perimeter: &[u32],
+    remaining_max_row_thick: &[u32],
+    remaining_max_col_thick: &[u32],
+    row_budget: &[Vec<u32>],
+    col_budget: &[Vec<u32>],
+    col_masks: &[Bitboard],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
     m: u8,
@@ -467,6 +544,64 @@ fn backtrack(
     let min_flips = board.min_flips_needed();
     if config.min_flips && remaining_bits[piece_idx] < min_flips {
         return false;
+    }
+
+    // Prune: per-row/col min_flips budget.
+    // Each row/col's needed flips must be achievable by the remaining pieces'
+    // max contribution to that specific row/col (accounting for piece shape and position).
+    // Additionally, use DP to find the max-weight independent set of rows/cols
+    // spaced ≥ 5 apart (no piece can serve two), and check against global thickness budget.
+    if config.min_flips {
+        let row_mask_base = (1u64 << w) - 1;
+        let mut row_weights = [0u32; 14];
+        for r in 0..h as usize {
+            for d in 1..m {
+                let plane_row = (board.plane(d) >> (r as u32 * 15)).limbs[0] & row_mask_base;
+                row_weights[r] += (m - d) as u32 * plane_row.count_ones();
+            }
+            // Per-row position-aware check.
+            if row_budget[piece_idx][r] < row_weights[r] {
+                return false;
+            }
+        }
+
+        let mut col_weights = [0u32; 14];
+        for c in 0..w as usize {
+            for d in 1..m {
+                col_weights[c] += (m - d) as u32 * (board.plane(d) & col_masks[c]).count_ones();
+            }
+            // Per-col position-aware check.
+            if col_budget[piece_idx][c] < col_weights[c] {
+                return false;
+            }
+        }
+
+        // DP: max weight independent set of rows with spacing >= 5.
+        // dp[r] = max total weight using rows 0..=r, with selected rows ≥ 5 apart.
+        {
+            let mut dp = [0u32; 14];
+            for r in 0..h as usize {
+                let take = row_weights[r] + if r >= 5 { dp[r - 5] } else { 0 };
+                let skip = if r > 0 { dp[r - 1] } else { 0 };
+                dp[r] = take.max(skip);
+            }
+            if remaining_max_row_thick[piece_idx] < dp[h as usize - 1] {
+                return false;
+            }
+        }
+
+        // DP: max weight independent set of columns with spacing >= 5.
+        {
+            let mut dp = [0u32; 14];
+            for c in 0..w as usize {
+                let take = col_weights[c] + if c >= 5 { dp[c - 5] } else { 0 };
+                let skip = if c > 0 { dp[c - 1] } else { 0 };
+                dp[c] = take.max(skip);
+            }
+            if remaining_max_col_thick[piece_idx] < dp[w as usize - 1] {
+                return false;
+            }
+        }
     }
 
     // Prune: insufficient coverage per cell.
@@ -529,6 +664,11 @@ fn backtrack(
             cell_counts,
             remaining_bits,
             remaining_perimeter,
+            remaining_max_row_thick,
+            remaining_max_col_thick,
+            row_budget,
+            col_budget,
+            col_masks,
             suffix_coverage,
             is_dup_of_prev,
             m,

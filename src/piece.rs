@@ -57,6 +57,36 @@ impl Piece {
         self.shape.count_ones()
     }
 
+    /// Max filled cells in any single row of the piece.
+    pub fn max_row_thickness(&self) -> u32 {
+        let mut max = 0u32;
+        for r in 0..self.height as usize {
+            let row_bits = (self.shape >> (r as u32 * 15)).limbs[0] & ((1u64 << self.width) - 1);
+            let count = row_bits.count_ones();
+            if count > max {
+                max = count;
+            }
+        }
+        max
+    }
+
+    /// Max filled cells in any single column of the piece.
+    pub fn max_col_thickness(&self) -> u32 {
+        let mut max = 0u32;
+        for c in 0..self.width as usize {
+            let mut count = 0u32;
+            for r in 0..self.height as usize {
+                if self.shape.get_bit((r * 15 + c) as u32) {
+                    count += 1;
+                }
+            }
+            if count > max {
+                max = count;
+            }
+        }
+        max
+    }
+
     /// Perimeter of the piece: count of edges between filled and unfilled cells
     /// (within the bounding box grid, using cardinal adjacency).
     /// This is a fixed property of the shape, independent of placement.
