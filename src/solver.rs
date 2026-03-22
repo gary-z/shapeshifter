@@ -478,6 +478,35 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         .map(|i| i > 0 && pieces[order[i]] == pieces[order[i - 1]])
         .collect();
 
+    // Precompute duplicate-pair skip tables.
+    // For consecutive identical pieces, two (prev, curr) combos with the same net effect
+    // are redundant. skip_tables[i] = Some(table) if piece i is a dup of i-1.
+    // table[prev_pl * num_pl + curr_pl] = true means skip this combo.
+    let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
+        if !is_dup_of_prev[i] {
+            return None;
+        }
+        let pl = &all_placements[i]; // same as all_placements[i-1] since identical shape
+        let num_pl = pl.len();
+        let mut table = vec![false; num_pl * num_pl];
+        // Group (a, b) combos by net effect. For each group, first combo is canonical.
+        // Net effect key: (mask_a & mask_b, mask_a ^ mask_b) — captures overlap and single-hit.
+        let mut seen: Vec<(Bitboard, Bitboard)> = Vec::new();
+        for a in 0..num_pl {
+            let mask_a = pl[a].2;
+            for b in a..num_pl { // b >= a (non-decreasing)
+                let mask_b = pl[b].2;
+                let key = (mask_a & mask_b, mask_a ^ mask_b);
+                if seen.contains(&key) {
+                    table[a * num_pl + b] = true; // skip
+                } else {
+                    seen.push(key);
+                }
+            }
+        }
+        Some(table)
+    }).collect();
+
     // Find where trailing 1x1 pieces start (they're sorted last = most placements).
     let single_cell_start = (0..n)
         .rposition(|i| pieces[order[i]].cell_count() != 1)
@@ -665,12 +694,14 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &line_families,
         &suffix_coverage,
         &is_dup_of_prev,
+        &skip_tables,
         m,
         h,
         w,
         single_cell_start,
         0,
         0,
+        usize::MAX, // no prev dup placement
         &mut sorted_solution,
         &nodes,
         config,
@@ -743,12 +774,14 @@ fn backtrack(
     line_families: &[LineFamily; 6],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
+    skip_tables: &[Option<Vec<bool>>],
     m: u8,
     h: u8,
     w: u8,
     single_cell_start: usize,
     piece_idx: usize,
     min_placement: usize,
+    prev_dup_placement: usize,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
     config: &PruningConfig,
@@ -891,17 +924,27 @@ fn backtrack(
             continue;
         }
 
+        // Skip duplicate-pair combos with same net effect as a previously tried combo.
+        if config.duplicate_pruning && prev_dup_placement < usize::MAX {
+            if let Some(ref table) = skip_tables[piece_idx] {
+                let num_pl = placements.len();
+                if prev_dup_placement < num_pl && pl_idx < num_pl {
+                    if table[prev_dup_placement * num_pl + pl_idx] {
+                        continue;
+                    }
+                }
+            }
+        }
+
         board.apply_piece(mask);
         solution.push((row, col));
 
-        let next_min = if config.duplicate_pruning
+        let is_next_dup = config.duplicate_pruning
             && piece_idx + 1 < all_placements.len()
-            && is_dup_of_prev[piece_idx + 1]
-        {
-            pl_idx
-        } else {
-            0
-        };
+            && is_dup_of_prev[piece_idx + 1];
+
+        let next_min = if is_next_dup { pl_idx } else { 0 };
+        let next_prev_dup = if is_next_dup { pl_idx } else { usize::MAX };
 
         if backtrack(
             &board,
@@ -914,12 +957,14 @@ fn backtrack(
             line_families,
             suffix_coverage,
             is_dup_of_prev,
+            skip_tables,
             m,
             h,
             w,
             single_cell_start,
             piece_idx + 1,
             next_min,
+            next_prev_dup,
             solution,
             nodes,
             config,
