@@ -57,6 +57,20 @@ impl Piece {
         self.shape.count_ones()
     }
 
+    /// White cell count when placed at even parity ((r0+c0)%2 == 0).
+    /// White = cells where (pr+pc)%2 == 0 within the piece.
+    pub fn white_count_even(&self) -> u32 {
+        let mut count = 0u32;
+        for r in 0..self.height as usize {
+            for c in 0..self.width as usize {
+                if self.shape.get_bit((r * 15 + c) as u32) && (r + c) % 2 == 0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// Max filled cells in any single row of the piece.
     pub fn max_row_thickness(&self) -> u32 {
         let mut max = 0u32;

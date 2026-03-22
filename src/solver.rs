@@ -105,6 +105,14 @@ struct SolverData {
     m: u8,
     h: u8,
     w: u8,
+    // White/black parity check.
+    // suffix_max_white[i] = max achievable white increments from pieces [i..n]
+    // suffix_min_white[i] = min achievable white increments from pieces [i..n]
+    suffix_max_white: Vec<u32>,
+    suffix_min_white: Vec<u32>,
+    // Full DP: suffix_white_dp[i] = bitset of achievable white totals from pieces [i..n]
+    // Indexed by white total value. Max possible ~200.
+    suffix_white_dp: Vec<Vec<bool>>,
 }
 
 /// A solution is a list of (row, col) placements, one per piece in original order.
@@ -735,6 +743,39 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let jagg_h_total = jagg_h_mask.count_ones();
     let jagg_v_total = jagg_v_mask.count_ones();
 
+    // Precompute white/black parity check data.
+    // For each piece: w_even = white cells covered at even parity, w_odd = area - w_even.
+    let mut suffix_max_white = vec![0u32; n + 1];
+    let mut suffix_min_white = vec![0u32; n + 1];
+    let mut w_even_list = Vec::with_capacity(n);
+    let mut w_odd_list = Vec::with_capacity(n);
+    for i in 0..n {
+        let we = pieces[order[i]].white_count_even();
+        let wo = pieces[order[i]].cell_count() - we;
+        w_even_list.push(we);
+        w_odd_list.push(wo);
+    }
+    for i in (0..n).rev() {
+        suffix_max_white[i] = suffix_max_white[i + 1] + w_even_list[i].max(w_odd_list[i]);
+        suffix_min_white[i] = suffix_min_white[i + 1] + w_even_list[i].min(w_odd_list[i]);
+    }
+
+    // Full DP: achievable white totals from pieces [i..n].
+    let max_total_white = suffix_max_white[0] as usize;
+    let dp_size = max_total_white + 1;
+    let mut suffix_white_dp = vec![vec![false; dp_size]; n + 1];
+    suffix_white_dp[n][0] = true; // base: 0 pieces contribute 0 white
+    for i in (0..n).rev() {
+        let we = w_even_list[i] as usize;
+        let wo = w_odd_list[i] as usize;
+        for w in 0..dp_size {
+            if suffix_white_dp[i + 1][w] {
+                if w + we < dp_size { suffix_white_dp[i][w + we] = true; }
+                if w + wo < dp_size { suffix_white_dp[i][w + wo] = true; }
+            }
+        }
+    }
+
     let data = SolverData {
         all_placements,
         reaches,
@@ -758,6 +799,9 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         m,
         h,
         w,
+        suffix_max_white,
+        suffix_min_white,
+        suffix_white_dp,
     };
 
     let nodes = Cell::new(0u64);
@@ -827,6 +871,51 @@ fn solve_single_cells(
 
     debug_assert_eq!(solution.len() - base_len, num_pieces);
     true
+}
+
+#[inline(always)]
+fn prune_white_black_parity(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    // Compute white_min_flips: sum of (M-d) for nonzero cells on white squares.
+    let mut white_min_flips = 0u32;
+    let h = data.h as usize;
+    let w = data.w as usize;
+    for r in 0..h {
+        for c in 0..w {
+            if (r + c) % 2 == 0 {
+                let bit = (r * 15 + c) as u32;
+                for d in 1..data.m {
+                    if board.plane(d).get_bit(bit) {
+                        white_min_flips += (data.m - d) as u32;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Simple bounds check.
+    if data.suffix_max_white[piece_idx] < white_min_flips {
+        return false;
+    }
+    // Check black side: max_black = remaining_bits - min_white.
+    let black_min_flips = board.min_flips_needed() - white_min_flips;
+    let max_black = data.remaining_bits[piece_idx] - data.suffix_min_white[piece_idx];
+    if max_black < black_min_flips {
+        return false;
+    }
+
+    // Full DP check: is white_min_flips achievable (accounting for wraps)?
+    // Need: exists k >= 0 such that (white_min_flips + k*M) is in the DP set.
+    let m = data.m as u32;
+    let dp = &data.suffix_white_dp[piece_idx];
+    let mut target = white_min_flips;
+    while (target as usize) < dp.len() {
+        if dp[target as usize] {
+            return true;
+        }
+        target += m;
+    }
+    false
 }
 
 #[inline(always)]
@@ -930,6 +1019,7 @@ fn backtrack(
     if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
     if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_white_black_parity(board, data, piece_idx) { return false; }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {
