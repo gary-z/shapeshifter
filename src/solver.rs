@@ -94,6 +94,49 @@ struct ParityPartition {
     suffix_dp: Vec<Vec<bool>>,
 }
 
+/// A small subset of board cells for local reachability pruning.
+/// The suffix DP tracks which configurations of the subset cells are achievable.
+struct SubsetReachability {
+    /// Board cell positions in the subset (as bit indices r*15+c).
+    cells: Vec<u32>,
+    /// Number of cells in the subset.
+    num_cells: usize,
+    /// M value.
+    m: u8,
+    /// suffix_reachable[piece_idx][config] = can pieces [piece_idx..n] transform
+    /// the subset from `config` to all-zeros?
+    /// Config is encoded as a base-M number: cell[0] + cell[1]*M + cell[2]*M^2 + ...
+    suffix_reachable: Vec<Vec<bool>>,
+}
+
+impl SubsetReachability {
+    /// Encode the current subset cell values from the board into a config index.
+    #[inline(always)]
+    fn encode_config(&self, board: &Board) -> usize {
+        let mut config = 0usize;
+        let mut multiplier = 1usize;
+        for &bit in &self.cells {
+            let mut val = 0u8;
+            for d in 1..self.m {
+                if board.plane(d).get_bit(bit) {
+                    val = d;
+                    break;
+                }
+            }
+            config += val as usize * multiplier;
+            multiplier *= self.m as usize;
+        }
+        config
+    }
+
+    /// Check if the current board configuration is reachable from piece_idx.
+    #[inline(always)]
+    fn check(&self, board: &Board, piece_idx: usize) -> bool {
+        let config = self.encode_config(board);
+        self.suffix_reachable[piece_idx][config]
+    }
+}
+
 /// All precomputed data needed by the backtracking solver.
 /// Bundled into a single struct to keep the backtrack signature small.
 #[allow(dead_code)]
@@ -123,6 +166,8 @@ struct SolverData {
     // Parity partition checks: mod-2 (checkerboard, even-rows, even-cols)
     // plus optional mod-3 partitions for larger boards.
     parity_partitions: Vec<ParityPartition>,
+    // Subset reachability checks for corners.
+    subset_checks: Vec<SubsetReachability>,
 }
 
 /// A solution is a list of (row, col) placements, one per piece in original order.
@@ -857,6 +902,110 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
+    // Precompute subset reachability for board corners.
+    // Subset size adapts to M to keep state space manageable.
+    let subset_k = match m {
+        2 => 9usize.min(bh * bw),     // 3x3 corner, 512 states
+        3 => 6usize.min(bh * bw),     // 3x2 corner, 729 states
+        4 => 4usize.min(bh * bw),     // 2x2 corner, 256 states
+        _ => 4usize.min(bh * bw),     // 2x2 corner, 625 states for M=5
+    };
+    let subset_checks = if subset_k >= 4 {
+        // Determine corner rectangle dimensions.
+        let (sr, sc) = match subset_k {
+            9 => (3usize.min(bh), 3usize.min(bw)),
+            6 => (3usize.min(bh), 2usize.min(bw)),
+            4 => (2usize.min(bh), 2usize.min(bw)),
+            _ => (2usize.min(bh), 2usize.min(bw)),
+        };
+        let actual_k = sr * sc;
+        let num_configs = (m as usize).pow(actual_k as u32);
+
+        // Apply effect to a config: increment specified cells mod M.
+        let apply_effect = |config: usize, effect: &[u8], k: usize, m_val: usize| -> usize {
+            let mut result = config;
+            let mut multiplier = 1;
+            for i in 0..k {
+                if effect[i] > 0 {
+                    let digit = (result / multiplier) % m_val;
+                    let new_digit = (digit + effect[i] as usize) % m_val;
+                    result = result - digit * multiplier + new_digit * multiplier;
+                }
+                multiplier *= m_val;
+            }
+            result
+        };
+
+        // Build 4 corner subsets.
+        let corners: [(usize, usize); 4] = [
+            (0, 0),                         // top-left
+            (0, bw.saturating_sub(sc)),      // top-right
+            (bh.saturating_sub(sr), 0),      // bottom-left
+            (bh.saturating_sub(sr), bw.saturating_sub(sc)), // bottom-right
+        ];
+
+        let mut subset_vec = Vec::new();
+        for &(r0, c0) in &corners {
+            // Collect cell positions.
+            let mut cells = Vec::with_capacity(actual_k);
+            for dr in 0..sr {
+                for dc in 0..sc {
+                    cells.push(((r0 + dr) * 15 + c0 + dc) as u32);
+                }
+            }
+            if cells.len() != actual_k { continue; }
+
+            // Per piece: enumerate unique effects on this subset.
+            let m_val = m as usize;
+            let mut piece_effects: Vec<Vec<Vec<u8>>> = Vec::with_capacity(n);
+            for i in 0..n {
+                let mut effects_set: Vec<Vec<u8>> = Vec::new();
+                // Always include zero effect.
+                effects_set.push(vec![0u8; actual_k]);
+                // Check each placement.
+                for &(_, _, mask) in &all_placements[i] {
+                    let mut effect = vec![0u8; actual_k];
+                    let mut any = false;
+                    for (ci, &bit) in cells.iter().enumerate() {
+                        if mask.get_bit(bit) {
+                            effect[ci] = 1;
+                            any = true;
+                        }
+                    }
+                    if any && !effects_set.contains(&effect) {
+                        effects_set.push(effect);
+                    }
+                }
+                piece_effects.push(effects_set);
+            }
+
+            // Build suffix DP.
+            let mut suffix_reachable = vec![vec![false; num_configs]; n + 1];
+            suffix_reachable[n][0] = true; // goal: all zeros
+            for i in (0..n).rev() {
+                for config in 0..num_configs {
+                    for effect in &piece_effects[i] {
+                        let new_config = apply_effect(config, effect, actual_k, m_val);
+                        if suffix_reachable[i + 1][new_config] {
+                            suffix_reachable[i][config] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            subset_vec.push(SubsetReachability {
+                cells,
+                num_cells: actual_k,
+                m,
+                suffix_reachable,
+            });
+        }
+        subset_vec
+    } else {
+        Vec::new()
+    };
+
     let data = SolverData {
         all_placements,
         reaches,
@@ -881,6 +1030,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         h,
         w,
         parity_partitions: partitions,
+        subset_checks,
     };
 
     let nodes = Cell::new(0u64);
@@ -953,6 +1103,16 @@ fn solve_single_cells(
 }
 
 #[inline(always)]
+#[inline(always)]
+fn prune_subset_reachability(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    for subset in &data.subset_checks {
+        if !subset.check(board, piece_idx) {
+            return false;
+        }
+    }
+    true
+}
+
 fn prune_parity_partitions(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     let m = data.m as u32;
     let total_min_flips = board.min_flips_needed();
@@ -1094,6 +1254,7 @@ fn backtrack(
     if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {
