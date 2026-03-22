@@ -1,4 +1,5 @@
 /target
 .devcontainer/
 data/ShapeShifter.html
+data/puzzle.json
 data/solution.html

@@ -19,10 +19,23 @@ fi
 echo "Parsing..."
 python3 "$SCRIPT_DIR/tools/parse_html.py" "$HTML_FILE" "$JSON_FILE"
 
-# Append to history and dedup
+# Append to history if this is a fresh game (not already in progress).
+# Compare piece count in the parsed puzzle against the level spec.
 COMPACT=$(python3 -c "import json,sys;print(json.dumps(json.load(open(sys.argv[1])),separators=(',',':')))" "$JSON_FILE")
+IN_PROGRESS=$(python3 -c "
+import json, sys
+puzzle = json.load(open(sys.argv[1]))
+levels = json.load(open(sys.argv[2]))
+spec = next((l for l in levels if l['level'] == puzzle['level']), None)
+if spec and len(puzzle['pieces']) < spec['shapes']:
+    print('yes')
+else:
+    print('no')
+" "$JSON_FILE" "$SCRIPT_DIR/data/levels.json")
 touch "$HISTORY_FILE"
-if ! grep -qFx "$COMPACT" "$HISTORY_FILE"; then
+if [ "$IN_PROGRESS" = "yes" ]; then
+    echo "Game already in progress (fewer pieces than expected). Skipping history."
+elif ! grep -qFx "$COMPACT" "$HISTORY_FILE"; then
     echo "$COMPACT" >> "$HISTORY_FILE"
 fi
 
