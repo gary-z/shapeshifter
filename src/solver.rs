@@ -455,10 +455,142 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
+    // For M=2: try pair-merge reduction before full solve.
+    // Find two pieces whose placements can XOR to any single cell on the board.
+    // Replace them with a virtual 1×1 piece, reducing n by 1.
+    if m == 2 && pieces.len() >= 4 {
+        let result = try_pair_merge(game, config);
+        if result.solution.is_some() {
+            return SolveResult {
+                solution: result.solution,
+                nodes_visited: total_nodes + result.nodes_visited,
+            };
+        }
+        total_nodes += result.nodes_visited;
+    }
+
     // No reduction worked — solve the full puzzle.
     let mut full_result = solve_with_config(game, config);
     full_result.nodes_visited += total_nodes;
     full_result
+}
+
+/// For M=2: find a pair of pieces that can simulate a 1×1 piece at every board cell.
+/// Replace them with a 1×1 piece, solve the reduced game, then reconstruct.
+fn try_pair_merge(game: &Game, config: &PruningConfig) -> SolveResult {
+    use std::collections::HashSet;
+
+    let pieces = game.pieces();
+    let h = game.board().height();
+    let w = game.board().width();
+    let n = pieces.len();
+    let board_area = h as usize * w as usize;
+
+    let all_pl: Vec<Vec<(usize, usize, Bitboard)>> = pieces.iter()
+        .map(|p| p.placements(h, w))
+        .collect();
+
+    // For each pair, compute producible single-cell positions.
+    // Store a witness (placement_a, placement_b) for each producible cell.
+    let mut best_pair: Option<(usize, usize, Vec<Option<(usize, usize)>>)> = None;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // witnesses[cell_index] = Some((pl_idx_a, pl_idx_b)) if producible
+            let mut witnesses: Vec<Option<(usize, usize)>> = vec![None; board_area];
+            let mut count = 0usize;
+
+            for (pa, &(_, _, ma)) in all_pl[i].iter().enumerate() {
+                for (pb, &(_, _, mb)) in all_pl[j].iter().enumerate() {
+                    let xor = ma ^ mb;
+                    if xor.count_ones() == 1 {
+                        let bit = xor.lowest_set_bit();
+                        let r = bit / 15;
+                        let c = bit % 15;
+                        if r < h as u32 && c < w as u32 {
+                            let cell_idx = r as usize * w as usize + c as usize;
+                            if witnesses[cell_idx].is_none() {
+                                witnesses[cell_idx] = Some((pa, pb));
+                                count += 1;
+                                if count == board_area { break; }
+                            }
+                        }
+                    }
+                }
+                if count == board_area { break; }
+            }
+
+            if count == board_area {
+                // Full coverage — this pair can simulate a 1×1 at every cell.
+                best_pair = Some((i, j, witnesses));
+                break;
+            } else if count > 0 {
+                // Partial — keep looking for full coverage.
+                if best_pair.as_ref().map_or(true, |(_, _, w)| {
+                    count > w.iter().filter(|x| x.is_some()).count()
+                }) {
+                    best_pair = Some((i, j, witnesses));
+                }
+            }
+        }
+        if best_pair.as_ref().map_or(false, |(_, _, w)| {
+            w.iter().filter(|x| x.is_some()).count() == board_area
+        }) {
+            break;
+        }
+    }
+
+    // Only proceed if the pair covers ALL board cells.
+    let (pi, pj, witnesses) = match best_pair {
+        Some((i, j, ref w)) if w.iter().all(|x| x.is_some()) => {
+            (i, j, w.clone())
+        }
+        _ => return SolveResult { solution: None, nodes_visited: 0 },
+    };
+
+    // Build reduced game: replace pieces[pi] and pieces[pj] with a 1×1 piece.
+    let p1x1 = crate::piece::Piece::from_grid(&[&[true]]);
+    let mut reduced_pieces: Vec<crate::piece::Piece> = Vec::with_capacity(n - 1);
+    // Map: reduced_idx -> original_idx (for non-merged pieces)
+    let mut idx_map: Vec<usize> = Vec::with_capacity(n - 1);
+    let mut merged_reduced_idx = 0;
+    for k in 0..n {
+        if k == pi {
+            reduced_pieces.push(p1x1);
+            idx_map.push(usize::MAX); // sentinel: this is the merged piece
+            merged_reduced_idx = reduced_pieces.len() - 1;
+        } else if k == pj {
+            continue; // skip second piece of the pair
+        } else {
+            reduced_pieces.push(pieces[k]);
+            idx_map.push(k);
+        }
+    }
+
+    let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+    let result = solve_with_cancellation(&reduced_game, config);
+
+    if let Some(ref reduced_sol) = result.solution {
+        let mut full_sol = vec![(0, 0); n];
+        for (ri, &(row, col)) in reduced_sol.iter().enumerate() {
+            if ri == merged_reduced_idx {
+                // The virtual 1×1 was placed at (row, col).
+                // Look up which actual placements of (pi, pj) produce this cell.
+                let cell_idx = row * w as usize + col;
+                let (pa, pb) = witnesses[cell_idx].unwrap();
+                full_sol[pi] = (all_pl[pi][pa].0, all_pl[pi][pa].1);
+                full_sol[pj] = (all_pl[pj][pb].0, all_pl[pj][pb].1);
+            } else {
+                full_sol[idx_map[ri]] = (row, col);
+            }
+        }
+        return SolveResult {
+            solution: Some(full_sol),
+            nodes_visited: result.nodes_visited,
+        };
+    }
+
+    SolveResult { solution: None, nodes_visited: result.nodes_visited }
 }
 
 /// Try a specific cancellation combo. Returns SolveResult.
@@ -2305,5 +2437,133 @@ mod tests {
 
         let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(failures, 0, "pair skip stress test had {} failures", failures);
+    }
+
+    // --- Pair-merge reduction tests ---
+
+    #[test]
+    fn test_pair_merge_basic() {
+        // A 1x2 piece and a 1x1 piece on a 3x3/M=2 board.
+        // 1x2 at (0,0) covers {(0,0),(0,1)}, 1x1 at (0,1) covers {(0,1)}.
+        // XOR = {(0,0)} — a single cell. This pair can simulate a 1x1 piece.
+        // If the pair covers all 9 cells, pair-merge should fire.
+        let p1x2 = Piece::from_grid(&[&[true, true]]);
+        let p1x1 = Piece::from_grid(&[&[true]]);
+
+        // Verify the pair can produce single cells:
+        let h = 3u8;
+        let w = 3u8;
+        let pl_a = p1x2.placements(h, w);
+        let pl_b = p1x1.placements(h, w);
+        let mut cells = std::collections::HashSet::new();
+        for &(_, _, ma) in &pl_a {
+            for &(_, _, mb) in &pl_b {
+                let xor = ma ^ mb;
+                if xor.count_ones() == 1 {
+                    cells.insert(xor.lowest_set_bit());
+                }
+            }
+        }
+        // A 1x2 and 1x1 should cover all 9 cells as single-bit XOR.
+        assert_eq!(cells.len(), 9, "1x2 + 1x1 should produce all 9 cells on 3x3");
+    }
+
+    #[test]
+    fn test_pair_merge_soundness() {
+        // Board with one non-zero cell, solved by a pair-merged virtual 1x1.
+        // Use 1x2 + 1x1 pair plus an extra 1x1 fixer.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let p1x2 = Piece::from_grid(&[&[true, true]]);
+        let p1x1 = Piece::from_grid(&[&[true]]);
+        // 3 pieces: 1x1, 1x2, 1x1. The two 1x1s cancel, or the 1x2+1x1 merge.
+        // Either way this should solve.
+        let game = Game::new(board, vec![p1x2, p1x1, p1x1, p1x1]);
+        let result = solve(&game);
+        assert!(result.solution.is_some(), "pair-merge game should solve");
+        verify_solution(&game, result.solution.as_ref().unwrap());
+    }
+
+    #[test]
+    fn test_pair_merge_soundness_stress() {
+        // Generate M=2 games on smaller boards and verify pair-merge produces valid solutions.
+        use rand::SeedableRng;
+
+        let configs = vec![
+            (2, 4, 4, 10), (2, 4, 4, 14), (2, 6, 6, 12),
+        ];
+
+        for &(m, h, w, n) in &configs {
+            for seed in 0..10u64 {
+                let spec = crate::level::LevelSpec {
+                    level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
+                };
+                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                let game = crate::generate::generate_game(&spec, &mut rng);
+                let result = solve(&game);
+                if let Some(ref sol) = result.solution {
+                    verify_solution(&game, sol);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_pair_merge_no_false_positive() {
+        // A game that requires specific piece placements — pair-merge should
+        // not produce incorrect solutions.
+        let grid: &[&[u8]] = &[
+            &[1, 1, 0],
+            &[1, 0, 0],
+            &[0, 0, 0],
+        ];
+        let board = Board::from_grid(grid, 2);
+        let p_l = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let p1x1 = Piece::from_grid(&[&[true]]);
+        // L-piece covers the 3 non-zero cells perfectly. Extra 1x1s must cancel.
+        let game = Game::new(board, vec![p_l, p1x1, p1x1]);
+        let result = solve(&game);
+        assert!(result.solution.is_some());
+        verify_solution(&game, result.solution.as_ref().unwrap());
+    }
+
+    // --- Subset reachability no-false-zero-effect test ---
+
+    #[test]
+    fn test_subset_no_false_zero_effect() {
+        // Verify that large pieces that always touch center cells don't get
+        // a free zero-effect in subset DP. Generate a game with big pieces
+        // on a small board and verify it solves correctly.
+        use rand::SeedableRng;
+
+        let configs = vec![
+            (2, 4, 4, 10), (3, 4, 4, 8), (2, 6, 6, 12),
+        ];
+        for &(m, h, w, n) in &configs {
+            for seed in 0..20u64 {
+                let spec = crate::level::LevelSpec {
+                    level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
+                };
+                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                let game = crate::generate::generate_game(&spec, &mut rng);
+                let result = solve(&game);
+                if let Some(ref sol) = result.solution {
+                    verify_solution(&game, sol);
+                }
+            }
+        }
+    }
+
+    // --- Cancellation reduction test ---
+
+    #[test]
+    fn test_cancellation_reduction() {
+        // 4 identical pieces on a solved board with M=2. All should cancel.
+        let board = Board::new_solved(3, 3, 2);
+        let p = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let game = Game::new(board, vec![p, p, p, p]);
+        let result = solve(&game);
+        assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
+        verify_solution(&game, result.solution.as_ref().unwrap());
     }
 }
