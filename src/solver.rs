@@ -316,16 +316,20 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         .map(|i| i + 1)
         .unwrap_or(0);
 
-    // Precompute suffix sums of piece cell counts, perimeters, and global thicknesses.
+    // Precompute suffix sums/maxes of piece properties.
     let mut remaining_bits = vec![0u32; n + 1];
     let mut remaining_perimeter = vec![0u32; n + 1];
     let mut remaining_max_row_thick = vec![0u32; n + 1];
     let mut remaining_max_col_thick = vec![0u32; n + 1];
+    let mut suffix_max_height = vec![0u8; n + 1]; // max piece height among remaining
+    let mut suffix_max_width = vec![0u8; n + 1];  // max piece width among remaining
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
         remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
         remaining_max_row_thick[i] = remaining_max_row_thick[i + 1] + pieces[order[i]].max_row_thickness();
         remaining_max_col_thick[i] = remaining_max_col_thick[i + 1] + pieces[order[i]].max_col_thickness();
+        suffix_max_height[i] = suffix_max_height[i + 1].max(pieces[order[i]].height());
+        suffix_max_width[i] = suffix_max_width[i + 1].max(pieces[order[i]].width());
     }
 
     // Precompute per-row and per-col suffix budgets.
@@ -424,6 +428,8 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &remaining_perimeter,
         &remaining_max_row_thick,
         &remaining_max_col_thick,
+        &suffix_max_height,
+        &suffix_max_width,
         &row_budget,
         &col_budget,
         &col_masks,
@@ -506,6 +512,8 @@ fn backtrack(
     remaining_perimeter: &[u32],
     remaining_max_row_thick: &[u32],
     remaining_max_col_thick: &[u32],
+    suffix_max_height: &[u8],
+    suffix_max_width: &[u8],
     row_budget: &[Vec<u32>],
     col_budget: &[Vec<u32>],
     col_masks: &[Bitboard],
@@ -576,30 +584,36 @@ fn backtrack(
             }
         }
 
-        // DP: max weight independent set of rows with spacing >= 5.
-        // dp[r] = max total weight using rows 0..=r, with selected rows ≥ 5 apart.
+        // DP: max weight independent set of rows with spacing >= max_piece_height.
+        // Tighter spacing when remaining pieces are short.
         {
-            let mut dp = [0u32; 14];
-            for r in 0..h as usize {
-                let take = row_weights[r] + if r >= 5 { dp[r - 5] } else { 0 };
-                let skip = if r > 0 { dp[r - 1] } else { 0 };
-                dp[r] = take.max(skip);
-            }
-            if remaining_max_row_thick[piece_idx] < dp[h as usize - 1] {
-                return false;
+            let gap = suffix_max_height[piece_idx] as usize;
+            if gap > 0 {
+                let mut dp = [0u32; 14];
+                for r in 0..h as usize {
+                    let take = row_weights[r] + if r >= gap { dp[r - gap] } else { 0 };
+                    let skip = if r > 0 { dp[r - 1] } else { 0 };
+                    dp[r] = take.max(skip);
+                }
+                if remaining_max_row_thick[piece_idx] < dp[h as usize - 1] {
+                    return false;
+                }
             }
         }
 
-        // DP: max weight independent set of columns with spacing >= 5.
+        // DP: max weight independent set of columns with spacing >= max_piece_width.
         {
-            let mut dp = [0u32; 14];
-            for c in 0..w as usize {
-                let take = col_weights[c] + if c >= 5 { dp[c - 5] } else { 0 };
-                let skip = if c > 0 { dp[c - 1] } else { 0 };
-                dp[c] = take.max(skip);
-            }
-            if remaining_max_col_thick[piece_idx] < dp[w as usize - 1] {
-                return false;
+            let gap = suffix_max_width[piece_idx] as usize;
+            if gap > 0 {
+                let mut dp = [0u32; 14];
+                for c in 0..w as usize {
+                    let take = col_weights[c] + if c >= gap { dp[c - gap] } else { 0 };
+                    let skip = if c > 0 { dp[c - 1] } else { 0 };
+                    dp[c] = take.max(skip);
+                }
+                if remaining_max_col_thick[piece_idx] < dp[w as usize - 1] {
+                    return false;
+                }
             }
         }
     }
@@ -666,6 +680,8 @@ fn backtrack(
             remaining_perimeter,
             remaining_max_row_thick,
             remaining_max_col_thick,
+            suffix_max_height,
+            suffix_max_width,
             row_budget,
             col_budget,
             col_masks,
