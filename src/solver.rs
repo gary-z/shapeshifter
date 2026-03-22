@@ -101,13 +101,15 @@ struct SubsetReachability {
     cells: Vec<u32>,
     /// M value.
     m: u8,
+    /// Number of configs = M^k.
+    num_configs: usize,
     /// Precomputed mask: OR of all cell bit positions. Used for fast-path
     /// when all cells are already 0 (config=0 is always reachable).
     mask: Bitboard,
-    /// suffix_reachable[piece_idx][config] = can pieces [piece_idx..n] transform
-    /// the subset from `config` to all-zeros?
+    /// Flat byte array: entry at `piece_idx * num_configs + config` = 1 if pieces
+    /// [piece_idx..n] can transform the subset from `config` to all-zeros.
     /// Config is encoded as a base-M number: cell[0] + cell[1]*M + cell[2]*M^2 + ...
-    suffix_reachable: Vec<Vec<bool>>,
+    reachable: Vec<u8>,
 }
 
 impl SubsetReachability {
@@ -139,7 +141,7 @@ impl SubsetReachability {
             return true;
         }
         let config = self.encode_config(board);
-        self.suffix_reachable[piece_idx][config]
+        self.reachable[piece_idx * self.num_configs + config] != 0
     }
 }
 
@@ -960,15 +962,19 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 piece_effects.push(effects_set);
             }
 
-            // Suffix DP.
-            let mut suffix_reachable = vec![vec![false; num_configs]; n + 1];
-            suffix_reachable[n][0] = true;
+            // Suffix DP into a flat Vec<u8>: (n+1) layers × num_configs entries.
+            let total = (n + 1) * num_configs;
+            let mut reachable = vec![0u8; total];
+            // Base case: piece n, config 0 (all zeros) is reachable.
+            reachable[n * num_configs] = 1;
             for i in (0..n).rev() {
+                let next_base = (i + 1) * num_configs;
+                let cur_base = i * num_configs;
                 for config in 0..num_configs {
                     for effect in &piece_effects[i] {
-                        let new_config = apply_effect(config, &effect);
-                        if suffix_reachable[i + 1][new_config] {
-                            suffix_reachable[i][config] = true;
+                        let new_config = apply_effect(config, effect);
+                        if reachable[next_base + new_config] != 0 {
+                            reachable[cur_base + config] = 1;
                             break;
                         }
                     }
@@ -979,7 +985,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
             for &bit in &cells {
                 mask.set_bit(bit);
             }
-            SubsetReachability { cells, m, mask, suffix_reachable }
+            SubsetReachability { cells, m, num_configs, mask, reachable }
         };
 
         let mut subsets = Vec::new();
@@ -1289,6 +1295,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
+
     let found = backtrack(
         &board,
         &data,
