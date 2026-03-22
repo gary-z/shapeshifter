@@ -27,11 +27,8 @@ if ! grep -qFx "$COMPACT" "$HISTORY_FILE"; then
 fi
 
 # Build solver if needed
-cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml" 2>/dev/null
+cargo build --release --bin solve --manifest-path "$SCRIPT_DIR/Cargo.toml" 2>/dev/null
 
 # Solve and generate visual guide
 echo ""
-"$SCRIPT_DIR/target/release/shapeshifter" "$JSON_FILE" --assets-dir "$ASSETS_DIR"
-
-echo ""
-echo "Solution: $SOLUTION_FILE"
+"$SCRIPT_DIR/target/release/solve" "$JSON_FILE" --assets-dir "$ASSETS_DIR" -o "$SOLUTION_FILE"
