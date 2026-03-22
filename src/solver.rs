@@ -939,21 +939,20 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 result
             };
 
-            // Per piece: enumerate unique effects.
+            // Per piece: enumerate unique effects on this subset from actual placements.
+            // No assumed zero effect — it's included only if a placement naturally
+            // doesn't touch any subset cell.
             let mut piece_effects: Vec<Vec<Vec<u8>>> = Vec::with_capacity(n);
             for i in 0..n {
                 let mut effects_set: Vec<Vec<u8>> = Vec::new();
-                effects_set.push(vec![0u8; k]); // zero effect always available
                 for &(_, _, mask) in &all_placements[i] {
                     let mut effect = vec![0u8; k];
-                    let mut any = false;
                     for (ci, &bit) in cells.iter().enumerate() {
                         if mask.get_bit(bit) {
                             effect[ci] = 1;
-                            any = true;
                         }
                     }
-                    if any && !effects_set.contains(&effect) {
+                    if !effects_set.contains(&effect) {
                         effects_set.push(effect);
                     }
                 }
