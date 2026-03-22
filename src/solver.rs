@@ -829,6 +829,75 @@ fn solve_single_cells(
     true
 }
 
+#[inline(always)]
+fn prune_active_planes(board: &Board, remaining: usize) -> bool {
+    board.active_planes() as usize <= remaining
+}
+
+#[inline(always)]
+fn prune_min_flips_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    data.remaining_bits[piece_idx] >= board.min_flips_needed()
+}
+
+#[inline(always)]
+fn prune_line_families_rowcol(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    check_line_family(board, &data.line_families[0], piece_idx, data.m)
+        && check_line_family(board, &data.line_families[1], piece_idx, data.m)
+}
+
+#[inline(always)]
+fn prune_line_families_diagonal(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    for f in &data.line_families[2..] {
+        if !check_line_family(board, f, piece_idx, data.m) { return false; }
+    }
+    true
+}
+
+#[inline(always)]
+fn prune_subgrid(board: &Board, data: &SolverData, piece_idx: usize, remaining: usize) -> bool {
+    let gap_h = data.line_families[0].suffix_max_span[piece_idx] as usize;
+    let gap_w = data.line_families[1].suffix_max_span[piece_idx] as usize;
+    if gap_h == 0 || gap_w == 0 { return true; }
+    let mut max_demand = 0u32;
+    for r0 in 0..gap_h {
+        for c0 in 0..gap_w {
+            let mut demand = 0u32;
+            let mut r = r0;
+            while r < data.h as usize {
+                let mut c = c0;
+                while c < data.w as usize {
+                    let bit = (r * 15 + c) as u32;
+                    for d in 1..data.m {
+                        if board.plane(d).get_bit(bit) {
+                            demand += (data.m - d) as u32;
+                            break;
+                        }
+                    }
+                    c += gap_w;
+                }
+                r += gap_h;
+            }
+            if demand > max_demand {
+                max_demand = demand;
+            }
+        }
+    }
+    max_demand <= remaining as u32
+}
+
+#[inline(always)]
+fn prune_coverage(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    has_sufficient_coverage(board, &data.suffix_coverage[piece_idx], data.m)
+}
+
+#[inline(always)]
+fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    let (h_jagg, v_jagg) = board.split_jaggedness(
+        data.jagg_h_mask, data.jagg_h_total, data.jagg_v_mask, data.jagg_v_total);
+    h_jagg <= data.remaining_h_perimeter[piece_idx]
+        && v_jagg <= data.remaining_v_perimeter[piece_idx]
+}
+
 fn backtrack(
     board: &Board,
     data: &SolverData,
@@ -852,87 +921,15 @@ fn backtrack(
     }
 
     let remaining = data.all_placements.len() - piece_idx;
-
-    // Prune: each piece can eliminate at most one active plane.
-    if config.active_planes && board.active_planes() as usize > remaining {
-        return false;
-    }
-
-    // Prune: if remaining piece bits can't cover the minimum flips needed.
-    let min_flips = board.min_flips_needed();
-    if config.min_flips_global && data.remaining_bits[piece_idx] < min_flips {
-        return false;
-    }
-
-    // Prune: per-row/col min_flips budget with DP independent set.
-    if config.min_flips_rowcol {
-        if !check_line_family(board, &data.line_families[0], piece_idx, data.m) { return false; }
-        if !check_line_family(board, &data.line_families[1], piece_idx, data.m) { return false; }
-    }
-
-    // Prune: per-diagonal min_flips budget with DP independent set.
-    if config.min_flips_diagonal {
-        for f in &data.line_families[2..] {
-            if !check_line_family(board, f, piece_idx, data.m) { return false; }
-        }
-    }
-
-    // Prune: subgrid independence check.
-    // Sample cells on a grid spaced by (max_piece_height × max_piece_width).
-    // No piece can cover two grid points. Total demand at grid points <= remaining_pieces.
-    // Run when branching factor is high enough to justify the cost.
     let branching = data.all_placements[piece_idx].len();
-    if config.min_flips_rowcol && branching >= 6 {
-        let gap_h = data.line_families[0].suffix_max_span[piece_idx] as usize;
-        let gap_w = data.line_families[1].suffix_max_span[piece_idx] as usize;
-        if gap_h > 0 && gap_w > 0 {
-            let mut max_demand = 0u32;
-            for r0 in 0..gap_h {
-                for c0 in 0..gap_w {
-                    let mut demand = 0u32;
-                    let mut r = r0;
-                    while r < data.h as usize {
-                        let mut c = c0;
-                        while c < data.w as usize {
-                            let bit = (r * 15 + c) as u32;
-                            for d in 1..data.m {
-                                if board.plane(d).get_bit(bit) {
-                                    demand += (data.m - d) as u32;
-                                    break; // cell can only be in one plane
-                                }
-                            }
-                            c += gap_w;
-                        }
-                        r += gap_h;
-                    }
-                    if demand > max_demand {
-                        max_demand = demand;
-                    }
-                }
-            }
-            if max_demand > remaining as u32 {
-                return false;
-            }
-        }
-    }
 
-    // Prune: insufficient coverage per cell.
-    if config.coverage && !has_sufficient_coverage(board, &data.suffix_coverage[piece_idx], data.m) {
-        return false;
-    }
-
-    // Prune: jaggedness exceeds total remaining perimeter.
-    if config.jaggedness {
-        // Split jaggedness into horizontal and vertical, check each independently.
-        // Tighter than the combined check because h_perim only affects h_jagg.
-        let (h_jagg, v_jagg) = board.split_jaggedness(data.jagg_h_mask, data.jagg_h_total, data.jagg_v_mask, data.jagg_v_total);
-        if h_jagg > data.remaining_h_perimeter[piece_idx] {
-            return false;
-        }
-        if v_jagg > data.remaining_v_perimeter[piece_idx] {
-            return false;
-        }
-    }
+    if config.active_planes && !prune_active_planes(board, remaining) { return false; }
+    if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
+    if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
+    if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
+    if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
+    if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
+    if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {
