@@ -120,8 +120,9 @@ struct SolverData {
     m: u8,
     h: u8,
     w: u8,
-    // Parity partition checks: checkerboard, even-rows, even-cols.
-    parity_partitions: [ParityPartition; 3],
+    // Parity partition checks: mod-2 (checkerboard, even-rows, even-cols)
+    // plus optional mod-3 partitions for larger boards.
+    parity_partitions: Vec<ParityPartition>,
 }
 
 /// A solution is a list of (row, col) placements, one per piece in original order.
@@ -753,45 +754,48 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let jagg_v_total = jagg_v_mask.count_ones();
 
     // Precompute parity partition checks.
-    // Three partitions: checkerboard (r+c)%2, even-rows r%2, even-cols c%2.
-    // For each: build mask, compute per-piece group-0 counts at each parity,
-    // then build suffix DP of achievable group-0 totals.
-    let build_partition = |parity_fn: &dyn Fn(usize, usize) -> bool| -> ParityPartition {
-        // Build board mask for group-0 cells.
+    // Each partition splits the board into "group 0" vs "rest". The DP tracks
+    // achievable group-0 totals. Pieces have K options (one per placement offset mod K).
+    //
+    // group_fn(r, c) -> bool: is this cell in group 0?
+    // num_offsets: how many distinct placement offsets affect group membership (2 for mod-2, 3 for mod-3)
+    // offset_fn(pr, pc, offset) -> bool: is piece cell (pr,pc) in group 0 when placed at this offset?
+    let build_partition = |group_fn: &dyn Fn(usize, usize) -> bool,
+                           num_offsets: usize,
+                           offset_fn: &dyn Fn(usize, usize, usize) -> bool|
+                           -> ParityPartition {
         let mut mask = Bitboard::ZERO;
         for r in 0..bh {
             for c in 0..bw {
-                if parity_fn(r, c) {
+                if group_fn(r, c) {
                     mask.set_bit((r * 15 + c) as u32);
                 }
             }
         }
 
-        // Per piece: count of group-0 cells at each placement parity.
-        // "parity 0" = the placement where the piece's (0,0) cell lands on a group-0 cell.
-        // "parity 1" = the opposite.
-        let mut g0_at_p0 = Vec::with_capacity(n); // group-0 count when parity matches
-        let mut g0_at_p1 = Vec::with_capacity(n); // group-0 count when parity flipped
+        // Per piece: group-0 count at each offset.
+        let mut g0_counts: Vec<Vec<u32>> = Vec::with_capacity(n);
         for i in 0..n {
             let piece = &pieces[order[i]];
-            let mut count_matching = 0u32;
-            for pr in 0..piece.height() as usize {
-                for pc in 0..piece.width() as usize {
-                    if piece.shape().get_bit((pr * 15 + pc) as u32) && parity_fn(pr, pc) {
-                        count_matching += 1;
+            let mut counts = vec![0u32; num_offsets];
+            for off in 0..num_offsets {
+                for pr in 0..piece.height() as usize {
+                    for pc in 0..piece.width() as usize {
+                        if piece.shape().get_bit((pr * 15 + pc) as u32) && offset_fn(pr, pc, off) {
+                            counts[off] += 1;
+                        }
                     }
                 }
             }
-            g0_at_p0.push(count_matching);
-            g0_at_p1.push(piece.cell_count() - count_matching);
+            g0_counts.push(counts);
         }
 
         // Suffix min/max.
         let mut suffix_max = vec![0u32; n + 1];
         let mut suffix_min = vec![0u32; n + 1];
         for i in (0..n).rev() {
-            suffix_max[i] = suffix_max[i + 1] + g0_at_p0[i].max(g0_at_p1[i]);
-            suffix_min[i] = suffix_min[i + 1] + g0_at_p0[i].min(g0_at_p1[i]);
+            suffix_max[i] = suffix_max[i + 1] + *g0_counts[i].iter().max().unwrap();
+            suffix_min[i] = suffix_min[i + 1] + *g0_counts[i].iter().min().unwrap();
         }
 
         // Full DP.
@@ -799,12 +803,12 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         let mut suffix_dp = vec![vec![false; dp_size]; n + 1];
         suffix_dp[n][0] = true;
         for i in (0..n).rev() {
-            let a = g0_at_p0[i] as usize;
-            let b = g0_at_p1[i] as usize;
             for w in 0..dp_size {
                 if suffix_dp[i + 1][w] {
-                    if w + a < dp_size { suffix_dp[i][w + a] = true; }
-                    if w + b < dp_size { suffix_dp[i][w + b] = true; }
+                    for &g0 in &g0_counts[i] {
+                        let nw = w + g0 as usize;
+                        if nw < dp_size { suffix_dp[i][nw] = true; }
+                    }
                 }
             }
         }
@@ -812,11 +816,46 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         ParityPartition { mask, suffix_max, suffix_min, suffix_dp }
     };
 
-    let parity_partitions = [
-        build_partition(&|r, c| (r + c) % 2 == 0),  // checkerboard
-        build_partition(&|r, _c| r % 2 == 0),         // even rows
-        build_partition(&|_r, c| c % 2 == 0),         // even columns
-    ];
+    // Mod-2 partitions (2 offsets each).
+    let mut partitions = Vec::new();
+    // Checkerboard: (r+c)%2. Offset = (r0+c0)%2.
+    partitions.push(build_partition(
+        &|r, c| (r + c) % 2 == 0,
+        2,
+        &|pr, pc, off| (pr + pc + off) % 2 == 0,
+    ));
+    // Even rows: r%2. Offset = r0%2.
+    partitions.push(build_partition(
+        &|r, _c| r % 2 == 0,
+        2,
+        &|pr, _pc, off| (pr + off) % 2 == 0,
+    ));
+    // Even cols: c%2. Offset = c0%2.
+    partitions.push(build_partition(
+        &|_r, c| c % 2 == 0,
+        2,
+        &|_pr, pc, off| (pc + off) % 2 == 0,
+    ));
+
+    // Mod-3 partitions (3 offsets each). Each group checked independently vs rest.
+    if bh >= 6 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|r, _c| r % 3 == target_group,
+                3,
+                &|pr, _pc, off| (pr + off) % 3 == target_group,
+            ));
+        }
+    }
+    if bw >= 6 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|_r, c| c % 3 == target_group,
+                3,
+                &|_pr, pc, off| (pc + off) % 3 == target_group,
+            ));
+        }
+    }
 
     let data = SolverData {
         all_placements,
@@ -841,7 +880,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         m,
         h,
         w,
-        parity_partitions,
+        parity_partitions: partitions,
     };
 
     let nodes = Cell::new(0u64);
