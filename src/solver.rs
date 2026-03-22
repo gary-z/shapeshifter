@@ -1033,6 +1033,70 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
             add_subset(cells, &mut subsets, &mut seen_cell_sets);
         }
 
+        // L-shaped corner subsets: cells along both edges meeting at each corner.
+        // E.g., top-left L: top edge cells + left edge cells (no duplicate at corner).
+        for &(cr, cc, dir_r, dir_c) in &[
+            (0usize, 0usize, 1isize, 1isize),         // top-left: down + right
+            (0, bw - 1, 1isize, -1isize),              // top-right: down + left
+            (bh - 1, 0, -1isize, 1isize),              // bottom-left: up + right
+            (bh - 1, bw - 1, -1isize, -1isize),        // bottom-right: up + left
+        ] {
+            // Build L: arm along row (horizontal) + arm along column (vertical).
+            let arm_len = max_subset_k / 2;
+            let mut cells = Vec::new();
+            // Horizontal arm from corner.
+            for i in 0..arm_len.min(bw) {
+                let c = (cc as isize + i as isize * dir_c) as usize;
+                if c < bw {
+                    cells.push((cr * 15 + c) as u32);
+                }
+            }
+            // Vertical arm from corner (skip the corner cell itself to avoid dup).
+            for i in 1..arm_len.min(bh) {
+                let r = (cr as isize + i as isize * dir_r) as usize;
+                if r < bh {
+                    cells.push((r * 15 + cc) as u32);
+                }
+            }
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
+        // Multi-corner subsets: combine cells from 2 opposite corners.
+        // These are very far apart — most pieces affect at most 1 corner.
+        if bh >= 6 && bw >= 6 {
+            let half_k = max_subset_k / 2;
+            // Top-left + bottom-right corners.
+            {
+                let mut cells = Vec::new();
+                for r in 0..2usize.min(bh) {
+                    for c in 0..half_k.min(bw) / 2 {
+                        cells.push((r * 15 + c) as u32);
+                    }
+                }
+                for r in bh.saturating_sub(2)..bh {
+                    for c in bw.saturating_sub(half_k / 2)..bw {
+                        cells.push((r * 15 + c) as u32);
+                    }
+                }
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+            // Top-right + bottom-left corners.
+            {
+                let mut cells = Vec::new();
+                for r in 0..2usize.min(bh) {
+                    for c in bw.saturating_sub(half_k / 2)..bw {
+                        cells.push((r * 15 + c) as u32);
+                    }
+                }
+                for r in bh.saturating_sub(2)..bh {
+                    for c in 0..half_k.min(bw) / 2 {
+                        cells.push((r * 15 + c) as u32);
+                    }
+                }
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+        }
+
         subsets
     };
 
