@@ -41,6 +41,15 @@ impl PuzzleJson {
             format!("{}/val_{}.png", assets_dir, val)
         }
     }
+
+    /// Get the highlighted image path (the _1 variant used by the game on hover).
+    pub fn icon_src_highlight(&self, val: u8, assets_dir: &str) -> String {
+        if !self.icons.is_empty() && (val as usize) < self.icons.len() {
+            format!("{}/{}_1.gif", assets_dir, self.icons[val as usize])
+        } else {
+            format!("{}/val_{}.png", assets_dir, val)
+        }
+    }
 }
 
 /// Generate an HTML solution guide.
@@ -69,14 +78,9 @@ h1 {{ color: #333; text-align: center; }}
 h2 {{ color: #444; border-bottom: 1px solid #ccc; padding-bottom: 5px; }}
 .step {{ background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 15px 0; border: 1px solid #ddd; }}
 .board {{ display: inline-grid; grid-template-columns: repeat({w}, 50px); gap: 0; padding: 0; }}
-.cell {{ width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; position: relative; }}
-.cell img {{ width: 44px; height: 44px; }}
-.cell.highlight {{ outline: 3px solid #2ecc40; outline-offset: -3px; border-radius: 4px; background: rgba(46, 204, 64, 0.25); }}
-.cell.click-here {{ outline: 4px solid #ff2020; outline-offset: -4px; background: rgba(255, 32, 32, 0.25); }}
-.piece-grid {{ display: inline-grid; gap: 1px; margin: 5px 0; }}
-.piece-cell {{ width: 20px; height: 20px; }}
-.piece-cell.filled {{ background: #8b0000; border-radius: 3px; }}
-.piece-cell.empty {{ background: transparent; }}
+.cell {{ width: 50px; height: 50px; position: relative; line-height: 0; }}
+.cell img {{ width: 50px; height: 50px; display: block; }}
+.cell.click-here {{ outline: 4px solid #2ecc40; outline-offset: -4px; }}
 .info {{ color: #666; font-size: 14px; margin: 5px 0; }}
 .solved {{ color: #4caf50; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }}
 .arrow {{ text-align: center; font-size: 24px; color: #999; }}
@@ -93,23 +97,7 @@ h2 {{ color: #444; border-bottom: 1px solid #ccc; padding-bottom: 5px; }}
         let piece = &pieces[i];
         let mask = piece.placed_at(row, col);
 
-        html.push_str(&format!("<div class=\"step\"><h2>Step {}: Piece {}</h2>\n", i + 1, i));
-
-        // Show piece shape
-        let ph = piece.height() as usize;
-        let pw = piece.width() as usize;
-        html.push_str(&format!(
-            "<div class=\"piece-grid\" style=\"grid-template-columns: repeat({}, 20px)\">\n", pw
-        ));
-        for r in 0..ph {
-            for c in 0..pw {
-                let bit = (r * 15 + c) as u32;
-                let class = if piece.shape().get_bit(bit) { "filled" } else { "empty" };
-                html.push_str(&format!("<div class=\"piece-cell {}\"></div>\n", class));
-            }
-        }
-        html.push_str("</div>\n");
-        html.push_str(&format!("<p class=\"info\">Place at row {}, col {}</p>\n", row, col));
+        html.push_str(&format!("<div class=\"step\"><h2>Piece {}</h2>\n", i));
 
         // Board with highlight and click marker
         html.push_str(&render_board(&board, h, w, puzzle, assets_dir, Some(mask), Some((row, col))));
@@ -149,7 +137,11 @@ fn render_board(
                 (false, true) => "cell highlight",
                 _ => "cell",
             };
-            let src = puzzle.icon_src(val, assets_dir);
+            let src = if is_piece {
+                puzzle.icon_src_highlight(val, assets_dir)
+            } else {
+                puzzle.icon_src(val, assets_dir)
+            };
             s.push_str(&format!("<div class=\"{}\"><img src=\"{}\"></div>\n", class, src));
         }
     }
