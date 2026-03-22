@@ -52,8 +52,8 @@ def parse_shapeshifter_html(html: str) -> dict:
     goal_pos = html.find('GOAL')
     cycle_section = ''
     if goal_pos >= 0:
-        # Look back for the nearest <table
-        search_start = max(0, goal_pos - 500)
+        # Look back for the nearest <table (use larger window for long cycle rows)
+        search_start = max(0, goal_pos - 2000)
         table_start = html.rfind('<table', search_start, goal_pos)
         if table_start >= 0:
             table_end = html.find('</table>', goal_pos)
@@ -64,28 +64,27 @@ def parse_shapeshifter_html(html: str) -> dict:
 
     if cycle_icons:
         # Find which icon is the GOAL (has the GOAL label after it)
-        goal_idx = None
-        goal_section_detail = html[html.find('<table border="1"'):html.find('</table>', html.find('<table border="1"')) + 200]
-        # The GOAL text appears after the goal icon's img tag
-        # GOAL label follows immediately after the goal icon's img tag within the same <td>
-        goal_icon_match = re.search(r'/(\w+)_0\.gif[^>]*>\s*<br><b><small>GOAL', goal_section_detail, re.DOTALL)
+        # Search the cycle section for the icon directly before the GOAL label
+        goal_icon_match = re.search(r'/(\w+)_0\.gif[^>]*>[^<]*<br><b><small>GOAL', cycle_section, re.DOTALL)
         if goal_icon_match:
             goal_icon = goal_icon_match.group(1)
         else:
             goal_icon = cycle_icons[len(cycle_icons) // 2]  # middle is usually GOAL
 
-        # The cycle sequence (excluding the repeated last = first) defines the order.
-        # cycle_icons = [val_M-1, GOAL=0, val_1, ..., val_M-1] for M states.
-        m = len(cycle_icons) - 1
+        # The cycle sequence has a repeated icon at the end (wraps around).
+        # e.g. [gob, cro, swo, gob] means the cycle is gob->cro->swo->gob, M=3.
+        # Remove the trailing duplicate to get the unique cycle.
+        if len(cycle_icons) > 1 and cycle_icons[-1] == cycle_icons[0]:
+            cycle_icons = cycle_icons[:-1]
+        m = len(cycle_icons)
         # Find goal_icon position in cycle
         goal_pos = cycle_icons.index(goal_icon)
         # Build mapping: starting from GOAL position, assign values 0, 1, 2, ...
         icon_to_val = {}
         for offset in range(m):
-            idx = (goal_pos + offset) % len(cycle_icons)
+            idx = (goal_pos + offset) % m
             icon = cycle_icons[idx]
-            if icon not in icon_to_val:
-                icon_to_val[icon] = offset
+            icon_to_val[icon] = offset
     else:
         sorted_icons = sorted(icons)
         m = len(sorted_icons)

@@ -19,9 +19,12 @@ fi
 echo "Parsing..."
 python3 "$SCRIPT_DIR/tools/parse_html.py" "$HTML_FILE" "$JSON_FILE"
 
-# Append to history
-cat "$JSON_FILE" >> "$HISTORY_FILE"
-echo "" >> "$HISTORY_FILE"
+# Append to history and dedup
+COMPACT=$(python3 -c "import json,sys;print(json.dumps(json.load(open(sys.argv[1])),separators=(',',':')))" "$JSON_FILE")
+touch "$HISTORY_FILE"
+if ! grep -qFx "$COMPACT" "$HISTORY_FILE"; then
+    echo "$COMPACT" >> "$HISTORY_FILE"
+fi
 
 # Build solver if needed
 cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml" 2>/dev/null
