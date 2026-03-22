@@ -99,10 +99,11 @@ struct ParityPartition {
 struct SubsetReachability {
     /// Board cell positions in the subset (as bit indices r*15+c).
     cells: Vec<u32>,
-    /// Number of cells in the subset.
-    num_cells: usize,
     /// M value.
     m: u8,
+    /// Precomputed mask: OR of all cell bit positions. Used for fast-path
+    /// when all cells are already 0 (config=0 is always reachable).
+    mask: Bitboard,
     /// suffix_reachable[piece_idx][config] = can pieces [piece_idx..n] transform
     /// the subset from `config` to all-zeros?
     /// Config is encoded as a base-M number: cell[0] + cell[1]*M + cell[2]*M^2 + ...
@@ -132,6 +133,11 @@ impl SubsetReachability {
     /// Check if the current board configuration is reachable from piece_idx.
     #[inline(always)]
     fn check(&self, board: &Board, piece_idx: usize) -> bool {
+        // Fast path: if all subset cells are 0, config=0 which is always reachable
+        // (the zero-effect identity is always available for every piece).
+        if (board.plane(0) & self.mask) == self.mask {
+            return true;
+        }
         let config = self.encode_config(board);
         self.suffix_reachable[piece_idx][config]
     }
@@ -969,7 +975,11 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 }
             }
 
-            SubsetReachability { cells, num_cells: k, m, suffix_reachable }
+            let mut mask = Bitboard::ZERO;
+            for &bit in &cells {
+                mask.set_bit(bit);
+            }
+            SubsetReachability { cells, m, mask, suffix_reachable }
         };
 
         let mut subsets = Vec::new();
@@ -1095,6 +1105,156 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 }
                 add_subset(cells, &mut subsets, &mut seen_cell_sets);
             }
+        }
+
+        // Diagonal subsets near corners: cells along main diagonals.
+        for &(r0, c0, dr, dc) in &[
+            (0usize, 0usize, 1isize, 1isize),         // top-left diagonal
+            (0, bw - 1, 1isize, -1isize),              // top-right anti-diagonal
+            (bh - 1, 0, -1isize, 1isize),              // bottom-left anti-diagonal
+            (bh - 1, bw - 1, -1isize, -1isize),        // bottom-right diagonal
+        ] {
+            let mut cells = Vec::new();
+            let mut r = r0 as isize;
+            let mut c = c0 as isize;
+            while cells.len() < max_subset_k && r >= 0 && r < bh as isize && c >= 0 && c < bw as isize {
+                cells.push((r as usize * 15 + c as usize) as u32);
+                r += dr;
+                c += dc;
+            }
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
+        // 2-wide border strips: sliding windows along each edge with depth 2.
+        // These capture constraints that single-row border segments miss.
+        if bh >= 4 && bw >= 4 {
+            let strip_w = max_subset_k / 2; // columns per window (2 rows × strip_w cols)
+            // Top 2 rows.
+            for start_c in 0..=bw.saturating_sub(strip_w) {
+                let cells: Vec<u32> = (0..2usize)
+                    .flat_map(|r| (start_c..start_c + strip_w.min(bw - start_c))
+                        .map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+            // Bottom 2 rows.
+            for start_c in 0..=bw.saturating_sub(strip_w) {
+                let cells: Vec<u32> = (bh - 2..bh)
+                    .flat_map(|r| (start_c..start_c + strip_w.min(bw - start_c))
+                        .map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+            // Left 2 cols.
+            let strip_h = max_subset_k / 2;
+            for start_r in 0..=bh.saturating_sub(strip_h) {
+                let cells: Vec<u32> = (start_r..start_r + strip_h.min(bh - start_r))
+                    .flat_map(|r| (0..2usize).map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+            // Right 2 cols.
+            for start_r in 0..=bh.saturating_sub(strip_h) {
+                let cells: Vec<u32> = (start_r..start_r + strip_h.min(bh - start_r))
+                    .flat_map(|r| ((bw - 2)..bw).map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+        }
+
+        // Scattered border: every-other cell around the full perimeter.
+        // Sparse but wide-reaching — catches long-range configuration conflicts.
+        if bh >= 5 && bw >= 5 {
+            let mut border_cells = Vec::new();
+            for c in 0..bw { border_cells.push((0, c)); }
+            for r in 1..bh { border_cells.push((r, bw - 1)); }
+            for c in (0..bw - 1).rev() { border_cells.push((bh - 1, c)); }
+            for r in (1..bh - 1).rev() { border_cells.push((r, 0)); }
+
+            // Phase 0: even-indexed perimeter cells.
+            let cells: Vec<u32> = border_cells.iter().step_by(2)
+                .take(max_subset_k)
+                .map(|&(r, c)| (r * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+
+            // Phase 1: odd-indexed perimeter cells.
+            let cells: Vec<u32> = border_cells.iter().skip(1).step_by(2)
+                .take(max_subset_k)
+                .map(|&(r, c)| (r * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+
+            // Wider spacing: every 3rd cell.
+            let cells: Vec<u32> = border_cells.iter().step_by(3)
+                .take(max_subset_k)
+                .map(|&(r, c)| (r * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+
+            // Every 3rd, offset 1.
+            let cells: Vec<u32> = border_cells.iter().skip(1).step_by(3)
+                .take(max_subset_k)
+                .map(|&(r, c)| (r * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
+        // Cross/plus subsets at each corner: L + an interior diagonal cell.
+        if bh >= 5 && bw >= 5 {
+            for &(cr, cc, dr, dc) in &[
+                (0usize, 0usize, 1isize, 1isize),
+                (0, bw - 1, 1isize, -1isize),
+                (bh - 1, 0, -1isize, 1isize),
+                (bh - 1, bw - 1, -1isize, -1isize),
+            ] {
+                // Corner cell + 2 along row + 1 along col + 1 diagonal inward.
+                let mut cells = Vec::new();
+                cells.push((cr * 15 + cc) as u32);
+                // One step along row.
+                let c1 = (cc as isize + dc) as usize;
+                if c1 < bw { cells.push((cr * 15 + c1) as u32); }
+                // One step along col.
+                let r1 = (cr as isize + dr) as usize;
+                if r1 < bh { cells.push((r1 * 15 + cc) as u32); }
+                // Diagonal inward.
+                if r1 < bh && c1 < bw { cells.push((r1 * 15 + c1) as u32); }
+                // Two steps along row.
+                let c2 = (cc as isize + 2 * dc) as usize;
+                if c2 < bw && cells.len() < max_subset_k {
+                    cells.push((cr * 15 + c2) as u32);
+                }
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+        }
+
+        // Mid-edge segments: cells from the middle of each edge (2 rows deep).
+        if bh >= 6 && bw >= 6 {
+            let seg = max_subset_k / 2;
+            let mid_c = (bw.saturating_sub(seg)) / 2;
+            let mid_r = (bh.saturating_sub(seg)) / 2;
+            // Top mid, 2 deep.
+            let cells: Vec<u32> = (0..2usize)
+                .flat_map(|r| (mid_c..mid_c + seg.min(bw))
+                    .map(move |c| (r * 15 + c) as u32))
+                .take(max_subset_k).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            // Bottom mid, 2 deep.
+            let cells: Vec<u32> = (bh - 2..bh)
+                .flat_map(|r| (mid_c..mid_c + seg.min(bw))
+                    .map(move |c| (r * 15 + c) as u32))
+                .take(max_subset_k).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            // Left mid, 2 deep.
+            let cells: Vec<u32> = (mid_r..mid_r + seg.min(bh))
+                .flat_map(|r| (0..2usize).map(move |c| (r * 15 + c) as u32))
+                .take(max_subset_k).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            // Right mid, 2 deep.
+            let cells: Vec<u32> = (mid_r..mid_r + seg.min(bh))
+                .flat_map(|r| ((bw - 2)..bw).map(move |c| (r * 15 + c) as u32))
+                .take(max_subset_k).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
         }
 
         subsets

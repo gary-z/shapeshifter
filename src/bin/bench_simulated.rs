@@ -6,7 +6,7 @@ use shapeshifter::generate::generate_for_level;
 use shapeshifter::level::get_level;
 use shapeshifter::solver;
 
-const TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(1);
 const GAMES_PER_LEVEL: u32 = 5;
 
 fn main() {
