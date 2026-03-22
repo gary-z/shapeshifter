@@ -708,6 +708,19 @@ pub(crate) fn build_solver_data(
             }
         }
 
+        // Full columns and rows as subsets.
+        // For M=2 on 8×7: column = 8 cells (2^8 = 256 states), row = 7 cells (2^7 = 128).
+        // Big pieces must touch center columns from every placement — no zero effect,
+        // making the DP very constraining.
+        for c in 0..bw {
+            let cells: Vec<u32> = (0..bh).map(|r| (r * 15 + c) as u32).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+        for r in 0..bh {
+            let cells: Vec<u32> = (0..bw).map(|c| (r * 15 + c) as u32).collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
         subsets
     };
 
