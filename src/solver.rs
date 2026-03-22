@@ -794,7 +794,9 @@ fn backtrack(
     // Prune: subgrid independence check.
     // Sample cells on a grid spaced by (max_piece_height × max_piece_width).
     // No piece can cover two grid points. Total demand at grid points <= remaining_pieces.
-    if config.min_flips_rowcol && piece_idx < 6 {
+    // Run when branching factor is high enough to justify the cost.
+    let branching = all_placements[piece_idx].len();
+    if config.min_flips_rowcol && branching >= 6 {
         let gap_h = line_families[0].suffix_max_span[piece_idx] as usize;
         let gap_w = line_families[1].suffix_max_span[piece_idx] as usize;
         if gap_h > 0 && gap_w > 0 {
@@ -846,7 +848,8 @@ fn backtrack(
     };
 
     // Prune: per-component checks (jaggedness, min_flips).
-    if config.component_checks && piece_idx < 4 {
+    // Run when branching factor justifies flood-fill cost.
+    if config.component_checks && branching >= 8 {
         if !check_components(
             board, locked_mask, reaches, perimeters, cell_counts,
             m, piece_idx,

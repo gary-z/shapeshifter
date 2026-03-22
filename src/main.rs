@@ -8,64 +8,78 @@ mod piece;
 mod puzzle;
 mod solver;
 
-use std::time::Instant;
+use rayon::prelude::*;
+use std::time::Duration;
+
+fn solve_with_timeout(game: &game::Game, timeout: Duration) -> Option<(Duration, u64)> {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Instant;
+
+    let game = game.clone();
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let start = Instant::now();
+        let result = solver::solve(&game);
+        let elapsed = start.elapsed();
+        let _ = tx.send((elapsed, result.nodes_visited, result.solution.is_some()));
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok((elapsed, nodes, _solved)) => Some((elapsed, nodes)),
+        Err(_) => None,
+    }
+}
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let timeout = Duration::from_secs(5);
+    let num_seeds = 20u64;
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <puzzle.json or .jsonl> [--compare]", args[0]);
-        std::process::exit(1);
-    }
+    println!(
+        "{:<6} {:<4} {:<5} {:<5} {:<6} {:<8} {:<10} {:<12} {:<10}",
+        "Level", "M", "Rows", "Cols", "Pcs", "Solved", "Rate", "AvgNodes", "AvgTime"
+    );
+    println!("{}", "-".repeat(75));
 
-    let path = &args[1];
-    let compare = args.iter().any(|a| a == "--compare");
-    let content = std::fs::read_to_string(path).expect("failed to read file");
+    let results: Vec<_> = (1..=100u32)
+        .into_par_iter()
+        .map(|lvl| {
+            let spec = level::get_level(lvl).unwrap();
+            let mut solved = 0u64;
+            let mut total_time = Duration::ZERO;
+            let mut total_nodes = 0u64;
 
-    let puzzles: Vec<puzzle::PuzzleJson> = if path.ends_with(".jsonl") {
-        content.lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("bad JSONL line"))
-            .collect()
-    } else {
-        vec![serde_json::from_str(&content).expect("bad JSON")]
-    };
+            for seed in 0..num_seeds {
+                let mut rng =
+                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                let game = generate::generate_game(&spec, &mut rng);
 
-    if compare {
-        println!("{:<8} {:<6} {:<14} {:<14} {:<10}",
-            "Level", "Pcs", "Nodes(all)", "Nodes(noLine)", "Ratio");
-        println!("{}", "-".repeat(55));
+                match solve_with_timeout(&game, timeout) {
+                    Some((elapsed, nodes)) => {
+                        solved += 1;
+                        total_time += elapsed;
+                        total_nodes += nodes;
+                    }
+                    None => {
+                        total_time += timeout;
+                    }
+                }
+            }
 
-        let mut config_no_lines = solver::PruningConfig::default();
-        config_no_lines.min_flips_rowcol = false;
-        config_no_lines.min_flips_diagonal = false;
+            let rate = (solved as f64 / num_seeds as f64) * 100.0;
+            let avg_time = total_time / num_seeds as u32;
+            let avg_nodes = if solved > 0 { total_nodes / solved } else { 0 };
+            (lvl, spec.shifts, spec.rows, spec.columns, spec.shapes, solved, rate, avg_nodes, avg_time)
+        })
+        .collect();
 
-        for puz in &puzzles {
-            let game = puz.to_game();
-
-            let r_all = solver::solve_with_config(&game, &solver::PruningConfig::default());
-            let r_no = solver::solve_with_config(&game, &config_no_lines);
-
-            let n_all = r_all.nodes_visited;
-            let n_no = r_no.nodes_visited;
-            let ratio = if n_all > 0 { n_no as f64 / n_all as f64 } else { 1.0 };
-
-            println!("{:<8} {:<6} {:<14} {:<14} {:<10.2}x",
-                puz.level, puz.pieces.len(), n_all, n_no, ratio);
-        }
-    } else {
-        println!("{:<8} {:<6} {:<12} {:<12} {:<8}",
-            "Level", "Pcs", "Nodes", "Time", "Result");
-        println!("{}", "-".repeat(50));
-
-        for puz in &puzzles {
-            let game = puz.to_game();
-            let start = Instant::now();
-            let result = solver::solve(&game);
-            let elapsed = start.elapsed();
-            let status = if result.solution.is_some() { "OK" } else { "FAIL" };
-            println!("{:<8} {:<6} {:<12} {:<12.3?} {:<8}",
-                puz.level, puz.pieces.len(), result.nodes_visited, elapsed, status);
-        }
+    for &(lvl, shifts, rows, cols, shapes, solved, rate, avg_nodes, avg_time) in &results {
+        println!(
+            "{:<6} {:<4} {:<5} {:<5} {:<6} {:<8} {:<10.1}% {:<12} {:<10.3?}",
+            lvl, shifts, rows, cols, shapes,
+            format!("{}/{}", solved, num_seeds),
+            rate, avg_nodes, avg_time
+        );
     }
 }
