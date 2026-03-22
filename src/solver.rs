@@ -166,9 +166,115 @@ fn check_components(
     true
 }
 
-/// Solve with all pruning enabled.
+/// Solve with all pruning enabled. Tries cancellation reduction first.
 pub fn solve(game: &Game) -> SolveResult {
-    solve_with_config(game, &PruningConfig::default())
+    solve_with_cancellation(game, &PruningConfig::default())
+}
+
+/// Try solving a reduced puzzle by removing cancellable groups of M identical pieces.
+/// For M=2: pairs cancel. For M=3: triples cancel. Etc.
+/// If the reduced puzzle is solvable, reconstruct the full solution.
+/// Otherwise, fall back to solving the full puzzle.
+fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
+    let m = game.board().m() as usize;
+    let pieces = game.pieces();
+
+    // Count pieces per shape, preserving original indices.
+    let mut shape_groups: Vec<(crate::piece::Piece, Vec<usize>)> = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
+            group.1.push(i);
+        } else {
+            shape_groups.push((*piece, vec![i]));
+        }
+    }
+
+    // Check if any group has M+ pieces (cancellable).
+    let has_cancellable = shape_groups.iter().any(|(_, indices)| indices.len() >= m);
+    if !has_cancellable {
+        return solve_with_config(game, config);
+    }
+
+    // Build reduced piece list: keep K % M pieces per group.
+    let mut kept_indices: Vec<usize> = Vec::new();
+    let mut cancelled_groups: Vec<(crate::piece::Piece, Vec<usize>)> = Vec::new();
+
+    for (shape, indices) in &shape_groups {
+        let keep = indices.len() % m;
+        let cancel = indices.len() - keep;
+        for &idx in &indices[..keep] {
+            kept_indices.push(idx);
+        }
+        if cancel > 0 {
+            cancelled_groups.push((*shape, indices[keep..].to_vec()));
+        }
+    }
+
+    if cancelled_groups.is_empty() {
+        return solve_with_config(game, config);
+    }
+
+    // Build reduced game.
+    let reduced_pieces: Vec<crate::piece::Piece> = kept_indices.iter().map(|&i| pieces[i]).collect();
+
+    if reduced_pieces.is_empty() {
+        // All pieces cancel — check if board is already solved.
+        if game.board().is_solved() {
+            let mut solution = vec![(0usize, 0usize); pieces.len()];
+            let h = game.board().height();
+            let w = game.board().width();
+            for (shape, indices) in &cancelled_groups {
+                let placements = shape.placements(h, w);
+                if let Some(&(r, c, _)) = placements.first() {
+                    for &idx in indices {
+                        solution[idx] = (r, c);
+                    }
+                }
+            }
+            return SolveResult {
+                solution: Some(solution),
+                nodes_visited: 1,
+            };
+        }
+        // Board not solved and no pieces left in reduced — fall back to full solve.
+        return solve_with_config(game, config);
+    }
+
+    let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+    let mut reduced_result = solve_with_config(&reduced_game, config);
+
+    if let Some(ref reduced_sol) = reduced_result.solution {
+        // Reconstruct full solution.
+        let mut full_solution = vec![(0usize, 0usize); pieces.len()];
+
+        // Map reduced solution back to original indices.
+        for (reduced_idx, &(row, col)) in reduced_sol.iter().enumerate() {
+            let orig_idx = kept_indices[reduced_idx];
+            full_solution[orig_idx] = (row, col);
+        }
+
+        // Assign cancelled pieces: groups of M at the same valid position.
+        let h = game.board().height();
+        let w = game.board().width();
+        for (shape, indices) in &cancelled_groups {
+            let placements = shape.placements(h, w);
+            if let Some(&(r, c, _)) = placements.first() {
+                for &idx in indices {
+                    full_solution[idx] = (r, c);
+                }
+            }
+        }
+
+        return SolveResult {
+            solution: Some(full_solution),
+            nodes_visited: reduced_result.nodes_visited,
+        };
+    }
+
+    // Reduced puzzle failed — solve the full puzzle.
+    let mut full_result = solve_with_config(game, config);
+    full_result.nodes_visited += reduced_result.nodes_visited;
+    full_result
 }
 
 /// Backtracking solver with configurable pruning.
