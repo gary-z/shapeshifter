@@ -87,6 +87,39 @@ impl Piece {
         max
     }
 
+    /// Max filled cells on any single main diagonal (d = row - col) within the piece.
+    pub fn max_diag_thickness(&self) -> u32 {
+        let mut counts = [0u32; 9]; // d = pr - pc ranges from -(w-1) to h-1, offset by 4
+        for r in 0..self.height as usize {
+            for c in 0..self.width as usize {
+                if self.shape.get_bit((r * 15 + c) as u32) {
+                    let d = (r as i32 - c as i32 + 4) as usize;
+                    counts[d] += 1;
+                }
+            }
+        }
+        *counts.iter().max().unwrap()
+    }
+
+    /// Max filled cells on any single anti-diagonal (d = row + col) within the piece.
+    pub fn max_antidiag_thickness(&self) -> u32 {
+        let mut counts = [0u32; 9]; // d = pr + pc ranges from 0 to h+w-2
+        for r in 0..self.height as usize {
+            for c in 0..self.width as usize {
+                if self.shape.get_bit((r * 15 + c) as u32) {
+                    counts[r + c] += 1;
+                }
+            }
+        }
+        *counts.iter().max().unwrap()
+    }
+
+    /// The diagonal span of this piece: how many consecutive diagonals it covers.
+    /// Equal to height + width - 1.
+    pub fn diag_span(&self) -> u8 {
+        self.height + self.width - 1
+    }
+
     /// Perimeter of the piece: count of edges between filled and unfilled cells
     /// (within the bounding box grid, using cardinal adjacency).
     /// This is a fixed property of the shape, independent of placement.

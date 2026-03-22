@@ -18,7 +18,9 @@ pub struct SolveResult {
 #[derive(Clone)]
 pub struct PruningConfig {
     pub active_planes: bool,
-    pub min_flips: bool,
+    pub min_flips_global: bool,
+    pub min_flips_rowcol: bool,
+    pub min_flips_diagonal: bool,
     pub coverage: bool,
     pub jaggedness: bool,
     pub cell_locking: bool,
@@ -31,7 +33,9 @@ impl Default for PruningConfig {
     fn default() -> Self {
         Self {
             active_planes: true,
-            min_flips: true,
+            min_flips_global: true,
+            min_flips_rowcol: true,
+            min_flips_diagonal: true,
             coverage: true,
             jaggedness: true,
             cell_locking: true,
@@ -47,7 +51,9 @@ impl PruningConfig {
     pub fn none() -> Self {
         Self {
             active_planes: false,
-            min_flips: false,
+            min_flips_global: false,
+            min_flips_rowcol: false,
+            min_flips_diagonal: false,
             coverage: false,
             jaggedness: false,
             cell_locking: false,
@@ -332,6 +338,16 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         suffix_max_width[i] = suffix_max_width[i + 1].max(pieces[order[i]].width());
     }
 
+    // Precompute diagonal suffix sums.
+    let mut remaining_max_diag_thick = vec![0u32; n + 1];
+    let mut remaining_max_antidiag_thick = vec![0u32; n + 1];
+    let mut suffix_max_diag_span = vec![0u8; n + 1];
+    for i in (0..n).rev() {
+        remaining_max_diag_thick[i] = remaining_max_diag_thick[i + 1] + pieces[order[i]].max_diag_thickness();
+        remaining_max_antidiag_thick[i] = remaining_max_antidiag_thick[i + 1] + pieces[order[i]].max_antidiag_thickness();
+        suffix_max_diag_span[i] = suffix_max_diag_span[i + 1].max(pieces[order[i]].diag_span());
+    }
+
     // Precompute per-row and per-col suffix budgets.
     // For each board row r and piece i, the max cells piece i can deliver to row r
     // depends on which piece-rows can align with board-row r.
@@ -416,6 +432,19 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
+    // Precompute diagonal masks.
+    // Main diagonals: d = r - c, indexed as d + (W-1) to make non-negative.
+    let num_diags = bh + bw - 1;
+    let mut diag_masks = vec![Bitboard::ZERO; num_diags];
+    let mut adiag_masks = vec![Bitboard::ZERO; num_diags];
+    for r in 0..bh {
+        for c in 0..bw {
+            let bit = (r * 15 + c) as u32;
+            diag_masks[(r as i32 - c as i32 + bw as i32 - 1) as usize].set_bit(bit);
+            adiag_masks[r + c].set_bit(bit);
+        }
+    }
+
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
     let found = backtrack(
@@ -430,9 +459,14 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &remaining_max_col_thick,
         &suffix_max_height,
         &suffix_max_width,
+        &remaining_max_diag_thick,
+        &remaining_max_antidiag_thick,
+        &suffix_max_diag_span,
         &row_budget,
         &col_budget,
         &col_masks,
+        &diag_masks,
+        &adiag_masks,
         &suffix_coverage,
         &is_dup_of_prev,
         m,
@@ -514,9 +548,14 @@ fn backtrack(
     remaining_max_col_thick: &[u32],
     suffix_max_height: &[u8],
     suffix_max_width: &[u8],
+    remaining_max_diag_thick: &[u32],
+    remaining_max_antidiag_thick: &[u32],
+    suffix_max_diag_span: &[u8],
     row_budget: &[Vec<u32>],
     col_budget: &[Vec<u32>],
     col_masks: &[Bitboard],
+    diag_masks: &[Bitboard],
+    adiag_masks: &[Bitboard],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
     m: u8,
@@ -550,16 +589,12 @@ fn backtrack(
 
     // Prune: if remaining piece bits can't cover the minimum flips needed.
     let min_flips = board.min_flips_needed();
-    if config.min_flips && remaining_bits[piece_idx] < min_flips {
+    if config.min_flips_global && remaining_bits[piece_idx] < min_flips {
         return false;
     }
 
-    // Prune: per-row/col min_flips budget.
-    // Each row/col's needed flips must be achievable by the remaining pieces'
-    // max contribution to that specific row/col (accounting for piece shape and position).
-    // Additionally, use DP to find the max-weight independent set of rows/cols
-    // spaced ≥ 5 apart (no piece can serve two), and check against global thickness budget.
-    if config.min_flips {
+    // Prune: per-row/col min_flips budget with DP independent set.
+    if config.min_flips_rowcol {
         let row_mask_base = (1u64 << w) - 1;
         let mut row_weights = [0u32; 14];
         for r in 0..h as usize {
@@ -585,7 +620,6 @@ fn backtrack(
         }
 
         // DP: max weight independent set of rows with spacing >= max_piece_height.
-        // Tighter spacing when remaining pieces are short.
         {
             let gap = suffix_max_height[piece_idx] as usize;
             if gap > 0 {
@@ -612,6 +646,55 @@ fn backtrack(
                     dp[c] = take.max(skip);
                 }
                 if remaining_max_col_thick[piece_idx] < dp[w as usize - 1] {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Prune: per-diagonal min_flips budget with DP independent set.
+    if config.min_flips_diagonal {
+        // DP: max weight independent set of main diagonals (d = r - c).
+        {
+            let gap = suffix_max_diag_span[piece_idx] as usize;
+            let num_diags = diag_masks.len();
+            if gap > 0 && num_diags > 0 {
+                let mut diag_weights = [0u32; 27];
+                for i in 0..num_diags {
+                    for d in 1..m {
+                        diag_weights[i] += (m - d) as u32 * (board.plane(d) & diag_masks[i]).count_ones();
+                    }
+                }
+                let mut dp = [0u32; 27];
+                for i in 0..num_diags {
+                    let take = diag_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
+                    let skip = if i > 0 { dp[i - 1] } else { 0 };
+                    dp[i] = take.max(skip);
+                }
+                if remaining_max_diag_thick[piece_idx] < dp[num_diags - 1] {
+                    return false;
+                }
+            }
+        }
+
+        // DP: max weight independent set of anti-diagonals (d = r + c).
+        {
+            let gap = suffix_max_diag_span[piece_idx] as usize;
+            let num_adiags = adiag_masks.len();
+            if gap > 0 && num_adiags > 0 {
+                let mut adiag_weights = [0u32; 27];
+                for i in 0..num_adiags {
+                    for d in 1..m {
+                        adiag_weights[i] += (m - d) as u32 * (board.plane(d) & adiag_masks[i]).count_ones();
+                    }
+                }
+                let mut dp = [0u32; 27];
+                for i in 0..num_adiags {
+                    let take = adiag_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
+                    let skip = if i > 0 { dp[i - 1] } else { 0 };
+                    dp[i] = take.max(skip);
+                }
+                if remaining_max_antidiag_thick[piece_idx] < dp[num_adiags - 1] {
                     return false;
                 }
             }
@@ -682,9 +765,14 @@ fn backtrack(
             remaining_max_col_thick,
             suffix_max_height,
             suffix_max_width,
+            remaining_max_diag_thick,
+            remaining_max_antidiag_thick,
+            suffix_max_diag_span,
             row_budget,
             col_budget,
             col_masks,
+            diag_masks,
+            adiag_masks,
             suffix_coverage,
             is_dup_of_prev,
             m,
@@ -1024,18 +1112,92 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_min_flips() {
+    fn test_prune_min_flips_global() {
         let configs = small_configs();
         let seeds = test_seeds();
         let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.min_flips = true);
+        let with_prune = PruningConfig::none().only(|c| c.min_flips_global = true);
 
         let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
         let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
 
-        assert_eq!(fail_with, 0, "min_flips prune caused failures");
+        assert_eq!(fail_with, 0, "min_flips_global prune caused failures");
         assert!(nodes_with <= nodes_without,
-            "min_flips should reduce nodes: {} vs {}", nodes_with, nodes_without);
+            "min_flips_global should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_min_flips_rowcol() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        // Enable global so the rowcol check has something to build on.
+        let baseline = PruningConfig::none().only(|c| c.min_flips_global = true);
+        let with_prune = PruningConfig::none().only(|c| {
+            c.min_flips_global = true;
+            c.min_flips_rowcol = true;
+        });
+
+        let (nodes_baseline, _) = fuzz_with_config(&baseline, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "min_flips_rowcol prune caused failures");
+        assert!(nodes_with <= nodes_baseline,
+            "min_flips_rowcol should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
+    }
+
+    #[test]
+    fn test_prune_min_flips_diagonal() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let baseline = PruningConfig::none().only(|c| c.min_flips_global = true);
+        let with_prune = PruningConfig::none().only(|c| {
+            c.min_flips_global = true;
+            c.min_flips_diagonal = true;
+        });
+
+        let (nodes_baseline, _) = fuzz_with_config(&baseline, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "min_flips_diagonal prune caused failures");
+        assert!(nodes_with <= nodes_baseline,
+            "min_flips_diagonal should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
+    }
+
+    #[test]
+    fn test_prune_min_flips_rowcol_soundness_stress() {
+        // Larger configs to stress test row/col pruning soundness.
+        let configs = vec![
+            (2, 4, 4, 10), (2, 4, 4, 14),
+            (3, 4, 4, 8), (3, 4, 4, 12),
+            (2, 6, 6, 8), (2, 6, 6, 12),
+            (3, 6, 6, 8), (4, 6, 6, 8),
+            (2, 8, 7, 8), (3, 8, 7, 8),
+        ];
+        let seeds: Vec<u64> = (0..50).collect();
+        let config = PruningConfig::none().only(|c| {
+            c.min_flips_global = true;
+            c.min_flips_rowcol = true;
+        });
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "min_flips_rowcol stress test had {} failures", failures);
+    }
+
+    #[test]
+    fn test_prune_min_flips_diagonal_soundness_stress() {
+        let configs = vec![
+            (2, 4, 4, 10), (2, 4, 4, 14),
+            (3, 4, 4, 8), (3, 4, 4, 12),
+            (2, 6, 6, 8), (2, 6, 6, 12),
+            (3, 6, 6, 8), (4, 6, 6, 8),
+            (2, 8, 7, 8), (3, 8, 7, 8),
+        ];
+        let seeds: Vec<u64> = (0..50).collect();
+        let config = PruningConfig::none().only(|c| {
+            c.min_flips_global = true;
+            c.min_flips_diagonal = true;
+        });
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "min_flips_diagonal stress test had {} failures", failures);
     }
 
     #[test]
