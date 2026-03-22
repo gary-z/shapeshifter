@@ -1585,32 +1585,37 @@ fn backtrack(
 
     // Prune: per-component checks (jaggedness, min_flips).
     // Run when branching factor justifies flood-fill cost.
-    if config.component_checks && branching >= 8 {
-        if !check_components(
-            board, locked_mask, data, piece_idx,
-        ) {
+    // Component checks (flood-fill + per-component jaggedness/min_flips) disabled:
+    // profiling shows 12% of instructions but <0.1% node reduction on real puzzles.
+    // The per-component bounds are too loose with large pieces on medium boards.
+    // Keeping the code for potential future use on larger boards.
+    if false && config.component_checks {
+        if !check_components(board, locked_mask, data, piece_idx) {
             return false;
         }
     }
 
     let placements = &data.all_placements[piece_idx];
 
-    // Sort placements by min_flips delta — prefer placements that reduce the
-    // distance to solution the most.
-    // Delta = M * zeros_hit - piece_area (exact, derived from incremental min_flips).
-    // Since piece_area is constant for the same piece, we sort by zeros_hit.
-    // For M>2, we refine: also reward hitting cells at M-1 (they wrap to 0,
-    // each saving M-1 min_flips vs only 1 for other non-zero cells).
-    // Combined key: M * zeros_hit - (M-2) * tops_hit. Lower is better.
+    // Order placements by zeros hit ascending using counting sort.
+    // Keys are small (0..=max_piece_area), so O(n) bucket sort beats O(n²) insertion sort.
     let zero_plane = board.plane(0);
-    let mut order = [0u8; 196];
     let pl_len = placements.len();
+    let mut order = [0u8; 196];
+    let mut keys = [0u8; 196];
     for i in 0..pl_len {
-        order[i] = i as u8;
+        keys[i] = (placements[i].2 & zero_plane).count_ones() as u8;
     }
-    order[..pl_len].sort_unstable_by_key(|&i| {
-        (placements[i as usize].2 & zero_plane).count_ones()
-    });
+    // Counting sort: count occurrences, then build order from buckets.
+    let mut counts = [0u8; 26]; // max piece area is 25 (5x5)
+    for i in 0..pl_len { counts[keys[i] as usize] += 1; }
+    let mut offsets = [0u8; 26];
+    for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
+    for i in 0..pl_len {
+        let k = keys[i] as usize;
+        order[offsets[k] as usize] = i as u8;
+        offsets[k] += 1;
+    }
 
     let mut board = board.clone();
     for oi in 0..pl_len {
