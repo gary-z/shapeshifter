@@ -79,6 +79,21 @@ fn check_line_family(
     true
 }
 
+/// A parity-based board partition for pruning.
+/// The board is split into "group 0" and "group 1" cells based on some parity function.
+/// Each piece contributes a known count to group 0 depending on placement parity.
+/// The suffix DP tracks achievable group-0 totals.
+struct ParityPartition {
+    /// Mask of group-0 cells on the board.
+    mask: Bitboard,
+    /// suffix_max[i] = max achievable group-0 increments from pieces [i..n].
+    suffix_max: Vec<u32>,
+    /// suffix_min[i] = min achievable group-0 increments from pieces [i..n].
+    suffix_min: Vec<u32>,
+    /// suffix_dp[i] = achievable group-0 totals from pieces [i..n].
+    suffix_dp: Vec<Vec<bool>>,
+}
+
 /// All precomputed data needed by the backtracking solver.
 /// Bundled into a single struct to keep the backtrack signature small.
 #[allow(dead_code)]
@@ -105,14 +120,8 @@ struct SolverData {
     m: u8,
     h: u8,
     w: u8,
-    // White/black parity check.
-    // suffix_max_white[i] = max achievable white increments from pieces [i..n]
-    // suffix_min_white[i] = min achievable white increments from pieces [i..n]
-    suffix_max_white: Vec<u32>,
-    suffix_min_white: Vec<u32>,
-    // Full DP: suffix_white_dp[i] = bitset of achievable white totals from pieces [i..n]
-    // Indexed by white total value. Max possible ~200.
-    suffix_white_dp: Vec<Vec<bool>>,
+    // Parity partition checks: checkerboard, even-rows, even-cols.
+    parity_partitions: [ParityPartition; 3],
 }
 
 /// A solution is a list of (row, col) placements, one per piece in original order.
@@ -743,38 +752,71 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let jagg_h_total = jagg_h_mask.count_ones();
     let jagg_v_total = jagg_v_mask.count_ones();
 
-    // Precompute white/black parity check data.
-    // For each piece: w_even = white cells covered at even parity, w_odd = area - w_even.
-    let mut suffix_max_white = vec![0u32; n + 1];
-    let mut suffix_min_white = vec![0u32; n + 1];
-    let mut w_even_list = Vec::with_capacity(n);
-    let mut w_odd_list = Vec::with_capacity(n);
-    for i in 0..n {
-        let we = pieces[order[i]].white_count_even();
-        let wo = pieces[order[i]].cell_count() - we;
-        w_even_list.push(we);
-        w_odd_list.push(wo);
-    }
-    for i in (0..n).rev() {
-        suffix_max_white[i] = suffix_max_white[i + 1] + w_even_list[i].max(w_odd_list[i]);
-        suffix_min_white[i] = suffix_min_white[i + 1] + w_even_list[i].min(w_odd_list[i]);
-    }
-
-    // Full DP: achievable white totals from pieces [i..n].
-    let max_total_white = suffix_max_white[0] as usize;
-    let dp_size = max_total_white + 1;
-    let mut suffix_white_dp = vec![vec![false; dp_size]; n + 1];
-    suffix_white_dp[n][0] = true; // base: 0 pieces contribute 0 white
-    for i in (0..n).rev() {
-        let we = w_even_list[i] as usize;
-        let wo = w_odd_list[i] as usize;
-        for w in 0..dp_size {
-            if suffix_white_dp[i + 1][w] {
-                if w + we < dp_size { suffix_white_dp[i][w + we] = true; }
-                if w + wo < dp_size { suffix_white_dp[i][w + wo] = true; }
+    // Precompute parity partition checks.
+    // Three partitions: checkerboard (r+c)%2, even-rows r%2, even-cols c%2.
+    // For each: build mask, compute per-piece group-0 counts at each parity,
+    // then build suffix DP of achievable group-0 totals.
+    let build_partition = |parity_fn: &dyn Fn(usize, usize) -> bool| -> ParityPartition {
+        // Build board mask for group-0 cells.
+        let mut mask = Bitboard::ZERO;
+        for r in 0..bh {
+            for c in 0..bw {
+                if parity_fn(r, c) {
+                    mask.set_bit((r * 15 + c) as u32);
+                }
             }
         }
-    }
+
+        // Per piece: count of group-0 cells at each placement parity.
+        // "parity 0" = the placement where the piece's (0,0) cell lands on a group-0 cell.
+        // "parity 1" = the opposite.
+        let mut g0_at_p0 = Vec::with_capacity(n); // group-0 count when parity matches
+        let mut g0_at_p1 = Vec::with_capacity(n); // group-0 count when parity flipped
+        for i in 0..n {
+            let piece = &pieces[order[i]];
+            let mut count_matching = 0u32;
+            for pr in 0..piece.height() as usize {
+                for pc in 0..piece.width() as usize {
+                    if piece.shape().get_bit((pr * 15 + pc) as u32) && parity_fn(pr, pc) {
+                        count_matching += 1;
+                    }
+                }
+            }
+            g0_at_p0.push(count_matching);
+            g0_at_p1.push(piece.cell_count() - count_matching);
+        }
+
+        // Suffix min/max.
+        let mut suffix_max = vec![0u32; n + 1];
+        let mut suffix_min = vec![0u32; n + 1];
+        for i in (0..n).rev() {
+            suffix_max[i] = suffix_max[i + 1] + g0_at_p0[i].max(g0_at_p1[i]);
+            suffix_min[i] = suffix_min[i + 1] + g0_at_p0[i].min(g0_at_p1[i]);
+        }
+
+        // Full DP.
+        let dp_size = suffix_max[0] as usize + 1;
+        let mut suffix_dp = vec![vec![false; dp_size]; n + 1];
+        suffix_dp[n][0] = true;
+        for i in (0..n).rev() {
+            let a = g0_at_p0[i] as usize;
+            let b = g0_at_p1[i] as usize;
+            for w in 0..dp_size {
+                if suffix_dp[i + 1][w] {
+                    if w + a < dp_size { suffix_dp[i][w + a] = true; }
+                    if w + b < dp_size { suffix_dp[i][w + b] = true; }
+                }
+            }
+        }
+
+        ParityPartition { mask, suffix_max, suffix_min, suffix_dp }
+    };
+
+    let parity_partitions = [
+        build_partition(&|r, c| (r + c) % 2 == 0),  // checkerboard
+        build_partition(&|r, _c| r % 2 == 0),         // even rows
+        build_partition(&|_r, c| c % 2 == 0),         // even columns
+    ];
 
     let data = SolverData {
         all_placements,
@@ -799,9 +841,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         m,
         h,
         w,
-        suffix_max_white,
-        suffix_min_white,
-        suffix_white_dp,
+        parity_partitions,
     };
 
     let nodes = Cell::new(0u64);
@@ -874,48 +914,43 @@ fn solve_single_cells(
 }
 
 #[inline(always)]
-fn prune_white_black_parity(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    // Compute white_min_flips: sum of (M-d) for nonzero cells on white squares.
-    let mut white_min_flips = 0u32;
-    let h = data.h as usize;
-    let w = data.w as usize;
-    for r in 0..h {
-        for c in 0..w {
-            if (r + c) % 2 == 0 {
-                let bit = (r * 15 + c) as u32;
-                for d in 1..data.m {
-                    if board.plane(d).get_bit(bit) {
-                        white_min_flips += (data.m - d) as u32;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Simple bounds check.
-    if data.suffix_max_white[piece_idx] < white_min_flips {
-        return false;
-    }
-    // Check black side: max_black = remaining_bits - min_white.
-    let black_min_flips = board.min_flips_needed() - white_min_flips;
-    let max_black = data.remaining_bits[piece_idx] - data.suffix_min_white[piece_idx];
-    if max_black < black_min_flips {
-        return false;
-    }
-
-    // Full DP check: is white_min_flips achievable (accounting for wraps)?
-    // Need: exists k >= 0 such that (white_min_flips + k*M) is in the DP set.
+fn prune_parity_partitions(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     let m = data.m as u32;
-    let dp = &data.suffix_white_dp[piece_idx];
-    let mut target = white_min_flips;
-    while (target as usize) < dp.len() {
-        if dp[target as usize] {
-            return true;
+    let total_min_flips = board.min_flips_needed();
+
+    for partition in &data.parity_partitions {
+        // Compute group-0 min_flips using the precomputed mask.
+        let mut g0_min_flips = 0u32;
+        for d in 1..data.m {
+            g0_min_flips += (data.m - d) as u32 * (board.plane(d) & partition.mask).count_ones();
         }
-        target += m;
+
+        // Simple bounds check.
+        if partition.suffix_max[piece_idx] < g0_min_flips {
+            return false;
+        }
+        let g1_min_flips = total_min_flips - g0_min_flips;
+        let max_g1 = data.remaining_bits[piece_idx] - partition.suffix_min[piece_idx];
+        if max_g1 < g1_min_flips {
+            return false;
+        }
+
+        // Full DP check: is g0_min_flips achievable (accounting for wraps)?
+        let dp = &partition.suffix_dp[piece_idx];
+        let mut target = g0_min_flips;
+        let mut found = false;
+        while (target as usize) < dp.len() {
+            if dp[target as usize] {
+                found = true;
+                break;
+            }
+            target += m;
+        }
+        if !found {
+            return false;
+        }
     }
-    false
+    true
 }
 
 #[inline(always)]
@@ -1019,7 +1054,7 @@ fn backtrack(
     if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
     if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
-    if config.min_flips_global && !prune_white_black_parity(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {
@@ -1620,6 +1655,54 @@ mod tests {
         let seeds = test_seeds();
         let (_, fail_all) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(fail_all, 0, "all prunes combined caused failures");
+    }
+
+    #[test]
+    fn test_parity_partition_soundness() {
+        // Parity partitions (checkerboard, even-rows, even-cols) must never
+        // cause false prunes.
+        let configs = vec![
+            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
+            (3, 3, 3, 5), (3, 3, 3, 7),
+            (2, 4, 3, 5), (2, 4, 3, 8),
+            (2, 4, 4, 6), (2, 4, 4, 10),
+            (3, 4, 4, 8), (3, 4, 4, 12),
+            (4, 4, 4, 6), (4, 4, 4, 10),
+        ];
+        let seeds = test_seeds();
+        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
+        assert_eq!(failures, 0, "parity partition caused {} failures", failures);
+    }
+
+    #[test]
+    fn test_parity_partition_soundness_stress() {
+        // Stress test on larger boards.
+        let configs = vec![
+            (2, 6, 6, 8), (2, 6, 6, 12),
+            (3, 6, 6, 8), (4, 6, 6, 8),
+            (2, 8, 7, 8), (3, 8, 7, 8),
+            (4, 8, 8, 8), (5, 6, 6, 6),
+        ];
+        let seeds: Vec<u64> = (0..50).collect();
+        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
+        assert_eq!(failures, 0, "parity partition stress test had {} failures", failures);
+    }
+
+    #[test]
+    fn test_parity_partition_effectiveness() {
+        // Verify parity partitions reduce nodes compared to without them.
+        let configs = small_configs();
+        let seeds = test_seeds();
+        // With parity (default config includes min_flips_global which gates the check).
+        let (nodes_with, _) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
+        // Without parity: disable min_flips_global (which gates the parity check).
+        let mut no_parity = PruningConfig::default();
+        no_parity.min_flips_global = false;
+        let (nodes_without, _) = fuzz_with_config(&no_parity, &configs, &seeds);
+        // min_flips_global also includes the global budget check, so disabling it
+        // weakens pruning significantly. The parity check is just part of it.
+        assert!(nodes_with <= nodes_without,
+            "parity partitions should reduce nodes: {} vs {}", nodes_with, nodes_without);
     }
 
     #[test]
