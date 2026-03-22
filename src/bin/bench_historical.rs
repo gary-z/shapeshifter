@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use shapeshifter::puzzle::PuzzleJson;
 use shapeshifter::solver;
 
-const TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(120);
 
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
@@ -23,31 +23,46 @@ fn main() {
     );
     println!("{}", "-".repeat(54));
 
-    // Solve all puzzles in parallel using one thread per puzzle.
-    let mut handles: Vec<(u32, usize, _)> = Vec::new();
-    for puz in &puzzles {
-        let game = puz.to_game();
-        let level = puz.level;
-        let n_pieces = puz.pieces.len();
-        let (tx, rx) = mpsc::channel();
+    let n = puzzles.len();
+    let levels: Vec<u32> = puzzles.iter().map(|p| p.level).collect();
+    let piece_counts: Vec<usize> = puzzles.iter().map(|p| p.pieces.len()).collect();
 
+    let (tx, rx) = mpsc::channel();
+    for (idx, puz) in puzzles.iter().enumerate() {
+        let game = puz.to_game();
+        let tx = tx.clone();
         std::thread::spawn(move || {
             let start = Instant::now();
             let result = solver::solve(&game);
             let elapsed = start.elapsed();
-            let _ = tx.send((result, elapsed));
+            let _ = tx.send((idx, result, elapsed));
         });
+    }
+    drop(tx);
 
-        handles.push((level, n_pieces, rx));
+    // Collect results concurrently with a global deadline.
+    let mut results: Vec<Option<(solver::SolveResult, Duration)>> =
+        (0..n).map(|_| None).collect();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let remaining_time = deadline.saturating_duration_since(Instant::now());
+        if remaining_time.is_zero() { break; }
+        match rx.recv_timeout(remaining_time) {
+            Ok((idx, result, elapsed)) => {
+                results[idx] = Some((result, elapsed));
+                if results.iter().all(|r| r.is_some()) { break; }
+            }
+            Err(_) => break,
+        }
     }
 
     let mut ok = 0;
     let mut fail = 0;
     let mut timeout = 0;
 
-    for (level, n_pieces, rx) in handles {
-        match rx.recv_timeout(TIMEOUT) {
-            Ok((result, elapsed)) => {
+    for (i, r) in results.iter().enumerate() {
+        match r {
+            Some((result, elapsed)) => {
                 let status = if result.solution.is_some() {
                     ok += 1;
                     "OK"
@@ -57,14 +72,15 @@ fn main() {
                 };
                 println!(
                     "{:<8} {:<6} {:>12} {:>12.3?} {:<8}",
-                    level, n_pieces, result.nodes_visited, elapsed, status
+                    levels[i], piece_counts[i], result.nodes_visited, elapsed, status
                 );
             }
-            Err(_) => {
+            None => {
                 timeout += 1;
                 println!(
                     "{:<8} {:<6} {:>12} {:>12} {:<8}",
-                    level, n_pieces, "-", ">60s", "TIMEOUT"
+                    levels[i], piece_counts[i], "-",
+                    format!(">{}s", TIMEOUT.as_secs()), "TIMEOUT"
                 );
             }
         }
