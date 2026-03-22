@@ -5,6 +5,80 @@ use crate::board::Board;
 use crate::coverage::{has_sufficient_coverage, precompute_suffix_coverage, CoverageCounter};
 use crate::game::Game;
 
+/// Max number of lines in any family (diagonals on 14x14: 27).
+const MAX_LINES: usize = 27;
+/// Max number of pieces (n+1 for suffix arrays).
+const MAX_PIECES: usize = 37;
+
+/// A family of parallel lines for the min_flips DP pruning.
+struct LineFamily {
+    masks: [Bitboard; MAX_LINES],
+    num_lines: usize,
+    /// remaining_budget[i] = suffix sum of max_thickness for pieces [i..n]
+    remaining_budget: [u32; MAX_PIECES],
+    /// suffix_max_span[i] = max span among pieces [i..n]
+    suffix_max_span: [u8; MAX_PIECES],
+    /// Whether per_line_budget is available (only for rows and columns).
+    has_per_line_budget: bool,
+    /// per_line_budget[i][line] = position-aware suffix budget.
+    per_line_budget: [[u32; MAX_LINES]; MAX_PIECES],
+}
+
+impl LineFamily {
+    fn new() -> Self {
+        Self {
+            masks: [Bitboard::ZERO; MAX_LINES],
+            num_lines: 0,
+            remaining_budget: [0; MAX_PIECES],
+            suffix_max_span: [0; MAX_PIECES],
+            has_per_line_budget: false,
+            per_line_budget: [[0; MAX_LINES]; MAX_PIECES],
+        }
+    }
+}
+
+/// Check a line family. Returns false if any prune fires.
+#[inline(always)]
+fn check_line_family(
+    board: &Board,
+    family: &LineFamily,
+    piece_idx: usize,
+    m: u8,
+) -> bool {
+    let gap = family.suffix_max_span[piece_idx] as usize;
+    let n = family.num_lines;
+    if n == 0 {
+        return true;
+    }
+
+    // Compute weights.
+    let mut weights = [0u32; MAX_LINES];
+    for i in 0..n {
+        for d in 1..m {
+            weights[i] += (m - d) as u32 * (board.plane(d) & family.masks[i]).count_ones();
+        }
+        // Per-line position-aware check.
+        if family.has_per_line_budget && family.per_line_budget[piece_idx][i] < weights[i] {
+            return false;
+        }
+    }
+
+    // DP: max weight independent set with spacing >= gap.
+    if gap > 0 {
+        let mut dp = [0u32; MAX_LINES];
+        for i in 0..n {
+            let take = weights[i] + if i >= gap { dp[i - gap] } else { 0 };
+            let skip = if i > 0 { dp[i - 1] } else { 0 };
+            dp[i] = take.max(skip);
+        }
+        if family.remaining_budget[piece_idx] < dp[n - 1] {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
 
@@ -325,93 +399,13 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     // Precompute suffix sums/maxes of piece properties.
     let mut remaining_bits = vec![0u32; n + 1];
     let mut remaining_perimeter = vec![0u32; n + 1];
-    let mut remaining_max_row_thick = vec![0u32; n + 1];
-    let mut remaining_max_col_thick = vec![0u32; n + 1];
-    let mut suffix_max_height = vec![0u8; n + 1]; // max piece height among remaining
-    let mut suffix_max_width = vec![0u8; n + 1];  // max piece width among remaining
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
         remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
-        remaining_max_row_thick[i] = remaining_max_row_thick[i + 1] + pieces[order[i]].max_row_thickness();
-        remaining_max_col_thick[i] = remaining_max_col_thick[i + 1] + pieces[order[i]].max_col_thickness();
-        suffix_max_height[i] = suffix_max_height[i + 1].max(pieces[order[i]].height());
-        suffix_max_width[i] = suffix_max_width[i + 1].max(pieces[order[i]].width());
     }
 
-    // Precompute diagonal suffix sums.
-    let mut remaining_max_diag_thick = vec![0u32; n + 1];
-    let mut remaining_max_antidiag_thick = vec![0u32; n + 1];
-    let mut suffix_max_diag_span = vec![0u8; n + 1];
-    for i in (0..n).rev() {
-        remaining_max_diag_thick[i] = remaining_max_diag_thick[i + 1] + pieces[order[i]].max_diag_thickness();
-        remaining_max_antidiag_thick[i] = remaining_max_antidiag_thick[i + 1] + pieces[order[i]].max_antidiag_thickness();
-        suffix_max_diag_span[i] = suffix_max_diag_span[i + 1].max(pieces[order[i]].diag_span());
-    }
-
-    // Precompute zigzag suffix sums.
-    let mut remaining_max_zigzag_r_thick = vec![0u32; n + 1];
-    let mut remaining_max_zigzag_l_thick = vec![0u32; n + 1];
-    let mut suffix_max_zigzag_span = vec![0u8; n + 1];
-    for i in (0..n).rev() {
-        remaining_max_zigzag_r_thick[i] = remaining_max_zigzag_r_thick[i + 1] + pieces[order[i]].max_zigzag_r_thickness();
-        remaining_max_zigzag_l_thick[i] = remaining_max_zigzag_l_thick[i + 1] + pieces[order[i]].max_zigzag_l_thickness();
-        suffix_max_zigzag_span[i] = suffix_max_zigzag_span[i + 1].max(pieces[order[i]].zigzag_span());
-    }
-
-    // Precompute per-row and per-col suffix budgets.
-    // For each board row r and piece i, the max cells piece i can deliver to row r
-    // depends on which piece-rows can align with board-row r.
     let bh = h as usize;
     let bw = w as usize;
-    let mut row_budget = vec![vec![0u32; bh]; n + 1]; // row_budget[piece_idx][row]
-    let mut col_budget = vec![vec![0u32; bw]; n + 1]; // col_budget[piece_idx][col]
-    for i in (0..n).rev() {
-        let piece = &pieces[order[i]];
-        let ph = piece.height() as usize;
-        let pw = piece.width() as usize;
-
-        // Compute row thicknesses for this piece.
-        let mut row_thick = [0u32; 5];
-        for pr in 0..ph {
-            let row_bits = (piece.shape() >> (pr as u32 * 15)).limbs[0] & ((1u64 << pw) - 1);
-            row_thick[pr] = row_bits.count_ones();
-        }
-
-        // Compute col thicknesses for this piece.
-        let mut col_thick = [0u32; 5];
-        for pc in 0..pw {
-            for pr in 0..ph {
-                if piece.shape().get_bit((pr * 15 + pc) as u32) {
-                    col_thick[pc] += 1;
-                }
-            }
-        }
-
-        for r in 0..bh {
-            // Which piece-rows can land on board-row r?
-            let p_min = if r + ph > bh { r + ph - bh } else { 0 };
-            let p_max = r.min(ph - 1);
-            let mut max_t = 0u32;
-            for p in p_min..=p_max {
-                if row_thick[p] > max_t {
-                    max_t = row_thick[p];
-                }
-            }
-            row_budget[i][r] = row_budget[i + 1][r] + max_t;
-        }
-
-        for c in 0..bw {
-            let q_min = if c + pw > bw { c + pw - bw } else { 0 };
-            let q_max = c.min(pw - 1);
-            let mut max_t = 0u32;
-            for q in q_min..=q_max {
-                if col_thick[q] > max_t {
-                    max_t = col_thick[q];
-                }
-            }
-            col_budget[i][c] = col_budget[i + 1][c] + max_t;
-        }
-    }
 
     // Precompute per-piece reach: union of all placement masks.
     let reaches: Vec<Bitboard> = all_placements
@@ -434,44 +428,141 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let m = board.m();
 
-    // Precompute column masks for per-col budget checks.
-    let mut col_masks = vec![Bitboard::ZERO; bw];
-    for c in 0..bw {
+    // Build 6 line families: rows, cols, diags, antidiags, zigzag_r, zigzag_l.
+    assert!(n < MAX_PIECES, "too many pieces for LineFamily arrays");
+
+    // --- Rows ---
+    let mut rows_family = LineFamily::new();
+    rows_family.num_lines = bh;
+    rows_family.has_per_line_budget = true;
+    for r in 0..bh {
+        for c in 0..bw {
+            rows_family.masks[r].set_bit((r * 15 + c) as u32);
+        }
+    }
+    for i in (0..n).rev() {
+        let piece = &pieces[order[i]];
+        let ph = piece.height() as usize;
+        let pw = piece.width() as usize;
+        rows_family.remaining_budget[i] = rows_family.remaining_budget[i + 1] + piece.max_row_thickness();
+        rows_family.suffix_max_span[i] = rows_family.suffix_max_span[i + 1].max(piece.height());
+        // Per-row budget.
+        let mut row_thick = [0u32; 5];
+        for pr in 0..ph {
+            let row_bits = (piece.shape() >> (pr as u32 * 15)).limbs[0] & ((1u64 << pw) - 1);
+            row_thick[pr] = row_bits.count_ones();
+        }
         for r in 0..bh {
-            col_masks[c].set_bit((r * 15 + c) as u32);
+            let p_min = if r + ph > bh { r + ph - bh } else { 0 };
+            let p_max = r.min(ph - 1);
+            let mut max_t = 0u32;
+            for p in p_min..=p_max {
+                if row_thick[p] > max_t { max_t = row_thick[p]; }
+            }
+            rows_family.per_line_budget[i][r] = rows_family.per_line_budget[i + 1][r] + max_t;
         }
     }
 
-    // Precompute diagonal masks.
-    // Main diagonals: d = r - c, indexed as d + (W-1) to make non-negative.
+    // --- Cols ---
+    let mut cols_family = LineFamily::new();
+    cols_family.num_lines = bw;
+    cols_family.has_per_line_budget = true;
+    for c in 0..bw {
+        for r in 0..bh {
+            cols_family.masks[c].set_bit((r * 15 + c) as u32);
+        }
+    }
+    for i in (0..n).rev() {
+        let piece = &pieces[order[i]];
+        let ph = piece.height() as usize;
+        let pw = piece.width() as usize;
+        cols_family.remaining_budget[i] = cols_family.remaining_budget[i + 1] + piece.max_col_thickness();
+        cols_family.suffix_max_span[i] = cols_family.suffix_max_span[i + 1].max(piece.width());
+        // Per-col budget.
+        let mut col_thick = [0u32; 5];
+        for pc in 0..pw {
+            for pr in 0..ph {
+                if piece.shape().get_bit((pr * 15 + pc) as u32) {
+                    col_thick[pc] += 1;
+                }
+            }
+        }
+        for c in 0..bw {
+            let q_min = if c + pw > bw { c + pw - bw } else { 0 };
+            let q_max = c.min(pw - 1);
+            let mut max_t = 0u32;
+            for q in q_min..=q_max {
+                if col_thick[q] > max_t { max_t = col_thick[q]; }
+            }
+            cols_family.per_line_budget[i][c] = cols_family.per_line_budget[i + 1][c] + max_t;
+        }
+    }
+
+    // --- Diags (main diagonals: d = r - c) ---
     let num_diags = bh + bw - 1;
-    let mut diag_masks = vec![Bitboard::ZERO; num_diags];
-    let mut adiag_masks = vec![Bitboard::ZERO; num_diags];
+    let mut diags_family = LineFamily::new();
+    diags_family.num_lines = num_diags;
     for r in 0..bh {
         for c in 0..bw {
             let bit = (r * 15 + c) as u32;
-            diag_masks[(r as i32 - c as i32 + bw as i32 - 1) as usize].set_bit(bit);
-            adiag_masks[r + c].set_bit(bit);
+            diags_family.masks[(r as i32 - c as i32 + bw as i32 - 1) as usize].set_bit(bit);
         }
     }
+    for i in (0..n).rev() {
+        diags_family.remaining_budget[i] = diags_family.remaining_budget[i + 1] + pieces[order[i]].max_diag_thickness();
+        diags_family.suffix_max_span[i] = diags_family.suffix_max_span[i + 1].max(pieces[order[i]].diag_span());
+    }
 
-    // Precompute zigzag band masks.
-    // Right-leaning band b: cell (r,c) is on band c/2 iff r%2 == c%2
-    // Left-leaning band b: cell (r,c) is on band c/2 iff r%2 != c%2
+    // --- Antidiags (anti-diagonals: d = r + c) ---
+    let mut antidiags_family = LineFamily::new();
+    antidiags_family.num_lines = num_diags;
+    for r in 0..bh {
+        for c in 0..bw {
+            let bit = (r * 15 + c) as u32;
+            antidiags_family.masks[r + c].set_bit(bit);
+        }
+    }
+    for i in (0..n).rev() {
+        antidiags_family.remaining_budget[i] = antidiags_family.remaining_budget[i + 1] + pieces[order[i]].max_antidiag_thickness();
+        antidiags_family.suffix_max_span[i] = antidiags_family.suffix_max_span[i + 1].max(pieces[order[i]].diag_span());
+    }
+
+    // --- Zigzag right-leaning bands ---
     let num_zigzag_bands = (bw + 1) / 2;
-    let mut zigzag_r_masks = vec![Bitboard::ZERO; num_zigzag_bands];
-    let mut zigzag_l_masks = vec![Bitboard::ZERO; num_zigzag_bands];
+    let mut zigzag_r_family = LineFamily::new();
+    zigzag_r_family.num_lines = num_zigzag_bands;
     for r in 0..bh {
         for c in 0..bw {
             let bit = (r * 15 + c) as u32;
             let band = c / 2;
             if r % 2 == c % 2 {
-                zigzag_r_masks[band].set_bit(bit);
-            } else {
-                zigzag_l_masks[band].set_bit(bit);
+                zigzag_r_family.masks[band].set_bit(bit);
             }
         }
     }
+    for i in (0..n).rev() {
+        zigzag_r_family.remaining_budget[i] = zigzag_r_family.remaining_budget[i + 1] + pieces[order[i]].max_zigzag_r_thickness();
+        zigzag_r_family.suffix_max_span[i] = zigzag_r_family.suffix_max_span[i + 1].max(pieces[order[i]].zigzag_span());
+    }
+
+    // --- Zigzag left-leaning bands ---
+    let mut zigzag_l_family = LineFamily::new();
+    zigzag_l_family.num_lines = num_zigzag_bands;
+    for r in 0..bh {
+        for c in 0..bw {
+            let bit = (r * 15 + c) as u32;
+            let band = c / 2;
+            if r % 2 != c % 2 {
+                zigzag_l_family.masks[band].set_bit(bit);
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        zigzag_l_family.remaining_budget[i] = zigzag_l_family.remaining_budget[i + 1] + pieces[order[i]].max_zigzag_l_thickness();
+        zigzag_l_family.suffix_max_span[i] = zigzag_l_family.suffix_max_span[i + 1].max(pieces[order[i]].zigzag_span());
+    }
+
+    let line_families = [rows_family, cols_family, diags_family, antidiags_family, zigzag_r_family, zigzag_l_family];
 
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
@@ -483,23 +574,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &sorted_cell_counts,
         &remaining_bits,
         &remaining_perimeter,
-        &remaining_max_row_thick,
-        &remaining_max_col_thick,
-        &suffix_max_height,
-        &suffix_max_width,
-        &remaining_max_diag_thick,
-        &remaining_max_antidiag_thick,
-        &suffix_max_diag_span,
-        &row_budget,
-        &col_budget,
-        &col_masks,
-        &diag_masks,
-        &adiag_masks,
-        &remaining_max_zigzag_r_thick,
-        &remaining_max_zigzag_l_thick,
-        &suffix_max_zigzag_span,
-        &zigzag_r_masks,
-        &zigzag_l_masks,
+        &line_families,
         &suffix_coverage,
         &is_dup_of_prev,
         m,
@@ -577,23 +652,7 @@ fn backtrack(
     cell_counts: &[u32],
     remaining_bits: &[u32],
     remaining_perimeter: &[u32],
-    remaining_max_row_thick: &[u32],
-    remaining_max_col_thick: &[u32],
-    suffix_max_height: &[u8],
-    suffix_max_width: &[u8],
-    remaining_max_diag_thick: &[u32],
-    remaining_max_antidiag_thick: &[u32],
-    suffix_max_diag_span: &[u8],
-    row_budget: &[Vec<u32>],
-    col_budget: &[Vec<u32>],
-    col_masks: &[Bitboard],
-    diag_masks: &[Bitboard],
-    adiag_masks: &[Bitboard],
-    remaining_max_zigzag_r_thick: &[u32],
-    remaining_max_zigzag_l_thick: &[u32],
-    suffix_max_zigzag_span: &[u8],
-    zigzag_r_masks: &[Bitboard],
-    zigzag_l_masks: &[Bitboard],
+    line_families: &[LineFamily; 6],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
     m: u8,
@@ -633,155 +692,14 @@ fn backtrack(
 
     // Prune: per-row/col min_flips budget with DP independent set.
     if config.min_flips_rowcol {
-        let row_mask_base = (1u64 << w) - 1;
-        let mut row_weights = [0u32; 14];
-        for r in 0..h as usize {
-            for d in 1..m {
-                let plane_row = (board.plane(d) >> (r as u32 * 15)).limbs[0] & row_mask_base;
-                row_weights[r] += (m - d) as u32 * plane_row.count_ones();
-            }
-            // Per-row position-aware check.
-            if row_budget[piece_idx][r] < row_weights[r] {
-                return false;
-            }
-        }
-
-        let mut col_weights = [0u32; 14];
-        for c in 0..w as usize {
-            for d in 1..m {
-                col_weights[c] += (m - d) as u32 * (board.plane(d) & col_masks[c]).count_ones();
-            }
-            // Per-col position-aware check.
-            if col_budget[piece_idx][c] < col_weights[c] {
-                return false;
-            }
-        }
-
-        // DP: max weight independent set of rows with spacing >= max_piece_height.
-        {
-            let gap = suffix_max_height[piece_idx] as usize;
-            if gap > 0 {
-                let mut dp = [0u32; 14];
-                for r in 0..h as usize {
-                    let take = row_weights[r] + if r >= gap { dp[r - gap] } else { 0 };
-                    let skip = if r > 0 { dp[r - 1] } else { 0 };
-                    dp[r] = take.max(skip);
-                }
-                if remaining_max_row_thick[piece_idx] < dp[h as usize - 1] {
-                    return false;
-                }
-            }
-        }
-
-        // DP: max weight independent set of columns with spacing >= max_piece_width.
-        {
-            let gap = suffix_max_width[piece_idx] as usize;
-            if gap > 0 {
-                let mut dp = [0u32; 14];
-                for c in 0..w as usize {
-                    let take = col_weights[c] + if c >= gap { dp[c - gap] } else { 0 };
-                    let skip = if c > 0 { dp[c - 1] } else { 0 };
-                    dp[c] = take.max(skip);
-                }
-                if remaining_max_col_thick[piece_idx] < dp[w as usize - 1] {
-                    return false;
-                }
-            }
-        }
+        if !check_line_family(board, &line_families[0], piece_idx, m) { return false; }
+        if !check_line_family(board, &line_families[1], piece_idx, m) { return false; }
     }
 
     // Prune: per-diagonal min_flips budget with DP independent set.
     if config.min_flips_diagonal {
-        // DP: max weight independent set of main diagonals (d = r - c).
-        {
-            let gap = suffix_max_diag_span[piece_idx] as usize;
-            let num_diags = diag_masks.len();
-            if gap > 0 && num_diags > 0 {
-                let mut diag_weights = [0u32; 27];
-                for i in 0..num_diags {
-                    for d in 1..m {
-                        diag_weights[i] += (m - d) as u32 * (board.plane(d) & diag_masks[i]).count_ones();
-                    }
-                }
-                let mut dp = [0u32; 27];
-                for i in 0..num_diags {
-                    let take = diag_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
-                    let skip = if i > 0 { dp[i - 1] } else { 0 };
-                    dp[i] = take.max(skip);
-                }
-                if remaining_max_diag_thick[piece_idx] < dp[num_diags - 1] {
-                    return false;
-                }
-            }
-        }
-
-        // DP: max weight independent set of anti-diagonals (d = r + c).
-        {
-            let gap = suffix_max_diag_span[piece_idx] as usize;
-            let num_adiags = adiag_masks.len();
-            if gap > 0 && num_adiags > 0 {
-                let mut adiag_weights = [0u32; 27];
-                for i in 0..num_adiags {
-                    for d in 1..m {
-                        adiag_weights[i] += (m - d) as u32 * (board.plane(d) & adiag_masks[i]).count_ones();
-                    }
-                }
-                let mut dp = [0u32; 27];
-                for i in 0..num_adiags {
-                    let take = adiag_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
-                    let skip = if i > 0 { dp[i - 1] } else { 0 };
-                    dp[i] = take.max(skip);
-                }
-                if remaining_max_antidiag_thick[piece_idx] < dp[num_adiags - 1] {
-                    return false;
-                }
-            }
-        }
-
-        // DP: max weight independent set of right-leaning zig-zag bands.
-        {
-            let gap = suffix_max_zigzag_span[piece_idx] as usize;
-            let num_bands = zigzag_r_masks.len();
-            if gap > 0 && num_bands > 0 {
-                let mut band_weights = [0u32; 8];
-                for i in 0..num_bands {
-                    for d in 1..m {
-                        band_weights[i] += (m - d) as u32 * (board.plane(d) & zigzag_r_masks[i]).count_ones();
-                    }
-                }
-                let mut dp = [0u32; 8];
-                for i in 0..num_bands {
-                    let take = band_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
-                    let skip = if i > 0 { dp[i - 1] } else { 0 };
-                    dp[i] = take.max(skip);
-                }
-                if remaining_max_zigzag_r_thick[piece_idx] < dp[num_bands - 1] {
-                    return false;
-                }
-            }
-        }
-
-        // DP: max weight independent set of left-leaning zig-zag bands.
-        {
-            let gap = suffix_max_zigzag_span[piece_idx] as usize;
-            let num_bands = zigzag_l_masks.len();
-            if gap > 0 && num_bands > 0 {
-                let mut band_weights = [0u32; 8];
-                for i in 0..num_bands {
-                    for d in 1..m {
-                        band_weights[i] += (m - d) as u32 * (board.plane(d) & zigzag_l_masks[i]).count_ones();
-                    }
-                }
-                let mut dp = [0u32; 8];
-                for i in 0..num_bands {
-                    let take = band_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
-                    let skip = if i > 0 { dp[i - 1] } else { 0 };
-                    dp[i] = take.max(skip);
-                }
-                if remaining_max_zigzag_l_thick[piece_idx] < dp[num_bands - 1] {
-                    return false;
-                }
-            }
+        for f in &line_families[2..] {
+            if !check_line_family(board, f, piece_idx, m) { return false; }
         }
     }
 
@@ -865,23 +783,7 @@ fn backtrack(
             cell_counts,
             remaining_bits,
             remaining_perimeter,
-            remaining_max_row_thick,
-            remaining_max_col_thick,
-            suffix_max_height,
-            suffix_max_width,
-            remaining_max_diag_thick,
-            remaining_max_antidiag_thick,
-            suffix_max_diag_span,
-            row_budget,
-            col_budget,
-            col_masks,
-            diag_masks,
-            adiag_masks,
-            remaining_max_zigzag_r_thick,
-            remaining_max_zigzag_l_thick,
-            suffix_max_zigzag_span,
-            zigzag_r_masks,
-            zigzag_l_masks,
+            line_families,
             suffix_coverage,
             is_dup_of_prev,
             m,
