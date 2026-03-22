@@ -94,6 +94,7 @@ struct ParityPartition {
     suffix_dp: Vec<Vec<bool>>,
 }
 
+
 /// A small subset of board cells for local reachability pruning.
 /// The suffix DP tracks which configurations of the subset cells are achievable.
 struct SubsetReachability {
@@ -171,10 +172,7 @@ struct SolverData {
     m: u8,
     h: u8,
     w: u8,
-    // Parity partition checks: mod-2 (checkerboard, even-rows, even-cols)
-    // plus optional mod-3 partitions for larger boards.
     parity_partitions: Vec<ParityPartition>,
-    // Subset reachability checks for corners.
     subset_checks: Vec<SubsetReachability>,
 }
 
@@ -1263,6 +1261,67 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
             add_subset(cells, &mut subsets, &mut seen_cell_sets);
         }
 
+        // Center subsets: small rectangles and cross patterns near the board center.
+        // On dense boards with big pieces, most pieces MUST cover center cells —
+        // the zero-effect option is unavailable, making the DP more constraining.
+        if bh >= 5 && bw >= 5 {
+            let cr = bh / 2;
+            let cc = bw / 2;
+
+            // Center rectangles of various sizes.
+            for &(sh, sw) in &[(2, 2), (2, 3), (3, 2), (3, 3), (1, 4), (4, 1), (1, 5), (5, 1)] {
+                if sh > bh || sw > bw { continue; }
+                let k = sh * sw;
+                if k < 3 || k > max_subset_k { continue; }
+                let r0 = cr.saturating_sub(sh / 2);
+                let c0 = cc.saturating_sub(sw / 2);
+                let cells: Vec<u32> = (r0..r0 + sh)
+                    .flat_map(|r| (c0..c0 + sw).map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+
+            // Center cross: center cell + 4 neighbors.
+            if max_subset_k >= 5 {
+                let mut cells = vec![(cr * 15 + cc) as u32];
+                if cr > 0 { cells.push(((cr - 1) * 15 + cc) as u32); }
+                if cr + 1 < bh { cells.push(((cr + 1) * 15 + cc) as u32); }
+                if cc > 0 { cells.push((cr * 15 + cc - 1) as u32); }
+                if cc + 1 < bw { cells.push((cr * 15 + cc + 1) as u32); }
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+
+            // Horizontal and vertical center strips.
+            for len in [3, 4, 5].iter().copied().filter(|&l| l <= max_subset_k && l <= bw) {
+                let c0 = cc.saturating_sub(len / 2);
+                let cells: Vec<u32> = (c0..c0 + len)
+                    .map(|c| (cr * 15 + c) as u32)
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+            for len in [3, 4, 5].iter().copied().filter(|&l| l <= max_subset_k && l <= bh) {
+                let r0 = cr.saturating_sub(len / 2);
+                let cells: Vec<u32> = (r0..r0 + len)
+                    .map(|r| (r * 15 + cc) as u32)
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+
+            // Offset center rectangles: shifted by 1 in each direction.
+            for &dr in &[-1i32, 0, 1] {
+                for &dc in &[-1i32, 0, 1] {
+                    if dr == 0 && dc == 0 { continue; }
+                    let r0 = (cr as i32 + dr).max(0) as usize;
+                    let c0 = (cc as i32 + dc).max(0) as usize;
+                    if r0 + 2 > bh || c0 + 2 > bw { continue; }
+                    let cells: Vec<u32> = (r0..r0 + 2)
+                        .flat_map(|r| (c0..c0 + 2).map(move |c| (r * 15 + c) as u32))
+                        .collect();
+                    add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                }
+            }
+        }
+
         subsets
     };
 
@@ -1412,6 +1471,7 @@ fn prune_parity_partitions(board: &Board, data: &SolverData, piece_idx: usize) -
     }
     true
 }
+
 
 #[inline(always)]
 fn prune_active_planes(board: &Board, remaining: usize) -> bool {
