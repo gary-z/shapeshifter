@@ -79,6 +79,34 @@ fn check_line_family(
     true
 }
 
+/// All precomputed data needed by the backtracking solver.
+/// Bundled into a single struct to keep the backtrack signature small.
+#[allow(dead_code)]
+struct SolverData {
+    all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    reaches: Vec<Bitboard>,
+    perimeters: Vec<u32>,
+    h_perimeters: Vec<u32>,
+    v_perimeters: Vec<u32>,
+    cell_counts: Vec<u32>,
+    remaining_bits: Vec<u32>,
+    remaining_perimeter: Vec<u32>,
+    remaining_h_perimeter: Vec<u32>,
+    remaining_v_perimeter: Vec<u32>,
+    jagg_h_mask: Bitboard,
+    jagg_h_total: u32,
+    jagg_v_mask: Bitboard,
+    jagg_v_total: u32,
+    line_families: [LineFamily; 6],
+    suffix_coverage: Vec<CoverageCounter>,
+    is_dup_of_prev: Vec<bool>,
+    skip_tables: Vec<Option<Vec<bool>>>,
+    single_cell_start: usize,
+    m: u8,
+    h: u8,
+    w: u8,
+}
+
 /// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
 
@@ -175,17 +203,13 @@ fn flood_fill(seed_bit: u32, region: Bitboard) -> Bitboard {
 fn check_components(
     board: &Board,
     locked_mask: Bitboard,
-    reaches: &[Bitboard],
-    h_perimeters: &[u32],
-    v_perimeters: &[u32],
-    cell_counts: &[u32],
-    m: u8,
+    data: &SolverData,
     piece_idx: usize,
 ) -> bool {
 
     // Non-zero region, excluding locked cells (which are walls).
     let mut nz = Bitboard::ZERO;
-    for d in 1..m {
+    for d in 1..data.m {
         nz |= board.plane(d);
     }
     let region = nz & !locked_mask;
@@ -205,8 +229,8 @@ fn check_components(
 
         // Compute component's min_flips.
         let mut comp_min_flips = 0u32;
-        for d in 1..m {
-            comp_min_flips += (m - d) as u32 * (board.plane(d) & component).count_ones();
+        for d in 1..data.m {
+            comp_min_flips += (data.m - d) as u32 * (board.plane(d) & component).count_ones();
         }
 
         // Component jaggedness — split into h/v.
@@ -214,7 +238,7 @@ fn check_components(
         let v_pairs = component & (component >> 15);
         let mut h_matching = 0u32;
         let mut v_matching = 0u32;
-        for d in 0..m {
+        for d in 0..data.m {
             let p = board.plane(d) & component;
             h_matching += (p & (p >> 1) & h_pairs).count_ones();
             v_matching += (p & (p >> 15) & v_pairs).count_ones();
@@ -226,11 +250,11 @@ fn check_components(
         let mut reachable_h_perim = 0u32;
         let mut reachable_v_perim = 0u32;
         let mut reachable_bits = 0u32;
-        for pi in piece_idx..reaches.len() {
-            if !(reaches[pi] & component).is_zero() {
-                reachable_h_perim += h_perimeters[pi];
-                reachable_v_perim += v_perimeters[pi];
-                reachable_bits += cell_counts[pi];
+        for pi in piece_idx..data.reaches.len() {
+            if !(data.reaches[pi] & component).is_zero() {
+                reachable_h_perim += data.h_perimeters[pi];
+                reachable_v_perim += data.v_perimeters[pi];
+                reachable_bits += data.cell_counts[pi];
             }
         }
 
@@ -711,29 +735,36 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let jagg_h_total = jagg_h_mask.count_ones();
     let jagg_v_total = jagg_v_mask.count_ones();
 
+    let data = SolverData {
+        all_placements,
+        reaches,
+        perimeters: sorted_perimeters,
+        h_perimeters: sorted_h_perimeters,
+        v_perimeters: sorted_v_perimeters,
+        cell_counts: sorted_cell_counts,
+        remaining_bits,
+        remaining_perimeter,
+        remaining_h_perimeter,
+        remaining_v_perimeter,
+        jagg_h_mask,
+        jagg_h_total,
+        jagg_v_mask,
+        jagg_v_total,
+        line_families,
+        suffix_coverage,
+        is_dup_of_prev,
+        skip_tables,
+        single_cell_start,
+        m,
+        h,
+        w,
+    };
+
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
     let found = backtrack(
         &board,
-        &all_placements,
-        &reaches,
-        &sorted_perimeters,
-        &sorted_h_perimeters,
-        &sorted_v_perimeters,
-        &sorted_cell_counts,
-        &remaining_bits,
-        &remaining_perimeter,
-        &remaining_h_perimeter,
-        &remaining_v_perimeter,
-        jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total,
-        &line_families,
-        &suffix_coverage,
-        &is_dup_of_prev,
-        &skip_tables,
-        m,
-        h,
-        w,
-        single_cell_start,
+        &data,
         0,
         0,
         usize::MAX, // no prev dup placement
@@ -800,25 +831,7 @@ fn solve_single_cells(
 
 fn backtrack(
     board: &Board,
-    all_placements: &[Vec<(usize, usize, Bitboard)>],
-    reaches: &[Bitboard],
-    perimeters: &[u32],
-    h_perimeters: &[u32],
-    v_perimeters: &[u32],
-    cell_counts: &[u32],
-    remaining_bits: &[u32],
-    remaining_perimeter: &[u32],
-    remaining_h_perimeter: &[u32],
-    remaining_v_perimeter: &[u32],
-    jagg_h_mask: Bitboard, jagg_h_total: u32, jagg_v_mask: Bitboard, jagg_v_total: u32,
-    line_families: &[LineFamily; 6],
-    suffix_coverage: &[CoverageCounter],
-    is_dup_of_prev: &[bool],
-    skip_tables: &[Option<Vec<bool>>],
-    m: u8,
-    h: u8,
-    w: u8,
-    single_cell_start: usize,
+    data: &SolverData,
     piece_idx: usize,
     min_placement: usize,
     prev_dup_placement: usize,
@@ -828,17 +841,17 @@ fn backtrack(
 ) -> bool {
     nodes.set(nodes.get() + 1);
 
-    if piece_idx == all_placements.len() {
+    if piece_idx == data.all_placements.len() {
         return board.is_solved();
     }
 
     // If all remaining pieces are 1x1, solve directly.
-    if config.single_cell_endgame && piece_idx >= single_cell_start {
-        let num_remaining = all_placements.len() - piece_idx;
-        return solve_single_cells(board, m, h, w, num_remaining, solution);
+    if config.single_cell_endgame && piece_idx >= data.single_cell_start {
+        let num_remaining = data.all_placements.len() - piece_idx;
+        return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
     }
 
-    let remaining = all_placements.len() - piece_idx;
+    let remaining = data.all_placements.len() - piece_idx;
 
     // Prune: each piece can eliminate at most one active plane.
     if config.active_planes && board.active_planes() as usize > remaining {
@@ -847,20 +860,20 @@ fn backtrack(
 
     // Prune: if remaining piece bits can't cover the minimum flips needed.
     let min_flips = board.min_flips_needed();
-    if config.min_flips_global && remaining_bits[piece_idx] < min_flips {
+    if config.min_flips_global && data.remaining_bits[piece_idx] < min_flips {
         return false;
     }
 
     // Prune: per-row/col min_flips budget with DP independent set.
     if config.min_flips_rowcol {
-        if !check_line_family(board, &line_families[0], piece_idx, m) { return false; }
-        if !check_line_family(board, &line_families[1], piece_idx, m) { return false; }
+        if !check_line_family(board, &data.line_families[0], piece_idx, data.m) { return false; }
+        if !check_line_family(board, &data.line_families[1], piece_idx, data.m) { return false; }
     }
 
     // Prune: per-diagonal min_flips budget with DP independent set.
     if config.min_flips_diagonal {
-        for f in &line_families[2..] {
-            if !check_line_family(board, f, piece_idx, m) { return false; }
+        for f in &data.line_families[2..] {
+            if !check_line_family(board, f, piece_idx, data.m) { return false; }
         }
     }
 
@@ -868,23 +881,23 @@ fn backtrack(
     // Sample cells on a grid spaced by (max_piece_height × max_piece_width).
     // No piece can cover two grid points. Total demand at grid points <= remaining_pieces.
     // Run when branching factor is high enough to justify the cost.
-    let branching = all_placements[piece_idx].len();
+    let branching = data.all_placements[piece_idx].len();
     if config.min_flips_rowcol && branching >= 6 {
-        let gap_h = line_families[0].suffix_max_span[piece_idx] as usize;
-        let gap_w = line_families[1].suffix_max_span[piece_idx] as usize;
+        let gap_h = data.line_families[0].suffix_max_span[piece_idx] as usize;
+        let gap_w = data.line_families[1].suffix_max_span[piece_idx] as usize;
         if gap_h > 0 && gap_w > 0 {
             let mut max_demand = 0u32;
             for r0 in 0..gap_h {
                 for c0 in 0..gap_w {
                     let mut demand = 0u32;
                     let mut r = r0;
-                    while r < h as usize {
+                    while r < data.h as usize {
                         let mut c = c0;
-                        while c < w as usize {
+                        while c < data.w as usize {
                             let bit = (r * 15 + c) as u32;
-                            for d in 1..m {
+                            for d in 1..data.m {
                                 if board.plane(d).get_bit(bit) {
-                                    demand += (m - d) as u32;
+                                    demand += (data.m - d) as u32;
                                     break; // cell can only be in one plane
                                 }
                             }
@@ -904,7 +917,7 @@ fn backtrack(
     }
 
     // Prune: insufficient coverage per cell.
-    if config.coverage && !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
+    if config.coverage && !has_sufficient_coverage(board, &data.suffix_coverage[piece_idx], data.m) {
         return false;
     }
 
@@ -912,18 +925,18 @@ fn backtrack(
     if config.jaggedness {
         // Split jaggedness into horizontal and vertical, check each independently.
         // Tighter than the combined check because h_perim only affects h_jagg.
-        let (h_jagg, v_jagg) = board.split_jaggedness(jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total);
-        if h_jagg > remaining_h_perimeter[piece_idx] {
+        let (h_jagg, v_jagg) = board.split_jaggedness(data.jagg_h_mask, data.jagg_h_total, data.jagg_v_mask, data.jagg_v_total);
+        if h_jagg > data.remaining_h_perimeter[piece_idx] {
             return false;
         }
-        if v_jagg > remaining_v_perimeter[piece_idx] {
+        if v_jagg > data.remaining_v_perimeter[piece_idx] {
             return false;
         }
     }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {
-        board.plane(0) & !suffix_coverage[piece_idx].coverage_ge(m)
+        board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
     } else {
         Bitboard::ZERO
     };
@@ -932,14 +945,13 @@ fn backtrack(
     // Run when branching factor justifies flood-fill cost.
     if config.component_checks && branching >= 8 {
         if !check_components(
-            board, locked_mask, reaches, h_perimeters, v_perimeters, cell_counts,
-            m, piece_idx,
+            board, locked_mask, data, piece_idx,
         ) {
             return false;
         }
     }
 
-    let placements = &all_placements[piece_idx];
+    let placements = &data.all_placements[piece_idx];
 
     // Sort placements by min_flips delta — prefer placements that reduce the
     // distance to solution the most.
@@ -974,7 +986,7 @@ fn backtrack(
 
         // Skip pair combos with same net effect as a previously tried combo.
         if prev_dup_placement < usize::MAX {
-            if let Some(ref table) = skip_tables[piece_idx] {
+            if let Some(ref table) = data.skip_tables[piece_idx] {
                 let num_curr = placements.len();
                 if table[prev_dup_placement * num_curr + pl_idx] {
                     continue;
@@ -986,13 +998,13 @@ fn backtrack(
         solution.push((row, col));
 
         let is_next_dup = config.duplicate_pruning
-            && piece_idx + 1 < all_placements.len()
-            && is_dup_of_prev[piece_idx + 1];
+            && piece_idx + 1 < data.all_placements.len()
+            && data.is_dup_of_prev[piece_idx + 1];
 
         let next_min = if is_next_dup { pl_idx } else { 0 };
         // Always pass placement for skip table lookup (works for any consecutive pair).
-        let next_prev_dup = if piece_idx + 1 < all_placements.len()
-            && skip_tables[piece_idx + 1].is_some()
+        let next_prev_dup = if piece_idx + 1 < data.all_placements.len()
+            && data.skip_tables[piece_idx + 1].is_some()
         {
             pl_idx
         } else {
@@ -1001,25 +1013,7 @@ fn backtrack(
 
         if backtrack(
             &board,
-            all_placements,
-            reaches,
-            perimeters,
-            h_perimeters,
-            v_perimeters,
-            cell_counts,
-            remaining_bits,
-            remaining_perimeter,
-            remaining_h_perimeter,
-            remaining_v_perimeter,
-            jagg_h_mask, jagg_h_total, jagg_v_mask, jagg_v_total,
-            line_families,
-            suffix_coverage,
-            is_dup_of_prev,
-            skip_tables,
-            m,
-            h,
-            w,
-            single_cell_start,
+            data,
             piece_idx + 1,
             next_min,
             next_prev_dup,
