@@ -176,7 +176,8 @@ fn check_components(
     board: &Board,
     locked_mask: Bitboard,
     reaches: &[Bitboard],
-    perimeters: &[u32],
+    h_perimeters: &[u32],
+    v_perimeters: &[u32],
     cell_counts: &[u32],
     m: u8,
     piece_idx: usize,
@@ -208,30 +209,36 @@ fn check_components(
             comp_min_flips += (m - d) as u32 * (board.plane(d) & component).count_ones();
         }
 
-        // Component jaggedness.
+        // Component jaggedness — split into h/v.
         let h_pairs = component & (component >> 1);
         let v_pairs = component & (component >> 15);
-        let total_pairs = h_pairs.count_ones() + v_pairs.count_ones();
-        let mut matching = 0u32;
+        let mut h_matching = 0u32;
+        let mut v_matching = 0u32;
         for d in 0..m {
             let p = board.plane(d) & component;
-            matching += (p & (p >> 1) & h_pairs).count_ones();
-            matching += (p & (p >> 15) & v_pairs).count_ones();
+            h_matching += (p & (p >> 1) & h_pairs).count_ones();
+            v_matching += (p & (p >> 15) & v_pairs).count_ones();
         }
-        let comp_jaggedness = total_pairs - matching;
+        let comp_h_jagg = h_pairs.count_ones() - h_matching;
+        let comp_v_jagg = v_pairs.count_ones() - v_matching;
 
-        // Sum perimeter and cell_counts of remaining pieces that can reach this component.
-        let mut reachable_perimeter = 0u32;
+        // Sum h/v perimeters and cell_counts of reachable pieces.
+        let mut reachable_h_perim = 0u32;
+        let mut reachable_v_perim = 0u32;
         let mut reachable_bits = 0u32;
         for pi in piece_idx..reaches.len() {
             if !(reaches[pi] & component).is_zero() {
-                reachable_perimeter += perimeters[pi];
+                reachable_h_perim += h_perimeters[pi];
+                reachable_v_perim += v_perimeters[pi];
                 reachable_bits += cell_counts[pi];
             }
         }
 
         // Per-component pruning checks.
-        if comp_jaggedness > reachable_perimeter {
+        if comp_h_jagg > reachable_h_perim {
+            return false;
+        }
+        if comp_v_jagg > reachable_v_perim {
             return false;
         }
         if comp_min_flips > reachable_bits {
@@ -549,6 +556,8 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     // Precompute sorted-order perimeters and cell counts for component checks.
     let sorted_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].perimeter()).collect();
+    let sorted_h_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].h_perimeter()).collect();
+    let sorted_v_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].v_perimeter()).collect();
     let sorted_cell_counts: Vec<u32> = (0..n).map(|i| pieces[order[i]].cell_count()).collect();
 
     let m = board.m();
@@ -709,6 +718,8 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &all_placements,
         &reaches,
         &sorted_perimeters,
+        &sorted_h_perimeters,
+        &sorted_v_perimeters,
         &sorted_cell_counts,
         &remaining_bits,
         &remaining_perimeter,
@@ -792,6 +803,8 @@ fn backtrack(
     all_placements: &[Vec<(usize, usize, Bitboard)>],
     reaches: &[Bitboard],
     perimeters: &[u32],
+    h_perimeters: &[u32],
+    v_perimeters: &[u32],
     cell_counts: &[u32],
     remaining_bits: &[u32],
     remaining_perimeter: &[u32],
@@ -919,7 +932,7 @@ fn backtrack(
     // Run when branching factor justifies flood-fill cost.
     if config.component_checks && branching >= 8 {
         if !check_components(
-            board, locked_mask, reaches, perimeters, cell_counts,
+            board, locked_mask, reaches, h_perimeters, v_perimeters, cell_counts,
             m, piece_idx,
         ) {
             return false;
@@ -991,6 +1004,8 @@ fn backtrack(
             all_placements,
             reaches,
             perimeters,
+            h_perimeters,
+            v_perimeters,
             cell_counts,
             remaining_bits,
             remaining_perimeter,
