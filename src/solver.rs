@@ -902,69 +902,44 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
-    // Precompute subset reachability for board corners.
-    // Subset size adapts to M to keep state space manageable.
-    let subset_k = match m {
-        2 => 9usize.min(bh * bw),     // 3x3 corner, 512 states
-        3 => 6usize.min(bh * bw),     // 3x2 corner, 729 states
-        4 => 4usize.min(bh * bw),     // 2x2 corner, 256 states
-        _ => 4usize.min(bh * bw),     // 2x2 corner, 625 states for M=5
+    // Precompute subset reachability for border regions.
+    // Max subset size adapts to M to keep M^K state space manageable.
+    let max_subset_k: usize = match m {
+        2 => 10,   // 1024 states
+        3 => 6,    // 729 states
+        4 => 5,    // 625 states (reduced from previous 4)
+        _ => 4,    // 625 states for M=5
     };
-    let subset_checks = if subset_k >= 4 {
-        // Determine corner rectangle dimensions.
-        let (sr, sc) = match subset_k {
-            9 => (3usize.min(bh), 3usize.min(bw)),
-            6 => (3usize.min(bh), 2usize.min(bw)),
-            4 => (2usize.min(bh), 2usize.min(bw)),
-            _ => (2usize.min(bh), 2usize.min(bw)),
-        };
-        let actual_k = sr * sc;
-        let num_configs = (m as usize).pow(actual_k as u32);
+    let subset_checks = {
+        let m_val = m as usize;
 
-        // Apply effect to a config: increment specified cells mod M.
-        let apply_effect = |config: usize, effect: &[u8], k: usize, m_val: usize| -> usize {
-            let mut result = config;
-            let mut multiplier = 1;
-            for i in 0..k {
-                if effect[i] > 0 {
-                    let digit = (result / multiplier) % m_val;
-                    let new_digit = (digit + effect[i] as usize) % m_val;
-                    result = result - digit * multiplier + new_digit * multiplier;
+        // Helper: build a SubsetReachability for a given set of cell positions.
+        let build_subset = |cells: Vec<u32>| -> SubsetReachability {
+            let k = cells.len();
+            let num_configs = m_val.pow(k as u32);
+
+            // Apply effect to config.
+            let apply_effect = |config: usize, effect: &[u8]| -> usize {
+                let mut result = config;
+                let mut multiplier = 1;
+                for i in 0..k {
+                    if effect[i] > 0 {
+                        let digit = (result / multiplier) % m_val;
+                        let new_digit = (digit + effect[i] as usize) % m_val;
+                        result = result - digit * multiplier + new_digit * multiplier;
+                    }
+                    multiplier *= m_val;
                 }
-                multiplier *= m_val;
-            }
-            result
-        };
+                result
+            };
 
-        // Build 4 corner subsets.
-        let corners: [(usize, usize); 4] = [
-            (0, 0),                         // top-left
-            (0, bw.saturating_sub(sc)),      // top-right
-            (bh.saturating_sub(sr), 0),      // bottom-left
-            (bh.saturating_sub(sr), bw.saturating_sub(sc)), // bottom-right
-        ];
-
-        let mut subset_vec = Vec::new();
-        for &(r0, c0) in &corners {
-            // Collect cell positions.
-            let mut cells = Vec::with_capacity(actual_k);
-            for dr in 0..sr {
-                for dc in 0..sc {
-                    cells.push(((r0 + dr) * 15 + c0 + dc) as u32);
-                }
-            }
-            if cells.len() != actual_k { continue; }
-
-            // Per piece: enumerate unique effects on this subset.
-            let m_val = m as usize;
+            // Per piece: enumerate unique effects.
             let mut piece_effects: Vec<Vec<Vec<u8>>> = Vec::with_capacity(n);
             for i in 0..n {
                 let mut effects_set: Vec<Vec<u8>> = Vec::new();
-                // Always include zero effect.
-                effects_set.push(vec![0u8; actual_k]);
-                // Check each placement.
+                effects_set.push(vec![0u8; k]); // zero effect always available
                 for &(_, _, mask) in &all_placements[i] {
-                    let mut effect = vec![0u8; actual_k];
+                    let mut effect = vec![0u8; k];
                     let mut any = false;
                     for (ci, &bit) in cells.iter().enumerate() {
                         if mask.get_bit(bit) {
@@ -979,13 +954,13 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 piece_effects.push(effects_set);
             }
 
-            // Build suffix DP.
+            // Suffix DP.
             let mut suffix_reachable = vec![vec![false; num_configs]; n + 1];
-            suffix_reachable[n][0] = true; // goal: all zeros
+            suffix_reachable[n][0] = true;
             for i in (0..n).rev() {
                 for config in 0..num_configs {
                     for effect in &piece_effects[i] {
-                        let new_config = apply_effect(config, effect, actual_k, m_val);
+                        let new_config = apply_effect(config, &effect);
                         if suffix_reachable[i + 1][new_config] {
                             suffix_reachable[i][config] = true;
                             break;
@@ -994,16 +969,71 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
                 }
             }
 
-            subset_vec.push(SubsetReachability {
-                cells,
-                num_cells: actual_k,
-                m,
-                suffix_reachable,
-            });
+            SubsetReachability { cells, num_cells: k, m, suffix_reachable }
+        };
+
+        let mut subsets = Vec::new();
+        let mut seen_cell_sets: Vec<Vec<u32>> = Vec::new();
+
+        let mut add_subset = |cells: Vec<u32>, subsets: &mut Vec<SubsetReachability>,
+                              seen: &mut Vec<Vec<u32>>| {
+            if cells.len() < 3 || cells.len() > max_subset_k { return; }
+            // Dedup: skip if we've already built this exact cell set.
+            let mut sorted = cells.clone();
+            sorted.sort();
+            if seen.contains(&sorted) { return; }
+            seen.push(sorted);
+            subsets.push(build_subset(cells));
+        };
+
+        // Corner rectangles: try several sizes.
+        for &(sr, sc) in &[(3,3), (3,2), (2,3), (2,2)] {
+            if sr > bh || sc > bw { continue; }
+            let k = sr * sc;
+            if k > max_subset_k || k < 3 { continue; }
+            let corners = [
+                (0, 0), (0, bw - sc), (bh - sr, 0), (bh - sr, bw - sc),
+            ];
+            for &(r0, c0) in &corners {
+                let cells: Vec<u32> = (0..sr)
+                    .flat_map(|dr| (0..sc).map(move |dc| ((r0 + dr) * 15 + c0 + dc) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
         }
-        subset_vec
-    } else {
-        Vec::new()
+
+        // Border edge segments: sliding windows of max_subset_k along each edge.
+        let seg_len = max_subset_k;
+        // Top edge: row 0, varying columns.
+        for start_c in 0..=bw.saturating_sub(seg_len) {
+            let cells: Vec<u32> = (start_c..start_c + seg_len.min(bw - start_c))
+                .map(|c| (0 * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+        // Bottom edge.
+        for start_c in 0..=bw.saturating_sub(seg_len) {
+            let cells: Vec<u32> = (start_c..start_c + seg_len.min(bw - start_c))
+                .map(|c| ((bh - 1) * 15 + c) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+        // Left edge: col 0, varying rows.
+        for start_r in 0..=bh.saturating_sub(seg_len) {
+            let cells: Vec<u32> = (start_r..start_r + seg_len.min(bh - start_r))
+                .map(|r| (r * 15 + 0) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+        // Right edge.
+        for start_r in 0..=bh.saturating_sub(seg_len) {
+            let cells: Vec<u32> = (start_r..start_r + seg_len.min(bh - start_r))
+                .map(|r| (r * 15 + (bw - 1)) as u32)
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
+        subsets
     };
 
     let data = SolverData {
