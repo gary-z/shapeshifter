@@ -348,6 +348,16 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         suffix_max_diag_span[i] = suffix_max_diag_span[i + 1].max(pieces[order[i]].diag_span());
     }
 
+    // Precompute zigzag suffix sums.
+    let mut remaining_max_zigzag_r_thick = vec![0u32; n + 1];
+    let mut remaining_max_zigzag_l_thick = vec![0u32; n + 1];
+    let mut suffix_max_zigzag_span = vec![0u8; n + 1];
+    for i in (0..n).rev() {
+        remaining_max_zigzag_r_thick[i] = remaining_max_zigzag_r_thick[i + 1] + pieces[order[i]].max_zigzag_r_thickness();
+        remaining_max_zigzag_l_thick[i] = remaining_max_zigzag_l_thick[i + 1] + pieces[order[i]].max_zigzag_l_thickness();
+        suffix_max_zigzag_span[i] = suffix_max_zigzag_span[i + 1].max(pieces[order[i]].zigzag_span());
+    }
+
     // Precompute per-row and per-col suffix budgets.
     // For each board row r and piece i, the max cells piece i can deliver to row r
     // depends on which piece-rows can align with board-row r.
@@ -445,6 +455,24 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
+    // Precompute zigzag band masks.
+    // Right-leaning band b: cell (r,c) is on band c/2 iff r%2 == c%2
+    // Left-leaning band b: cell (r,c) is on band c/2 iff r%2 != c%2
+    let num_zigzag_bands = (bw + 1) / 2;
+    let mut zigzag_r_masks = vec![Bitboard::ZERO; num_zigzag_bands];
+    let mut zigzag_l_masks = vec![Bitboard::ZERO; num_zigzag_bands];
+    for r in 0..bh {
+        for c in 0..bw {
+            let bit = (r * 15 + c) as u32;
+            let band = c / 2;
+            if r % 2 == c % 2 {
+                zigzag_r_masks[band].set_bit(bit);
+            } else {
+                zigzag_l_masks[band].set_bit(bit);
+            }
+        }
+    }
+
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
     let found = backtrack(
@@ -467,6 +495,11 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &col_masks,
         &diag_masks,
         &adiag_masks,
+        &remaining_max_zigzag_r_thick,
+        &remaining_max_zigzag_l_thick,
+        &suffix_max_zigzag_span,
+        &zigzag_r_masks,
+        &zigzag_l_masks,
         &suffix_coverage,
         &is_dup_of_prev,
         m,
@@ -556,6 +589,11 @@ fn backtrack(
     col_masks: &[Bitboard],
     diag_masks: &[Bitboard],
     adiag_masks: &[Bitboard],
+    remaining_max_zigzag_r_thick: &[u32],
+    remaining_max_zigzag_l_thick: &[u32],
+    suffix_max_zigzag_span: &[u8],
+    zigzag_r_masks: &[Bitboard],
+    zigzag_l_masks: &[Bitboard],
     suffix_coverage: &[CoverageCounter],
     is_dup_of_prev: &[bool],
     m: u8,
@@ -699,6 +737,52 @@ fn backtrack(
                 }
             }
         }
+
+        // DP: max weight independent set of right-leaning zig-zag bands.
+        {
+            let gap = suffix_max_zigzag_span[piece_idx] as usize;
+            let num_bands = zigzag_r_masks.len();
+            if gap > 0 && num_bands > 0 {
+                let mut band_weights = [0u32; 8];
+                for i in 0..num_bands {
+                    for d in 1..m {
+                        band_weights[i] += (m - d) as u32 * (board.plane(d) & zigzag_r_masks[i]).count_ones();
+                    }
+                }
+                let mut dp = [0u32; 8];
+                for i in 0..num_bands {
+                    let take = band_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
+                    let skip = if i > 0 { dp[i - 1] } else { 0 };
+                    dp[i] = take.max(skip);
+                }
+                if remaining_max_zigzag_r_thick[piece_idx] < dp[num_bands - 1] {
+                    return false;
+                }
+            }
+        }
+
+        // DP: max weight independent set of left-leaning zig-zag bands.
+        {
+            let gap = suffix_max_zigzag_span[piece_idx] as usize;
+            let num_bands = zigzag_l_masks.len();
+            if gap > 0 && num_bands > 0 {
+                let mut band_weights = [0u32; 8];
+                for i in 0..num_bands {
+                    for d in 1..m {
+                        band_weights[i] += (m - d) as u32 * (board.plane(d) & zigzag_l_masks[i]).count_ones();
+                    }
+                }
+                let mut dp = [0u32; 8];
+                for i in 0..num_bands {
+                    let take = band_weights[i] + if i >= gap { dp[i - gap] } else { 0 };
+                    let skip = if i > 0 { dp[i - 1] } else { 0 };
+                    dp[i] = take.max(skip);
+                }
+                if remaining_max_zigzag_l_thick[piece_idx] < dp[num_bands - 1] {
+                    return false;
+                }
+            }
+        }
     }
 
     // Prune: insufficient coverage per cell.
@@ -793,6 +877,11 @@ fn backtrack(
             col_masks,
             diag_masks,
             adiag_masks,
+            remaining_max_zigzag_r_thick,
+            remaining_max_zigzag_l_thick,
+            suffix_max_zigzag_span,
+            zigzag_r_masks,
+            zigzag_l_masks,
             suffix_coverage,
             is_dup_of_prev,
             m,

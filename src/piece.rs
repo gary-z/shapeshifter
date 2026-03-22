@@ -120,6 +120,57 @@ impl Piece {
         self.height + self.width - 1
     }
 
+    /// Max filled cells on any single right-leaning zig-zag band, over all placement
+    /// positions. A right-leaning band b covers board cells where c/2 == b and r%2 == c%2.
+    ///
+    /// For a piece at (r0, c0), cell (pr, pc) lands on a right-leaning band iff
+    /// (r0+pr)%2 == (c0+pc)%2, i.e. pr%2 ^ pc%2 == r0%2 ^ c0%2.
+    /// The board band is (c0+pc)/2. Two eligible cells land on the same band iff
+    /// (c0+pc1)/2 == (c0+pc2)/2.
+    ///
+    /// We try all 4 combinations of (r0%2, c0%2). For each, group eligible cells
+    /// by (pc + c0%2) / 2 (the relative band index). Max group size = thickness.
+    pub fn max_zigzag_r_thickness(&self) -> u32 {
+        let mut max = 0u32;
+        for r0_parity in 0u32..2 {
+            for c0_parity in 0u32..2 {
+                let elig_parity = r0_parity ^ c0_parity;
+                let mut band_counts = [0u32; 3]; // max bands: ceil(5/2) = 3
+                for pr in 0..self.height as usize {
+                    for pc in 0..self.width as usize {
+                        if self.shape.get_bit((pr * 15 + pc) as u32) {
+                            let cell_parity = (pr as u32 % 2) ^ (pc as u32 % 2);
+                            if cell_parity == elig_parity {
+                                let band = (pc as u32 + c0_parity) / 2;
+                                if (band as usize) < band_counts.len() {
+                                    band_counts[band as usize] += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                for &cnt in band_counts.iter() {
+                    if cnt > max {
+                        max = cnt;
+                    }
+                }
+            }
+        }
+        max
+    }
+
+    /// Max filled cells on any single left-leaning zig-zag band.
+    /// Left-leaning uses the opposite eligibility parity, but since we try all 4
+    /// parity combos in the right-leaning version, the max is the same.
+    pub fn max_zigzag_l_thickness(&self) -> u32 {
+        self.max_zigzag_r_thickness()
+    }
+
+    /// Zig-zag span: a piece of width W spans at most floor(W/2) + 1 zig-zag bands.
+    pub fn zigzag_span(&self) -> u8 {
+        self.width / 2 + 1
+    }
+
     /// Perimeter of the piece: count of edges between filled and unfilled cells
     /// (within the bounding box grid, using cardinal adjacency).
     /// This is a fixed property of the shape, independent of placement.
