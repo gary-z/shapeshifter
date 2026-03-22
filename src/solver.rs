@@ -791,6 +791,43 @@ fn backtrack(
         }
     }
 
+    // Prune: subgrid independence check.
+    // Sample cells on a grid spaced by (max_piece_height × max_piece_width).
+    // No piece can cover two grid points. Total demand at grid points <= remaining_pieces.
+    if config.min_flips_rowcol && piece_idx < 6 {
+        let gap_h = line_families[0].suffix_max_span[piece_idx] as usize;
+        let gap_w = line_families[1].suffix_max_span[piece_idx] as usize;
+        if gap_h > 0 && gap_w > 0 {
+            let mut max_demand = 0u32;
+            for r0 in 0..gap_h {
+                for c0 in 0..gap_w {
+                    let mut demand = 0u32;
+                    let mut r = r0;
+                    while r < h as usize {
+                        let mut c = c0;
+                        while c < w as usize {
+                            let bit = (r * 15 + c) as u32;
+                            for d in 1..m {
+                                if board.plane(d).get_bit(bit) {
+                                    demand += (m - d) as u32;
+                                    break; // cell can only be in one plane
+                                }
+                            }
+                            c += gap_w;
+                        }
+                        r += gap_h;
+                    }
+                    if demand > max_demand {
+                        max_demand = demand;
+                    }
+                }
+            }
+            if max_demand > remaining as u32 {
+                return false;
+            }
+        }
+    }
+
     // Prune: insufficient coverage per cell.
     if config.coverage && !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
         return false;

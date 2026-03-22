@@ -171,6 +171,34 @@ impl Piece {
         self.width / 2 + 1
     }
 
+    /// Max filled cells on any single 2-wide column band (cols 2b, 2b+1).
+    /// Tries both column offset parities.
+    pub fn max_double_col_thickness(&self) -> u32 {
+        let mut max = 0u32;
+        for c0_parity in 0u32..2 {
+            let mut band_counts = [0u32; 3]; // ceil(5/2) = 3 max bands
+            for pr in 0..self.height as usize {
+                for pc in 0..self.width as usize {
+                    if self.shape.get_bit((pr * 15 + pc) as u32) {
+                        let band = (pc as u32 + c0_parity) / 2;
+                        if (band as usize) < band_counts.len() {
+                            band_counts[band as usize] += 1;
+                        }
+                    }
+                }
+            }
+            for &cnt in band_counts.iter() {
+                if cnt > max { max = cnt; }
+            }
+        }
+        max
+    }
+
+    /// Double-column span: ceil(width / 2).
+    pub fn double_col_span(&self) -> u8 {
+        (self.width + 1) / 2
+    }
+
     /// Perimeter of the piece: count of edges between filled and unfilled cells
     /// (within the bounding box grid, using cardinal adjacency).
     /// This is a fixed property of the shape, independent of placement.
