@@ -729,8 +729,28 @@ fn backtrack(
     }
 
     let placements = &all_placements[piece_idx];
+
+    // Sort placements by min_flips delta — prefer placements that reduce the
+    // distance to solution the most.
+    // Delta = M * zeros_hit - piece_area (exact, derived from incremental min_flips).
+    // Since piece_area is constant for the same piece, we sort by zeros_hit.
+    // For M>2, we refine: also reward hitting cells at M-1 (they wrap to 0,
+    // each saving M-1 min_flips vs only 1 for other non-zero cells).
+    // Combined key: M * zeros_hit - (M-2) * tops_hit. Lower is better.
+    let zero_plane = board.plane(0);
+    let mut order = [0u8; 196];
+    let pl_len = placements.len();
+    for i in 0..pl_len {
+        order[i] = i as u8;
+    }
+    order[..pl_len].sort_unstable_by_key(|&i| {
+        (placements[i as usize].2 & zero_plane).count_ones()
+    });
+
     let mut board = board.clone();
-    for (pl_idx, &(row, col, mask)) in placements.iter().enumerate() {
+    for oi in 0..pl_len {
+        let pl_idx = order[oi] as usize;
+        let (row, col, mask) = placements[pl_idx];
         // Duplicate symmetry breaking.
         if config.duplicate_pruning && pl_idx < min_placement {
             continue;
