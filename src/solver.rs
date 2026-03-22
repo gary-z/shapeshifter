@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::coverage::{has_sufficient_coverage, precompute_suffix_coverage, CoverageCounter};
@@ -5,6 +7,62 @@ use crate::game::Game;
 
 /// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
+
+/// Result of a solve attempt: optional solution + number of nodes visited.
+pub struct SolveResult {
+    pub solution: Option<Solution>,
+    pub nodes_visited: u64,
+}
+
+/// Configuration controlling which pruning techniques are enabled.
+#[derive(Clone)]
+pub struct PruningConfig {
+    pub active_planes: bool,
+    pub min_flips: bool,
+    pub coverage: bool,
+    pub jaggedness: bool,
+    pub cell_locking: bool,
+    pub component_checks: bool,
+    pub duplicate_pruning: bool,
+    pub single_cell_endgame: bool,
+}
+
+impl Default for PruningConfig {
+    fn default() -> Self {
+        Self {
+            active_planes: true,
+            min_flips: true,
+            coverage: true,
+            jaggedness: true,
+            cell_locking: true,
+            component_checks: true,
+            duplicate_pruning: true,
+            single_cell_endgame: true,
+        }
+    }
+}
+
+impl PruningConfig {
+    /// All pruning disabled.
+    pub fn none() -> Self {
+        Self {
+            active_planes: false,
+            min_flips: false,
+            coverage: false,
+            jaggedness: false,
+            cell_locking: false,
+            component_checks: false,
+            duplicate_pruning: false,
+            single_cell_endgame: false,
+        }
+    }
+
+    /// Only the specified prune enabled.
+    pub fn only(mut self, f: impl FnOnce(&mut Self)) -> Self {
+        f(&mut self);
+        self
+    }
+}
 
 /// Flood-fill one connected component from a seed bit within `region`.
 /// Returns the component mask. Uses bitboard-parallel expansion.
@@ -108,11 +166,13 @@ fn check_components(
     true
 }
 
-/// Backtracking solver with pruning.
-/// Pieces are sorted so larger/more-constrained pieces are tried first.
-/// Duplicate pieces are detected and their permutations are pruned.
-/// Trailing 1x1 pieces are solved directly without search.
-pub fn solve(game: &Game) -> Option<Solution> {
+/// Solve with all pruning enabled.
+pub fn solve(game: &Game) -> SolveResult {
+    solve_with_config(game, &PruningConfig::default())
+}
+
+/// Backtracking solver with configurable pruning.
+pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -179,8 +239,9 @@ pub fn solve(game: &Game) -> Option<Solution> {
 
     let m = board.m();
 
+    let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
-    if backtrack(
+    let found = backtrack(
         &board,
         &all_placements,
         &reaches,
@@ -197,7 +258,11 @@ pub fn solve(game: &Game) -> Option<Solution> {
         0,
         0,
         &mut sorted_solution,
-    ) {
+        &nodes,
+        config,
+    );
+
+    let solution = if found {
         // Map solution back to original piece order.
         let mut solution = vec![(0, 0); n];
         for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
@@ -206,6 +271,11 @@ pub fn solve(game: &Game) -> Option<Solution> {
         Some(solution)
     } else {
         None
+    };
+
+    SolveResult {
+        solution,
+        nodes_visited: nodes.get(),
     }
 }
 
@@ -265,13 +335,17 @@ fn backtrack(
     piece_idx: usize,
     min_placement: usize,
     solution: &mut Vec<(usize, usize)>,
+    nodes: &Cell<u64>,
+    config: &PruningConfig,
 ) -> bool {
+    nodes.set(nodes.get() + 1);
+
     if piece_idx == all_placements.len() {
         return board.is_solved();
     }
 
     // If all remaining pieces are 1x1, solve directly.
-    if piece_idx >= single_cell_start {
+    if config.single_cell_endgame && piece_idx >= single_cell_start {
         let num_remaining = all_placements.len() - piece_idx;
         return solve_single_cells(board, m, h, w, num_remaining, solution);
     }
@@ -279,92 +353,48 @@ fn backtrack(
     let remaining = all_placements.len() - piece_idx;
 
     // Prune: each piece can eliminate at most one active plane.
-    if board.active_planes() as usize > remaining {
-        #[cfg(feature = "debug_pruning")]
-        if piece_idx == 0 { eprintln!("PRUNE active_planes: {} > {}", board.active_planes(), remaining); }
+    if config.active_planes && board.active_planes() as usize > remaining {
         return false;
     }
 
     // Prune: if remaining piece bits can't cover the minimum flips needed.
     let min_flips = board.min_flips_needed();
-    if remaining_bits[piece_idx] < min_flips {
-        #[cfg(feature = "debug_pruning")]
-        if piece_idx == 0 { eprintln!("PRUNE min_flips: {} < {}", remaining_bits[piece_idx], min_flips); }
+    if config.min_flips && remaining_bits[piece_idx] < min_flips {
         return false;
     }
 
     // Prune: insufficient coverage per cell.
-    if !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
-        #[cfg(feature = "debug_pruning")]
-        if piece_idx == 0 { eprintln!("PRUNE coverage at piece_idx={}", piece_idx); }
+    if config.coverage && !has_sufficient_coverage(board, &suffix_coverage[piece_idx], m) {
         return false;
     }
 
     // Prune: jaggedness exceeds total remaining perimeter.
-    if board.jaggedness() > remaining_perimeter[piece_idx] {
-        #[cfg(feature = "debug_pruning")]
-        if piece_idx == 0 { eprintln!("PRUNE jaggedness: {} > {}", board.jaggedness(), remaining_perimeter[piece_idx]); }
+    if config.jaggedness && board.jaggedness() > remaining_perimeter[piece_idx] {
         return false;
     }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
-    let locked_mask = board.plane(0) & !suffix_coverage[piece_idx].coverage_ge(m);
+    let locked_mask = if config.cell_locking {
+        board.plane(0) & !suffix_coverage[piece_idx].coverage_ge(m)
+    } else {
+        Bitboard::ZERO
+    };
 
-    // Prune: per-component checks (jaggedness, min_flips, active_planes).
-    // Only at top levels where the subtree justifies the flood-fill cost.
-    if piece_idx < 4 {
+    // Prune: per-component checks (jaggedness, min_flips).
+    if config.component_checks && piece_idx < 4 {
         if !check_components(
             board, locked_mask, reaches, perimeters, cell_counts,
             m, piece_idx,
         ) {
-            #[cfg(feature = "debug_pruning")]
-            if piece_idx == 0 { eprintln!("PRUNE component check at piece_idx={}", piece_idx); }
             return false;
         }
     }
 
-    #[cfg(feature = "debug_pruning")]
-    if piece_idx < 3 {
-        let mut surv = 0usize;
-        for (i, &(_, _, mask)) in all_placements[piece_idx].iter().enumerate() {
-            if i >= min_placement && (mask & locked_mask).is_zero() {
-                surv += 1;
-            }
-        }
-        eprintln!("piece_idx={} placements={} surviving={} locked_bits={} min_placement={}",
-            piece_idx, all_placements[piece_idx].len(), surv, locked_mask.count_ones(), min_placement);
-    }
-
-    // Micro-opt: unavoidable waste for the current piece. If every valid placement
-    // hits at least Z zero cells, the budget must absorb M*Z waste.
-    // Equivalent to the min_flips check at depth+1, but avoids iterating all placements.
     let placements = &all_placements[piece_idx];
-    let zero_plane = board.plane(0);
-    let mut min_zero_hit = u32::MAX;
-    for (pl_idx, &(_, _, mask)) in placements.iter().enumerate() {
-        if pl_idx < min_placement {
-            continue;
-        }
-        if !(mask & locked_mask).is_zero() {
-            continue;
-        }
-        let z = (mask & zero_plane).count_ones();
-        if z < min_zero_hit {
-            min_zero_hit = z;
-        }
-        if min_zero_hit == 0 {
-            break;
-        }
-    }
-    if min_zero_hit > 0 && min_zero_hit < u32::MAX {
-        if remaining_bits[piece_idx] < min_flips + m as u32 * min_zero_hit {
-            return false;
-        }
-    }
-
     let mut board = board.clone();
     for (pl_idx, &(row, col, mask)) in placements.iter().enumerate() {
-        if pl_idx < min_placement {
+        // Duplicate symmetry breaking.
+        if config.duplicate_pruning && pl_idx < min_placement {
             continue;
         }
 
@@ -376,7 +406,8 @@ fn backtrack(
         board.apply_piece(mask);
         solution.push((row, col));
 
-        let next_min = if piece_idx + 1 < all_placements.len()
+        let next_min = if config.duplicate_pruning
+            && piece_idx + 1 < all_placements.len()
             && is_dup_of_prev[piece_idx + 1]
         {
             pl_idx
@@ -401,6 +432,8 @@ fn backtrack(
             piece_idx + 1,
             next_min,
             solution,
+            nodes,
+            config,
         ) {
             return true;
         }
@@ -434,7 +467,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 1);
         assert_eq!(sol[0], (0, 0));
         verify_solution(&game, &sol);
@@ -446,7 +479,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -457,7 +490,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).is_none());
+        assert!(solve(&game).solution.is_none());
     }
 
     #[test]
@@ -467,7 +500,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 9);
         verify_solution(&game, &sol);
     }
@@ -479,7 +512,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 3);
         verify_solution(&game, &sol);
     }
@@ -491,7 +524,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).is_none());
+        assert!(solve(&game).solution.is_none());
     }
 
     #[test]
@@ -502,7 +535,7 @@ mod tests {
         let big = Piece::from_grid(&[&[true, true], &[true, false]]); // L-shape, 3 cells
         let small = Piece::from_grid(&[&[true]]); // 1x1
         let game = Game::new(board, vec![big, small]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -511,7 +544,7 @@ mod tests {
     fn test_generated_game_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
         let game = crate::generate::generate_for_level(1, &mut rng).unwrap();
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), game.pieces().len());
         verify_solution(&game, &sol);
     }
@@ -520,7 +553,7 @@ mod tests {
     fn test_generated_level_5_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(123);
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         verify_solution(&game, &sol);
     }
 
@@ -531,7 +564,7 @@ mod tests {
         assert_eq!(board.min_flips_needed(), 9);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).is_none());
+        assert!(solve(&game).solution.is_none());
     }
 
     #[test]
@@ -541,7 +574,7 @@ mod tests {
         let p0 = Piece::from_grid(&[&[true]]);
         let p1 = Piece::from_grid(&[&[true, true]]);
         let game = Game::new(board, vec![p0, p1]);
-        let sol = solve(&game).unwrap();
+        let sol = solve(&game).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -552,7 +585,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).is_none());
+        assert!(solve(&game).solution.is_none());
     }
 
     #[test]
@@ -560,9 +593,9 @@ mod tests {
         for level in [1, 5, 10, 20, 25, 30] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
             let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
-            let sol = solve(&game);
-            assert!(sol.is_some(), "level {level} should be solvable");
-            verify_solution(&game, &sol.unwrap());
+            let result = solve(&game);
+            assert!(result.solution.is_some(), "level {level} should be solvable");
+            verify_solution(&game, &result.solution.unwrap());
         }
     }
 
@@ -620,8 +653,8 @@ mod tests {
                     let mut rng =
                         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                     let game = generate_game(&spec, &mut rng);
-                    let sol = solve(&game);
-                    match sol {
+                    let result = solve(&game);
+                    match result.solution {
                         None => Some(format!(
                             "FAIL: no solution found for M={} {}x{} pieces={} seed={}",
                             m, rows, cols, shapes, seed
@@ -653,5 +686,192 @@ mod tests {
             }
             panic!("{} fuzz test failures (showing first 20)", failures.len());
         }
+    }
+
+    // --- Per-prune effectiveness and soundness tests ---
+
+    /// Helper: generate games from a set of configs, solve with given pruning config,
+    /// verify soundness, return total nodes visited.
+    fn fuzz_with_config(
+        config: &PruningConfig,
+        configs: &[(u8, u8, u8, u8)],
+        seeds: &[u64],
+    ) -> (u64, usize) {
+        use crate::generate::generate_game;
+        use crate::level::LevelSpec;
+
+        let mut total_nodes = 0u64;
+        let mut failures = 0usize;
+        for &(m, rows, cols, shapes) in configs {
+            let spec = LevelSpec {
+                level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
+            };
+            for &seed in seeds {
+                let mut rng =
+                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                let game = generate_game(&spec, &mut rng);
+                let result = solve_with_config(&game, config);
+                total_nodes += result.nodes_visited;
+                match &result.solution {
+                    None => failures += 1,
+                    Some(s) => {
+                        let mut board = game.board().clone();
+                        for (i, &(row, col)) in s.iter().enumerate() {
+                            let mask = game.pieces()[i].placed_at(row, col);
+                            board.apply_piece(mask);
+                        }
+                        if !board.is_solved() {
+                            failures += 1;
+                        }
+                    }
+                }
+            }
+        }
+        (total_nodes, failures)
+    }
+
+    /// Small configs suitable for brute-force comparison.
+    fn small_configs() -> Vec<(u8, u8, u8, u8)> {
+        vec![
+            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
+            (3, 3, 3, 3), (3, 3, 3, 5),
+            (2, 4, 3, 5), (2, 4, 3, 8),
+            (3, 4, 3, 6),
+            (2, 4, 4, 6), (2, 4, 4, 10),
+            (3, 4, 4, 8),
+        ]
+    }
+
+    fn test_seeds() -> Vec<u64> {
+        (0..30).collect()
+    }
+
+    #[test]
+    fn test_prune_active_planes() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.active_planes = true);
+
+        let (nodes_without, fail_without) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "active_planes prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "active_planes should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_min_flips() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.min_flips = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "min_flips prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "min_flips should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_coverage() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.coverage = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "coverage prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "coverage should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_jaggedness() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.jaggedness = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "jaggedness prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "jaggedness should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_cell_locking() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.cell_locking = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "cell_locking prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "cell_locking should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_component_checks() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.component_checks = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "component_checks prune caused failures");
+        assert!(nodes_with <= nodes_without,
+            "component_checks should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_duplicate_pruning() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.duplicate_pruning = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "duplicate_pruning caused failures");
+        assert!(nodes_with <= nodes_without,
+            "duplicate_pruning should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_prune_single_cell_endgame() {
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let no_prune = PruningConfig::none();
+        let with_prune = PruningConfig::none().only(|c| c.single_cell_endgame = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
+
+        assert_eq!(fail_with, 0, "single_cell_endgame caused failures");
+        assert!(nodes_with <= nodes_without,
+            "single_cell_endgame should reduce nodes: {} vs {}", nodes_with, nodes_without);
+    }
+
+    #[test]
+    fn test_all_prunes_sound() {
+        // Full config should solve everything the no-prune config solves.
+        let configs = small_configs();
+        let seeds = test_seeds();
+        let (_, fail_all) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
+        assert_eq!(fail_all, 0, "all prunes combined caused failures");
     }
 }
