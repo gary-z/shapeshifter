@@ -121,7 +121,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
     let n = game.pieces().len();
     let area = game.board().height() as usize * game.board().width() as usize;
 
-    if n >= 12 && area >= 36 {
+    if false && n >= 12 && area >= 36 {
         solve_with_config_parallel(game, config)
     } else {
         solve_with_config(game, config)
@@ -158,10 +158,6 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
             cancellable_groups.push((g, max_sets));
         }
     }
-
-    eprintln!("Cancellation: {} cancellable groups: {:?}",
-        cancellable_groups.len(),
-        cancellable_groups.iter().map(|(g, ms)| (shape_groups[*g].1.len(), *ms)).collect::<Vec<_>>());
 
     if cancellable_groups.is_empty() {
         return solve_dispatch(game, config);
@@ -593,6 +589,7 @@ struct WorkItem {
 /// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
 /// 3. Spawns worker threads to search from each unique state.
 fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResult {
+    eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -658,7 +655,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
     let m = board.m();
 
     // Build solver data first -- we need it for pruning during combo enumeration.
-    eprintln!("Parallel: starting precompute");
+    let t0 = std::time::Instant::now();
     let data = precompute::build_solver_data(
         pieces,
         &order,
@@ -670,6 +667,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         w,
         m,
     );
+    eprintln!("precompute: {:.3?}", t0.elapsed());
 
     // Choose K: find the smallest K in {2, 3} such that the product of
     // placement counts for pieces 0..K is < 50_000.
@@ -690,6 +688,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
     };
 
     let mut all_combos: Vec<WorkItem> = Vec::new();
+    let t1 = std::time::Instant::now();
     enumerate_combos_pruned(
         &board,
         &data,
@@ -701,8 +700,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         &mut all_combos,
         config,
     );
-
-    eprintln!("Parallel dedup: k={}, combos={}", k, all_combos.len());
+    eprintln!("enumerate: {:.3?}, combos={}, k={}", t1.elapsed(), all_combos.len(), k);
 
     // Group combos by resulting board state (dedup).
     // For deduped groups, keep only the first combo (with its boundary info).
@@ -717,8 +715,6 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         }
     }
 
-    eprintln!("Parallel dedup: unique states={}", work_items.len());
-
     // Shared abort flag.
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)>> = Mutex::new(None);
@@ -729,18 +725,11 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         .map(|p| p.get())
         .unwrap_or(4);
 
-    eprintln!("Parallel: spawning {} threads for {} work items", num_threads, work_items.len());
-
-    let items_completed = std::sync::atomic::AtomicUsize::new(0);
-    let max_item_nodes = std::sync::atomic::AtomicU64::new(0);
-
     std::thread::scope(|s| {
-        for _tid in 0..num_threads {
+        for _ in 0..num_threads {
             s.spawn(|| {
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
-                let mut thread_nodes = 0u64;
-                let mut thread_items = 0usize;
                 loop {
                     if abort.load(Ordering::Relaxed) {
                         break;
@@ -766,12 +755,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
                         &abort,
                     );
 
-                    let item_nodes = nodes.get();
-                    thread_nodes += item_nodes;
-                    thread_items += 1;
-                    total_nodes.fetch_add(item_nodes, Ordering::Relaxed);
-                    items_completed.fetch_add(1, Ordering::Relaxed);
-                    max_item_nodes.fetch_max(item_nodes, Ordering::Relaxed);
+                    total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
 
                     if found {
                         abort.store(true, Ordering::Relaxed);
@@ -784,10 +768,6 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
             });
         }
     });
-
-    eprintln!("Parallel: items_completed={}, max_item_nodes={}",
-        items_completed.load(Ordering::Relaxed),
-        max_item_nodes.load(Ordering::Relaxed));
 
     let result = result.into_inner().unwrap();
     let nodes_visited = total_nodes.load(Ordering::Relaxed);
