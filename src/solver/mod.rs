@@ -3,9 +3,13 @@ mod precompute;
 pub(crate) mod pruning;
 
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use crate::bitboard::Bitboard;
 use crate::board::Board;
+use crate::board::MAX_M;
 use crate::coverage::CoverageCounter;
 use crate::game::Game;
 
@@ -112,6 +116,18 @@ pub fn solve(game: &Game) -> SolveResult {
     solve_with_cancellation(game, &PruningConfig::default())
 }
 
+/// Dispatch to serial or parallel solver based on puzzle size.
+fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
+    let n = game.pieces().len();
+    let area = game.board().height() as usize * game.board().width() as usize;
+
+    if n >= 12 && area >= 36 {
+        solve_with_config_parallel(game, config)
+    } else {
+        solve_with_config(game, config)
+    }
+}
+
 /// Try solving reduced puzzles by removing cancellable groups of M identical pieces.
 /// Exhaustively tries all combinations of per-group cancellation levels, from most
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
@@ -143,8 +159,12 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
         }
     }
 
+    eprintln!("Cancellation: {} cancellable groups: {:?}",
+        cancellable_groups.len(),
+        cancellable_groups.iter().map(|(g, ms)| (shape_groups[*g].1.len(), *ms)).collect::<Vec<_>>());
+
     if cancellable_groups.is_empty() {
-        return solve_with_config(game, config);
+        return solve_dispatch(game, config);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -164,7 +184,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_with_config(game, config);
+        let mut full = solve_dispatch(game, config);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -226,7 +246,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_with_config(game, config);
+    let mut full_result = solve_dispatch(game, config);
     full_result.nodes_visited += total_nodes;
     full_result
 }
@@ -399,7 +419,7 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_config(&reduced_game, config);
+    let result = solve_dispatch(&reduced_game, config);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -534,6 +554,337 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
+    }
+}
+
+/// Hash key for a board state: all plane limbs concatenated.
+/// Board doesn't implement Hash, so we build a key from the planes' limbs.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BoardKey {
+    limbs: [u64; MAX_M * 4],
+}
+
+impl BoardKey {
+    fn from_board(board: &Board) -> Self {
+        let mut limbs = [0u64; MAX_M * 4];
+        for d in 0..board.m() as usize {
+            let plane = board.plane(d as u8);
+            for (k, &l) in plane.limbs.iter().enumerate() {
+                limbs[d * 4 + k] = l;
+            }
+        }
+        Self { limbs }
+    }
+}
+
+/// A single work item for the parallel solver.
+struct WorkItem {
+    board: Board,
+    /// Prefix of the solution (placements for pieces 0..k in sorted order).
+    prefix: Vec<(usize, usize)>,
+    /// min_placement for piece k (for duplicate symmetry breaking across the boundary).
+    min_placement_at_k: usize,
+    /// prev_dup_placement for piece k (for skip table at the boundary).
+    prev_dup_at_k: usize,
+}
+
+/// Parallel dedup solver for large puzzles.
+/// 1. Sorts pieces and precomputes solver data (shared across threads).
+/// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
+/// 3. Spawns worker threads to search from each unique state.
+fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResult {
+    let board = game.board().clone();
+    let pieces = game.pieces();
+    let h = board.height();
+    let w = board.width();
+
+    // Build (original_index, placements) and sort: fewer placements first.
+    // (Same sorting as solve_with_config.)
+    let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i, p.placements(h, w)))
+        .collect();
+    indexed.sort_by(|(i, a_pl), (j, b_pl)| {
+        a_pl.len()
+            .cmp(&b_pl.len())
+            .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
+            .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
+            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+    });
+
+    let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+    let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
+        indexed.into_iter().map(|(_, p)| p).collect();
+
+    let n = pieces.len();
+
+    let is_dup_of_prev: Vec<bool> = (0..n)
+        .map(|i| i > 0 && pieces[order[i]] == pieces[order[i - 1]])
+        .collect();
+
+    let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
+        if i == 0 {
+            return None;
+        }
+        let prev_pl = &all_placements[i - 1];
+        let curr_pl = &all_placements[i];
+        let num_prev = prev_pl.len();
+        let num_curr = curr_pl.len();
+        let is_dup = is_dup_of_prev[i];
+        let mut table = vec![false; num_prev * num_curr];
+        let mut seen = std::collections::HashSet::new();
+        let mut any_skips = false;
+        for a in 0..num_prev {
+            let mask_a = prev_pl[a].2;
+            let b_start = if is_dup { a } else { 0 };
+            for b in b_start..num_curr {
+                let mask_b = curr_pl[b].2;
+                let key = (mask_a & mask_b, mask_a ^ mask_b);
+                if !seen.insert(key) {
+                    table[a * num_curr + b] = true;
+                    any_skips = true;
+                }
+            }
+        }
+        if any_skips { Some(table) } else { None }
+    }).collect();
+
+    let single_cell_start = (0..n)
+        .rposition(|i| pieces[order[i]].cell_count() != 1)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    let m = board.m();
+
+    // Build solver data first -- we need it for pruning during combo enumeration.
+    eprintln!("Parallel: starting precompute");
+    let data = precompute::build_solver_data(
+        pieces,
+        &order,
+        all_placements,
+        is_dup_of_prev,
+        skip_tables,
+        single_cell_start,
+        h,
+        w,
+        m,
+    );
+
+    // Choose K: find the smallest K in {2, 3} such that the product of
+    // placement counts for pieces 0..K is < 50_000.
+    let k = {
+        let mut k = 2;
+        if n >= 3 {
+            let combos_2: usize = data.all_placements[..2].iter().map(|p| p.len()).product();
+            if combos_2 >= 50_000 {
+                k = 2;
+            } else {
+                let combos_3: usize = data.all_placements[..3].iter().map(|p| p.len()).product();
+                if combos_3 < 50_000 {
+                    k = 3;
+                }
+            }
+        }
+        k.min(n)
+    };
+
+    let mut all_combos: Vec<WorkItem> = Vec::new();
+    enumerate_combos_pruned(
+        &board,
+        &data,
+        k,
+        0,
+        0,
+        usize::MAX,
+        &mut Vec::with_capacity(k),
+        &mut all_combos,
+        config,
+    );
+
+    eprintln!("Parallel dedup: k={}, combos={}", k, all_combos.len());
+
+    // Group combos by resulting board state (dedup).
+    // For deduped groups, keep only the first combo (with its boundary info).
+    let mut state_map: HashMap<BoardKey, usize> = HashMap::new();
+    let mut work_items: Vec<WorkItem> = Vec::new();
+
+    for combo in all_combos {
+        let key = BoardKey::from_board(&combo.board);
+        if let std::collections::hash_map::Entry::Vacant(e) = state_map.entry(key) {
+            e.insert(work_items.len());
+            work_items.push(combo);
+        }
+    }
+
+    eprintln!("Parallel dedup: unique states={}", work_items.len());
+
+    // Shared abort flag.
+    let abort = AtomicBool::new(false);
+    let result: Mutex<Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)>> = Mutex::new(None);
+    let total_nodes = std::sync::atomic::AtomicU64::new(0);
+    let next_work = std::sync::atomic::AtomicUsize::new(0);
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+
+    eprintln!("Parallel: spawning {} threads for {} work items", num_threads, work_items.len());
+
+    let items_completed = std::sync::atomic::AtomicUsize::new(0);
+    let max_item_nodes = std::sync::atomic::AtomicU64::new(0);
+
+    std::thread::scope(|s| {
+        for _tid in 0..num_threads {
+            s.spawn(|| {
+                let nodes = Cell::new(0u64);
+                let mut solution = Vec::with_capacity(n);
+                let mut thread_nodes = 0u64;
+                let mut thread_items = 0usize;
+                loop {
+                    if abort.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let idx = next_work.fetch_add(1, Ordering::Relaxed);
+                    if idx >= work_items.len() {
+                        break;
+                    }
+                    let item = &work_items[idx];
+
+                    solution.clear();
+                    nodes.set(0);
+
+                    let found = backtrack::backtrack_abortable(
+                        &item.board,
+                        &data,
+                        k,
+                        item.min_placement_at_k,
+                        item.prev_dup_at_k,
+                        &mut solution,
+                        &nodes,
+                        config,
+                        &abort,
+                    );
+
+                    let item_nodes = nodes.get();
+                    thread_nodes += item_nodes;
+                    thread_items += 1;
+                    total_nodes.fetch_add(item_nodes, Ordering::Relaxed);
+                    items_completed.fetch_add(1, Ordering::Relaxed);
+                    max_item_nodes.fetch_max(item_nodes, Ordering::Relaxed);
+
+                    if found {
+                        abort.store(true, Ordering::Relaxed);
+                        let mut guard = result.lock().unwrap();
+                        if guard.is_none() {
+                            *guard = Some((item.prefix.clone(), solution.clone()));
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    eprintln!("Parallel: items_completed={}, max_item_nodes={}",
+        items_completed.load(Ordering::Relaxed),
+        max_item_nodes.load(Ordering::Relaxed));
+
+    let result = result.into_inner().unwrap();
+    let nodes_visited = total_nodes.load(Ordering::Relaxed);
+
+    let solution = result.map(|(prefix, suffix)| {
+        let mut sorted_solution = prefix;
+        sorted_solution.extend_from_slice(&suffix);
+        // Map solution back to original piece order.
+        let mut solution = vec![(0, 0); n];
+        for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
+            solution[order[sorted_idx]] = (row, col);
+        }
+        solution
+    });
+
+    SolveResult {
+        solution,
+        nodes_visited,
+    }
+}
+
+/// Recursively enumerate all valid combos of the first `k` pieces.
+/// Respects duplicate symmetry breaking and skip tables.
+/// At the base case (piece_idx == k), records the combo with boundary info
+/// needed to correctly start the backtrack at piece k.
+fn enumerate_combos_pruned(
+    board: &Board,
+    data: &SolverData,
+    k: usize,
+    piece_idx: usize,
+    min_placement: usize,
+    prev_dup_placement: usize,
+    prefix: &mut Vec<(usize, usize)>,
+    results: &mut Vec<WorkItem>,
+    config: &PruningConfig,
+) {
+    if piece_idx == k {
+        results.push(WorkItem {
+            board: board.clone(),
+            prefix: prefix.clone(),
+            min_placement_at_k: min_placement,
+            prev_dup_at_k: prev_dup_placement,
+        });
+        return;
+    }
+
+    let placements = &data.all_placements[piece_idx];
+    let mut board = board.clone();
+
+    for pl_idx in 0..placements.len() {
+        // Duplicate symmetry breaking.
+        if config.duplicate_pruning && pl_idx < min_placement {
+            continue;
+        }
+
+        // Skip pair combos with same net effect as a previously tried combo.
+        if prev_dup_placement < usize::MAX {
+            if let Some(ref table) = data.skip_tables[piece_idx] {
+                let num_curr = placements.len();
+                if table[prev_dup_placement * num_curr + pl_idx] {
+                    continue;
+                }
+            }
+        }
+
+        let (row, col, mask) = placements[pl_idx];
+
+        board.apply_piece(mask);
+        prefix.push((row, col));
+
+        let is_next_dup = config.duplicate_pruning
+            && piece_idx + 1 < data.all_placements.len()
+            && data.is_dup_of_prev[piece_idx + 1];
+
+        let next_min = if is_next_dup { pl_idx } else { 0 };
+        let next_prev_dup = if piece_idx + 1 < data.all_placements.len()
+            && data.skip_tables[piece_idx + 1].is_some()
+        {
+            pl_idx
+        } else {
+            usize::MAX
+        };
+
+        enumerate_combos_pruned(
+            &board,
+            data,
+            k,
+            piece_idx + 1,
+            next_min,
+            next_prev_dup,
+            prefix,
+            results,
+            config,
+        );
+
+        prefix.pop();
+        board.undo_piece(mask);
     }
 }
 

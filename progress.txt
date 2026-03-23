@@ -1,0 +1,63 @@
+=== Shapeshifter Solver Optimization Log ===
+Started: Mon Mar 23 04:37:29 PM UTC 2026
+Goal: Solve L47 historical, improve times on later levels
+Current state: L37/L41/L43 timeout at 120s
+
+=== Baseline ===
+L36: 86M nodes, 18s
+L37: TIMEOUT (6x6/M3, 15 pieces)
+L38: 8.9M nodes, 1.8s
+L39: 207M nodes, 44s
+L40: 444M nodes, 92s
+L41 hard: TIMEOUT (8x7/M2, 15 pieces, coverage=2.38)
+L41 easy: 16M nodes, 1.8s
+
+
+=== Attempt 1: Parallel dedup solver ===
+Status: IN PROGRESS (subagent)
+Approach: Enumerate first K pieces' combos, dedup by board state, 
+  create work queue, parallel backtrack with abort flag.
+Expected: Use all 32 cores, dedup saves ~5% redundant states.
+  Wall time should improve by ~10-20x on hard puzzles.
+
+=== Attempt 2: Mid-tree pruning ideation ===
+Status: IN PROGRESS (subagent)
+Approach: Brainstorm move ordering, symmetry, domain tricks 
+  specifically for the middle of the search tree (pieces 3-10).
+
+=== Previously attempted and failed ===
+- Subset reachability: all ≤14-cell subsets 100% saturated
+- GF(2) linear algebra: rank 55/56, per-placement filter catches nothing
+- Parity/weight partitions: all saturated with big pieces  
+- Spatial locality (band supply, zonal allocation): surplus too large
+- SAT (varisat): chokes at 6×6
+- MIP (HiGHS): 50-100× slower than backtracker
+- Backjumping: prunes that provide conflict levels don't fire
+- Dynamic recomputation with cell locking: locking rarely fires
+- Piece-shaped subsets: 100% saturated
+- Concentric ring weight-tuples: no improvement
+- Vertical/horizontal split partitions: saturated
+- Meet-in-the-middle: state space too large for useful dedup
+- Endgame lookup (last K pieces): endgame already prunes well
+
+=== Attempt 1 Results: Parallel dedup solver ===
+Status: PARTIAL SUCCESS
+- L37 (6x6/M3, was TIMEOUT at 120s serial): SOLVED in 24.4s with 32 cores!
+- L47 (8x7/M3): 32 cores saturated at 3141% CPU but >60s. Still hard.
+- Dedup ratio: 1.0x (no transpositions at depth 3 — confirms earlier analysis)
+- The speedup is purely from parallelism (~5-10x wall time reduction)
+- 3840 work items distribute well across 32 threads
+
+Next: Try with longer timeout for L47. Also run historical benchmark.
+
+=== Attempt 1 Final Results ===
+Parallel dedup solver with cancellation-first:
+- L43 #1: TIMEOUT → 43.6s SOLVED
+- L44: NEW → 20.9s SOLVED  
+- L46: NEW → 11.0s SOLVED
+- L37: TIMEOUT → 24.4s SOLVED (when run directly)
+- Total: 33-34 solved (was 31)
+- Timeouts: L37 (120s limit), L40, L41-hard, L47
+
+Tradeoff: easy puzzles ~2-5× slower due to parallel overhead.
+The cancellation-first approach is critical for M=3 puzzles.
