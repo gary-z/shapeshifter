@@ -61,9 +61,10 @@ pub(crate) fn build_solver_data(
     assert!(n < MAX_PIECES, "too many pieces for LineFamily arrays");
 
     // --- Rows ---
+    // Per-line budget removed: subsumed by full-row subset reachability.
+    // Only the independent-set DP (global budget + gap spacing) is kept.
     let mut rows_family = LineFamily::new();
     rows_family.num_lines = bh;
-    rows_family.has_per_line_budget = true;
     for r in 0..bh {
         for c in 0..bw {
             rows_family.masks[r].set_bit((r * 15 + c) as u32);
@@ -71,31 +72,14 @@ pub(crate) fn build_solver_data(
     }
     for i in (0..n).rev() {
         let piece = &pieces[order[i]];
-        let ph = piece.height() as usize;
-        let pw = piece.width() as usize;
         rows_family.remaining_budget[i] = rows_family.remaining_budget[i + 1] + piece.max_row_thickness();
         rows_family.suffix_max_span[i] = rows_family.suffix_max_span[i + 1].max(piece.height());
-        // Per-row budget.
-        let mut row_thick = [0u32; 5];
-        for pr in 0..ph {
-            let row_bits = (piece.shape() >> (pr as u32 * 15)).limbs[0] & ((1u64 << pw) - 1);
-            row_thick[pr] = row_bits.count_ones();
-        }
-        for r in 0..bh {
-            let p_min = if r + ph > bh { r + ph - bh } else { 0 };
-            let p_max = r.min(ph - 1);
-            let mut max_t = 0u32;
-            for p in p_min..=p_max {
-                if row_thick[p] > max_t { max_t = row_thick[p]; }
-            }
-            rows_family.per_line_budget[i][r] = rows_family.per_line_budget[i + 1][r] + max_t;
-        }
     }
 
     // --- Cols ---
+    // Per-line budget removed: subsumed by full-column subset reachability.
     let mut cols_family = LineFamily::new();
     cols_family.num_lines = bw;
-    cols_family.has_per_line_budget = true;
     for c in 0..bw {
         for r in 0..bh {
             cols_family.masks[c].set_bit((r * 15 + c) as u32);
@@ -103,28 +87,8 @@ pub(crate) fn build_solver_data(
     }
     for i in (0..n).rev() {
         let piece = &pieces[order[i]];
-        let ph = piece.height() as usize;
-        let pw = piece.width() as usize;
         cols_family.remaining_budget[i] = cols_family.remaining_budget[i + 1] + piece.max_col_thickness();
         cols_family.suffix_max_span[i] = cols_family.suffix_max_span[i + 1].max(piece.width());
-        // Per-col budget.
-        let mut col_thick = [0u32; 5];
-        for pc in 0..pw {
-            for pr in 0..ph {
-                if piece.shape().get_bit((pr * 15 + pc) as u32) {
-                    col_thick[pc] += 1;
-                }
-            }
-        }
-        for c in 0..bw {
-            let q_min = if c + pw > bw { c + pw - bw } else { 0 };
-            let q_max = c.min(pw - 1);
-            let mut max_t = 0u32;
-            for q in q_min..=q_max {
-                if col_thick[q] > max_t { max_t = col_thick[q]; }
-            }
-            cols_family.per_line_budget[i][c] = cols_family.per_line_budget[i + 1][c] + max_t;
-        }
     }
 
     // --- Diags (main diagonals: d = r - c) ---
@@ -721,8 +685,36 @@ pub(crate) fn build_solver_data(
             add_subset(cells, &mut subsets, &mut seen_cell_sets);
         }
 
+        // Full diagonals (r - c = constant) and anti-diagonals (r + c = constant).
+        // For 8×7 M=2: longest diagonal = 7 cells → 128 states.
+        // add_subset filters out diagonals shorter than 3 cells automatically.
+        for d in 0..(bh + bw - 1) {
+            // Main diagonal: r - c = d - (bw - 1). Cells where r - c = constant.
+            let diag_offset = d as i32 - (bw as i32 - 1);
+            let cells: Vec<u32> = (0..bh)
+                .filter_map(|r| {
+                    let c = r as i32 - diag_offset;
+                    if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
+                })
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+
+            // Anti-diagonal: r + c = d.
+            let cells: Vec<u32> = (0..bh)
+                .filter_map(|r| {
+                    let c = d as i32 - r as i32;
+                    if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
+                })
+                .collect();
+            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
         subsets
     };
+
+    let weight_tuple_checks = build_weight_tuple_checks(
+        bh, bw, m, n, &all_placements, order, pieces,
+    );
 
     SolverData {
         all_placements,
@@ -749,5 +741,215 @@ pub(crate) fn build_solver_data(
         w,
         parity_partitions: partitions,
         subset_checks,
+        weight_tuple_checks,
     }
+}
+
+/// Build weight-tuple reachability checks for groups of disjoint cell sets.
+fn build_weight_tuple_checks(
+    bh: usize, bw: usize, m: u8, n: usize,
+    all_placements: &[Vec<(usize, usize, Bitboard)>],
+    order: &[usize],
+    pieces: &[crate::piece::Piece],
+) -> Vec<WeightTupleReachability> {
+    let m_val = m as u32;
+    let max_total_configs = 50_000; // budget: skip if state space too large
+
+    // Helper: build one WeightTupleReachability from a list of group masks.
+    let build_wt = |groups: Vec<(Bitboard, usize)>| -> Option<WeightTupleReachability> {
+        let num_groups = groups.len();
+        if num_groups < 2 { return None; }
+
+        let group_masks: Vec<Bitboard> = groups.iter().map(|&(mask, _)| mask).collect();
+        let group_widths: Vec<usize> = groups.iter().map(|&(_, w)| w).collect();
+        let max_weights: Vec<u32> = group_widths.iter()
+            .map(|&w| w as u32 * (m_val - 1))
+            .collect();
+
+        // Compute strides and total configs.
+        let mut strides = vec![0usize; num_groups];
+        let mut num_configs = 1usize;
+        for g in (0..num_groups).rev() {
+            strides[g] = num_configs;
+            num_configs = num_configs.checked_mul(max_weights[g] as usize + 1)?;
+        }
+        if num_configs > max_total_configs { return None; }
+
+        // Per piece: for each placement, compute (cells_covered_in_group, cells_count_in_group)
+        // per group. At runtime, the weight change depends on how many covered cells are non-zero
+        // (unknown), so we enumerate all valid splits.
+        //
+        // For a group with current weight w and width W:
+        //   piece covers C cells in this group.
+        //   Let nz = number of covered cells that are non-zero.
+        //   nz ∈ [max(0, C - (W - ceil(w/(m-1)))), min(C, floor(w/1))]
+        //   ... but for general M this is complex. Simpler sound bound:
+        //   nz ∈ [0, min(C, W)]  (always valid, slightly loose for large w or small w)
+        //   Weight change: each non-zero cell hit decreases weight by 1.
+        //                  each zero cell hit increases weight by (M-1).
+        //   new_w = w - nz + (M-1) * (C - nz) = w + (M-1)*C - M*nz
+        //
+        // Tighter for M=2: nz ∈ [max(0, C - (W - w)), min(C, w)]
+        //   since weight = count of 1-cells for M=2.
+
+        // Precompute per-piece per-group coverage counts from placements.
+        struct PlacementEffect {
+            group_counts: Vec<u32>, // cells covered per group
+        }
+
+        let mut piece_effects: Vec<Vec<PlacementEffect>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut effects = Vec::new();
+            for &(_, _, mask) in &all_placements[i] {
+                let gc: Vec<u32> = group_masks.iter()
+                    .map(|&gm| (mask & gm).count_ones())
+                    .collect();
+                // Dedup: skip if same coverage pattern already exists.
+                if !effects.iter().any(|e: &PlacementEffect| e.group_counts == gc) {
+                    effects.push(PlacementEffect { group_counts: gc });
+                }
+            }
+            piece_effects.push(effects);
+        }
+
+        // Suffix DP.
+        let total = (n + 1) * num_configs;
+        let mut reachable = vec![0u8; total];
+        reachable[n * num_configs] = 1; // target: all weights = 0
+
+        let mut new_weights = vec![0u32; num_groups];
+
+        for i in (0..n).rev() {
+            let next_base = (i + 1) * num_configs;
+            let cur_base = i * num_configs;
+
+            for config in 0..num_configs {
+                if reachable[cur_base + config] != 0 { continue; }
+
+                // Decode weight-tuple.
+                let mut weights = [0u32; 8];
+                let mut tmp = config;
+                for g in 0..num_groups {
+                    let dim = max_weights[g] as usize + 1;
+                    weights[g] = (tmp / strides[g]) as u32;
+                    tmp %= strides[g];
+                }
+
+                'placement: for effect in &piece_effects[i] {
+                    // For each group, compute valid new-weight range.
+                    // new_w = w + (M-1)*C - M*nz, where nz ∈ [nz_min, nz_max].
+                    // For M=2: nz ∈ [max(0, C-(W-w)), min(C, w)].
+                    // General: nz ∈ [max(0, C-(W-w_ceil)), min(C, w_floor)]
+                    //   where w_floor = w (at most w non-zero cells) — LOOSE but sound.
+                    //   Actually more precise: nz ≤ count of non-zero cells in group ≤ W.
+                    //   And nz ≤ C. And (C - nz) ≤ count of zero cells = W - nonzero_count.
+                    //   For M=2: nonzero_count = w, so nz ∈ [max(0, C-(W-w)), min(C, w)].
+                    //   For M≥3: nonzero_count ∈ [ceil(w/(M-1)), min(w, W)].
+                    //     nz ∈ [max(0, C - (W - ceil(w/(M-1)))), min(C, min(w, W))]
+                    //     Using the loosest sound bound: nz ∈ [max(0, C-W), min(C, W)]
+
+                    // Use recursive enumeration over groups.
+                    // For efficiency, iterate group transitions as nested loops
+                    // (unrolled to avoid recursion overhead).
+                    fn enumerate_transitions(
+                        g: usize, num_groups: usize, m_val: u32,
+                        weights: &[u32; 8], effect: &PlacementEffect,
+                        group_widths: &[usize], max_weights: &[u32],
+                        strides: &[usize],
+                        new_weights: &mut Vec<u32>,
+                        reachable: &[u8], next_base: usize, num_configs: usize,
+                    ) -> bool {
+                        if g == num_groups {
+                            let mut idx = 0;
+                            for gg in 0..num_groups {
+                                idx += new_weights[gg] as usize * strides[gg];
+                            }
+                            return reachable[next_base + idx] != 0;
+                        }
+
+                        let w = weights[g];
+                        let c = effect.group_counts[g];
+                        let gw = group_widths[g] as u32;
+
+                        if c == 0 {
+                            new_weights[g] = w;
+                            return enumerate_transitions(
+                                g + 1, num_groups, m_val, weights, effect,
+                                group_widths, max_weights, strides,
+                                new_weights, reachable, next_base, num_configs,
+                            );
+                        }
+
+                        // Bounds on nz (non-zero cells hit).
+                        let nz_min = if m_val == 2 {
+                            c.saturating_sub(gw - w)
+                        } else {
+                            c.saturating_sub(gw)
+                        };
+                        let nz_max = if m_val == 2 {
+                            c.min(w)
+                        } else {
+                            c.min(gw)
+                        };
+
+                        for nz in nz_min..=nz_max {
+                            let new_w_raw = w as i64 + (m_val - 1) as i64 * (c - nz) as i64 - nz as i64;
+                            if new_w_raw < 0 || new_w_raw > max_weights[g] as i64 { continue; }
+                            new_weights[g] = new_w_raw as u32;
+                            if enumerate_transitions(
+                                g + 1, num_groups, m_val, weights, effect,
+                                group_widths, max_weights, strides,
+                                new_weights, reachable, next_base, num_configs,
+                            ) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+
+                    if enumerate_transitions(
+                        0, num_groups, m_val, &weights, effect,
+                        &group_widths, &max_weights, &strides,
+                        &mut new_weights, &reachable, next_base, num_configs,
+                    ) {
+                        reachable[cur_base + config] = 1;
+                        break 'placement;
+                    }
+                }
+            }
+        }
+
+        Some(WeightTupleReachability {
+            group_masks, group_widths, num_groups, max_weights, strides, num_configs, m,
+            reachable,
+        })
+    };
+
+    let mut checks = Vec::new();
+
+    // Row triples: overlapping windows of 3 consecutive rows.
+    if bh >= 3 {
+        for r0 in 0..=bh - 3 {
+            let groups: Vec<(Bitboard, usize)> = (r0..r0 + 3).map(|r| {
+                let mut mask = Bitboard::ZERO;
+                for c in 0..bw { mask.set_bit((r * 15 + c) as u32); }
+                (mask, bw)
+            }).collect();
+            if let Some(wt) = build_wt(groups) { checks.push(wt); }
+        }
+    }
+
+    // Column triples: overlapping windows of 3 consecutive columns.
+    if bw >= 3 {
+        for c0 in 0..=bw - 3 {
+            let groups: Vec<(Bitboard, usize)> = (c0..c0 + 3).map(|c| {
+                let mut mask = Bitboard::ZERO;
+                for r in 0..bh { mask.set_bit((r * 15 + c) as u32); }
+                (mask, bh)
+            }).collect();
+            if let Some(wt) = build_wt(groups) { checks.push(wt); }
+        }
+    }
+
+    checks
 }

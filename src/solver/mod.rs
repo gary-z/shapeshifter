@@ -104,6 +104,7 @@ pub(crate) struct SolverData {
     pub(crate) w: u8,
     pub(crate) parity_partitions: Vec<ParityPartition>,
     pub(crate) subset_checks: Vec<SubsetReachability>,
+    pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
 }
 
 /// Solve with all pruning enabled. Tries cancellation reduction first.

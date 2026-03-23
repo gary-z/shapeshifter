@@ -79,6 +79,7 @@ pub(crate) fn backtrack(
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
 
     // Compute locked mask: cells at 0 where remaining coverage < M.
     let locked_mask = if config.cell_locking {

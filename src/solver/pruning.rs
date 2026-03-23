@@ -94,6 +94,65 @@ pub(crate) struct ParityPartition {
 }
 
 
+/// Weight-tuple reachability for a set of disjoint cell groups.
+/// Each group's "weight" = Σ (M-d) for non-zero cells. The DP tracks which
+/// weight-tuples are achievable by remaining pieces. Transitions are
+/// over-approximated: for each placement, we allow all weight changes
+/// consistent with the group's current weight (since we don't know which
+/// specific cells are at which values).
+pub(crate) struct WeightTupleReachability {
+    /// Masks for each group (disjoint cell sets).
+    pub(crate) group_masks: Vec<Bitboard>,
+    /// Width (number of cells) per group, for transition bounds.
+    pub(crate) group_widths: Vec<usize>,
+    /// Number of groups.
+    pub(crate) num_groups: usize,
+    /// Max weight per group: group_width * (M-1).
+    pub(crate) max_weights: Vec<u32>,
+    /// Product of (max_weight+1) for indexing: strides[i] = Π_{j>i} (max_weights[j]+1).
+    pub(crate) strides: Vec<usize>,
+    /// Total number of weight-tuple configs.
+    pub(crate) num_configs: usize,
+    /// M value.
+    pub(crate) m: u8,
+    /// Flat reachability: reachable[piece_idx * num_configs + config] = 1 if achievable.
+    pub(crate) reachable: Vec<u8>,
+}
+
+impl WeightTupleReachability {
+    /// Encode a weight-tuple into a flat index.
+    #[inline]
+    pub(crate) fn encode(&self, weights: &[u32]) -> usize {
+        let mut idx = 0;
+        for g in 0..self.num_groups {
+            idx += weights[g] as usize * self.strides[g];
+        }
+        idx
+    }
+
+    /// Compute the weight of a group from the board state.
+    #[inline]
+    pub(crate) fn group_weight(&self, board: &Board, group_idx: usize) -> u32 {
+        let mask = self.group_masks[group_idx];
+        let mut w = 0u32;
+        for d in 1..self.m {
+            w += (self.m - d) as u32 * (board.plane(d) & mask).count_ones();
+        }
+        w
+    }
+
+    /// Check if the current board's weight-tuple is reachable from piece_idx.
+    #[inline]
+    pub(crate) fn check(&self, board: &Board, piece_idx: usize) -> bool {
+        let mut weights = [0u32; 8]; // max 8 groups
+        for g in 0..self.num_groups {
+            weights[g] = self.group_weight(board, g);
+        }
+        let idx = self.encode(&weights);
+        self.reachable[piece_idx * self.num_configs + idx] != 0
+    }
+}
+
 /// A small subset of board cells for local reachability pruning.
 /// The suffix DP tracks which configurations of the subset cells are achievable.
 pub(crate) struct SubsetReachability {
@@ -320,6 +379,15 @@ pub(crate) fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usiz
 pub(crate) fn prune_subset_reachability(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     for subset in &data.subset_checks {
         if !subset.check(board, piece_idx) {
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn prune_weight_tuples(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    for wt in &data.weight_tuple_checks {
+        if !wt.check(board, piece_idx) {
             return false;
         }
     }
