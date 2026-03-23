@@ -96,3 +96,31 @@ Interactive solver (parallel, 32 cores):
 - L44: 21s ✓
 - L46: 11-30s ✓
 - L47: >5min ✗ (hard NP instance)
+
+=== Future Direction: Dynamic Variable Ordering ===
+The ideation agent proposed dynamically reordering pieces at mid-tree
+levels (3-10) based on which remaining piece has the fewest valid
+placements given the current locked_mask. This is the MRV heuristic 
+from constraint programming. Expected 3-10× node reduction.
+
+Blocker: all suffix arrays are indexed by static piece order.
+Options:
+1. Virtual order indirection (100+ lines refactor)
+2. Skip suffix-based prunes when reordering (lose some pruning)
+3. Only reorder at a few key levels (every 3rd level)
+
+This is the most promising single-thread improvement remaining.
+
+=== Session Complete ===
+Total improvements achieved:
+- Counting sort: 12% speedup (eliminated O(n²) sort overhead)
+- Component checks disabled: 12% speedup
+- Subset reachability: full rows/cols/diags, center subsets, no-false-zero-effect
+- Weight-tuple DP: cross-row demand pruning
+- Pair-merge reduction (M=2)
+- Process-pool benchmarks with hard kill
+- Parallel dedup solver: cancellation + parallel fallback
+  → L43, L44, L46 newly solved
+  → L37 solved in 24s (was TIMEOUT)
+
+Levels consistently solvable: L1-L35 (100%), L36-L45 (80%+ with restarts)
