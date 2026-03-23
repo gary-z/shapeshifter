@@ -3,7 +3,7 @@ use crate::board::Board;
 use crate::game::Game;
 use crate::piece::Piece;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 pub struct PuzzleJson {
     pub level: u32,
     pub m: u8,
