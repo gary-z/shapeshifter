@@ -80,3 +80,19 @@ Key insight: NP-hardness of the problem means some instances are
 genuinely intractable. The parallel solver gives ~10-30× wall time 
 improvement by using all 32 cores, which is enough to push the 
 solvability frontier from L36 to L46.
+
+=== Fixed: Benchmark oversubscription ===
+solve_one (benchmarks) → serial solver
+solve (interactive) → cancellation + parallel fallback
+
+Final simulation results (serial, 5s timeout, 10 games each):
+- 100% through L35
+- 80%+ through L45 with restarts 
+- High-M levels solvable: L55-57, L76, L86-87, L91-95
+
+Interactive solver (parallel, 32 cores):
+- L37: 24s ✓
+- L43: 6-44s ✓
+- L44: 21s ✓
+- L46: 11-30s ✓
+- L47: >5min ✗ (hard NP instance)
