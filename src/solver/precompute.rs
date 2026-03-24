@@ -270,7 +270,7 @@ pub(crate) fn build_solver_data(
 
     // Precompute subset reachability for border regions.
     let max_subset_k: usize = match m {
-        2 => 10,   // 1024 states
+        2 => 14,   // 16384 states — enables full row pairs on 7-wide boards
         3 => 6,    // 729 states
         4 => 5,    // 625 states (reduced from previous 4)
         _ => 4,    // 625 states for M=5
@@ -707,6 +707,28 @@ pub(crate) fn build_solver_data(
                 })
                 .collect();
             add_subset(cells, &mut subsets, &mut seen_cell_sets);
+        }
+
+        // Adjacent row pairs (M=2 only): 2 consecutive rows as one subset.
+        // For width 7: 14 cells → 2^14 = 16384 states.
+        if m == 2 && bh >= 2 && 2 * bw <= max_subset_k {
+            for r0 in 0..bh - 1 {
+                let cells: Vec<u32> = (r0..r0 + 2)
+                    .flat_map(|r| (0..bw).map(move |c| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
+        }
+
+        // Adjacent column pairs (M=2 only): 2 consecutive columns.
+        // For height 8: 16 cells → 2^16 = 65536 — only if within budget.
+        if m == 2 && bw >= 2 && 2 * bh <= max_subset_k {
+            for c0 in 0..bw - 1 {
+                let cells: Vec<u32> = (c0..c0 + 2)
+                    .flat_map(|c| (0..bh).map(move |r| (r * 15 + c) as u32))
+                    .collect();
+                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            }
         }
 
         subsets
