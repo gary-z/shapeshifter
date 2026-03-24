@@ -116,10 +116,9 @@ pub fn solve(game: &Game) -> SolveResult {
     solve_with_cancellation(game, &PruningConfig::default())
 }
 
-/// Always use serial solver. Used by cancellation combos and pair-merge
-/// where serial + cancellation is faster than parallel.
+/// Always use parallel solver.
 fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
-    solve_with_config(game, config)
+    solve_with_config_parallel(game, config)
 }
 
 /// Try solving reduced puzzles by removing cancellable groups of M identical pieces.
@@ -154,14 +153,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 
     if cancellable_groups.is_empty() {
-        // No cancellation possible — go directly to full-game solve.
-        // Use parallel for large puzzles.
-        let n = pieces.len();
-        let area = h as usize * w as usize;
-        if n >= 12 && area >= 36 {
-            return solve_with_config_parallel(game, config);
-        }
-        return solve_with_config(game, config);
+        return solve_with_config_parallel(game, config);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -181,11 +173,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
         if result.solution.is_some() {
             return result;
         }
-        let mut full = if pieces.len() >= 12 && (h as usize * w as usize) >= 36 {
-            solve_with_config_parallel(game, config)
-        } else {
-            solve_with_config(game, config)
-        };
+        let mut full = solve_with_config_parallel(game, config);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -251,11 +239,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     let mut full_result = {
         let n = pieces.len();
         let area = h as usize * w as usize;
-        if n >= 12 && area >= 36 {
-            solve_with_config_parallel(game, config)
-        } else {
-            solve_with_config(game, config)
-        }
+        solve_with_config_parallel(game, config)
     };
     full_result.nodes_visited += total_nodes;
     full_result
