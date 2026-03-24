@@ -116,16 +116,10 @@ pub fn solve(game: &Game) -> SolveResult {
     solve_with_cancellation(game, &PruningConfig::default())
 }
 
-/// Dispatch to serial or parallel solver based on puzzle size.
+/// Always use serial solver. Used by cancellation combos and pair-merge
+/// where serial + cancellation is faster than parallel.
 fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
-    let n = game.pieces().len();
-    let area = game.board().height() as usize * game.board().width() as usize;
-
-    if n >= 12 && area >= 36 {
-        solve_with_config_parallel(game, config)
-    } else {
-        solve_with_config(game, config)
-    }
+    solve_with_config(game, config)
 }
 
 /// Try solving reduced puzzles by removing cancellable groups of M identical pieces.
@@ -242,7 +236,16 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config);
+    // Use parallel for large puzzles (cancellation already tried above).
+    let mut full_result = {
+        let n = pieces.len();
+        let area = h as usize * w as usize;
+        if n >= 12 && area >= 36 {
+            solve_with_config_parallel(game, config)
+        } else {
+            solve_with_config(game, config)
+        }
+    };
     full_result.nodes_visited += total_nodes;
     full_result
 }
