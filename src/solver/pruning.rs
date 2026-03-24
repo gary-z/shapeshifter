@@ -512,60 +512,34 @@ pub(crate) fn prune_distance_partition(
         cluster_cells[j] = clusters[j].count_ones();
     }
 
-    // Build per-piece reach masks, capacities, and per-cluster max overlap.
-    // max_overlap[i][j] = max cells any single placement of piece i overlaps with cluster j.
-    // This is tighter than binary reachability: a 5-cell piece reaching a cluster
-    // might only overlap 2 cells with it in any placement.
+    // Build per-piece reach masks, capacities, and reach-cluster overlap counts.
+    // reach_overlap[i][j] = |reach[i] ∩ cluster[j]|: upper bound on how many cluster
+    // cells any single placement can cover (since each placement ⊆ reach).
+    // This is tighter than min(piece_caps, cluster_cells) and costs only one
+    // extra bitboard AND + popcount per piece-cluster pair.
     let mut piece_caps = [0u32; 36];
     let mut reach_mask = [0u16; 36];
-    let mut max_overlap = [[0u32; 16]; 36];
-
-    // Estimate cost of per-placement overlap scan to avoid regression on early nodes.
-    let total_placements: usize = (piece_idx..data.all_placements.len())
-        .map(|pi| data.all_placements[pi].len())
-        .sum();
-    let use_max_overlap = total_placements * num_clusters <= 60_000;
+    let mut reach_overlap = [[0u32; 16]; 36];
 
     for pi in piece_idx..data.reaches.len() {
         let i = pi - piece_idx;
         piece_caps[i] = data.cell_counts[pi];
-        // Fast pre-check: if the piece's full reach doesn't touch a cluster, skip.
         for j in 0..num_clusters {
-            if !(data.reaches[pi] & clusters[j]).is_zero() {
+            let overlap = (data.reaches[pi] & clusters[j]).count_ones();
+            if overlap > 0 {
                 reach_mask[i] |= 1 << j;
-            }
-        }
-        if use_max_overlap {
-            // Compute per-cluster max overlap from individual placements.
-            if reach_mask[i] != 0 {
-                for &(_, _, mask) in &data.all_placements[pi] {
-                    for j in 0..num_clusters {
-                        if reach_mask[i] & (1 << j) != 0 {
-                            let ov = (mask & clusters[j]).count_ones();
-                            if ov > max_overlap[i][j] {
-                                max_overlap[i][j] = ov;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Fallback: cap by min(piece_cells, cluster_cells) — still tighter than raw piece_caps.
-            for j in 0..num_clusters {
-                if reach_mask[i] & (1 << j) != 0 {
-                    max_overlap[i][j] = piece_caps[i].min(cluster_cells[j]);
-                }
+                reach_overlap[i][j] = overlap.min(piece_caps[i]);
             }
         }
     }
 
     // Per-cluster independent check (Hall's condition on singletons).
-    // Use per-piece max overlap for a tighter supply bound.
+    // Use reach-cluster overlap as a tighter supply bound per piece.
     for j in 0..num_clusters {
         let mut supply = 0u32;
         for i in 0..num_remaining {
             if reach_mask[i] & (1 << j) != 0 {
-                supply += max_overlap[i][j];
+                supply += reach_overlap[i][j];
             }
         }
         if supply < cluster_demands[j] {
@@ -575,18 +549,15 @@ pub(crate) fn prune_distance_partition(
 
     // Hall's condition on pairs: for every pair of clusters {j1, j2},
     // the total supply of pieces reaching j1 OR j2 must cover both demands.
-    // Cap each piece's contribution by the total cells in the pair.
+    // Cap each piece's contribution by its reach-overlap sum across the pair.
     for j1 in 0..num_clusters {
         for j2 in (j1 + 1)..num_clusters {
             let pair_demand = cluster_demands[j1] + cluster_demands[j2];
             let pair_mask = (1u16 << j1) | (1u16 << j2);
-            let pair_cells = cluster_cells[j1] + cluster_cells[j2];
             let mut supply = 0u32;
             for i in 0..num_remaining {
                 if reach_mask[i] & pair_mask != 0 {
-                    // Piece contributes at most its cell count, and at most the
-                    // total non-zero cells in the pair (can't overlap more than exist).
-                    let cap = piece_caps[i].min(pair_cells);
+                    let cap = (reach_overlap[i][j1] + reach_overlap[i][j2]).min(piece_caps[i]);
                     supply += cap;
                 }
                 if supply >= pair_demand { break; }
@@ -604,11 +575,12 @@ pub(crate) fn prune_distance_partition(
                 for j3 in (j2 + 1)..num_clusters {
                     let triple_demand = cluster_demands[j1] + cluster_demands[j2] + cluster_demands[j3];
                     let triple_mask = (1u16 << j1) | (1u16 << j2) | (1u16 << j3);
-                    let triple_cells = cluster_cells[j1] + cluster_cells[j2] + cluster_cells[j3];
                     let mut supply = 0u32;
                     for i in 0..num_remaining {
                         if reach_mask[i] & triple_mask != 0 {
-                            supply += piece_caps[i].min(triple_cells);
+                            let cap = (reach_overlap[i][j1] + reach_overlap[i][j2]
+                                + reach_overlap[i][j3]).min(piece_caps[i]);
+                            supply += cap;
                         }
                         if supply >= triple_demand { break; }
                     }
@@ -630,12 +602,12 @@ pub(crate) fn prune_distance_partition(
                             + cluster_demands[j3] + cluster_demands[j4];
                         let quad_mask = (1u16 << j1) | (1u16 << j2)
                             | (1u16 << j3) | (1u16 << j4);
-                        let quad_cells = cluster_cells[j1] + cluster_cells[j2]
-                            + cluster_cells[j3] + cluster_cells[j4];
                         let mut supply = 0u32;
                         for i in 0..num_remaining {
                             if reach_mask[i] & quad_mask != 0 {
-                                supply += piece_caps[i].min(quad_cells);
+                                let cap = (reach_overlap[i][j1] + reach_overlap[i][j2]
+                                    + reach_overlap[i][j3] + reach_overlap[i][j4]).min(piece_caps[i]);
+                                supply += cap;
                             }
                             if supply >= quad_demand { break; }
                         }
