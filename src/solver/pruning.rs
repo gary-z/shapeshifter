@@ -460,10 +460,10 @@ fn flood_fill_rect(seed_bit: u32, nz: Bitboard, max_h: usize, max_w: usize, boar
     cluster
 }
 
-/// Distance-based partition pruning.
+/// Distance-based partition pruning with Hall's condition checks.
 /// Partitions non-zero cells into clusters where no piece can span between clusters.
-/// For each cluster, checks that reachable pieces have enough bits.
-/// Also checks that the sum of per-cluster minimum piece counts ≤ remaining pieces.
+/// Uses per-cluster reachability checks, then checks Hall's condition on cluster
+/// subsets to detect cross-cluster conflicts where clusters compete for the same pieces.
 pub(crate) fn prune_distance_partition(
     board: &Board,
     data: &SolverData,
@@ -473,8 +473,6 @@ pub(crate) fn prune_distance_partition(
     let max_w = data.line_families[1].suffix_max_span[piece_idx] as usize;
     if max_h == 0 || max_w == 0 { return true; }
 
-    let remaining = data.all_placements.len() - piece_idx;
-
     // Find all non-zero cells.
     let mut nz = Bitboard::ZERO;
     for d in 1..data.m {
@@ -482,54 +480,101 @@ pub(crate) fn prune_distance_partition(
     }
     if nz.is_zero() { return true; }
 
+    // Collect clusters.
+    let mut clusters = [Bitboard::ZERO; 16];
+    let mut cluster_demands = [0u32; 16];
+    let mut num_clusters = 0usize;
     let mut remaining_nz = nz;
-    let mut total_pieces_needed = 0u32;
-    let mut component_count = 0u32;
 
-    while !remaining_nz.is_zero() {
+    while !remaining_nz.is_zero() && num_clusters < 16 {
         let seed = remaining_nz.lowest_set_bit();
         let cluster = flood_fill_rect(seed, remaining_nz, max_h, max_w, data.board_mask);
         remaining_nz = remaining_nz & !cluster;
-        component_count += 1;
 
-        // If only one component, this reduces to the global min_flips check (already done).
-        if remaining_nz.is_zero() && component_count == 1 {
-            return true;
-        }
-
-        // Compute cluster's min_flips.
-        let mut cluster_min_flips = 0u32;
+        let mut demand = 0u32;
         for d in 1..data.m {
-            cluster_min_flips += (data.m - d) as u32 * (board.plane(d) & cluster).count_ones();
+            demand += (data.m - d) as u32 * (board.plane(d) & cluster).count_ones();
         }
 
-        // Sum reachable bits and find max piece size for this cluster.
-        let mut reachable_bits = 0u32;
-        let mut max_piece_bits = 0u32;
-        for pi in piece_idx..data.reaches.len() {
-            if !(data.reaches[pi] & cluster).is_zero() {
-                reachable_bits += data.cell_counts[pi];
-                max_piece_bits = max_piece_bits.max(data.cell_counts[pi]);
-            }
-        }
-
-        // Check: enough bits can reach this cluster.
-        if cluster_min_flips > reachable_bits {
-            return false;
-        }
-
-        // Accumulate minimum pieces needed for this cluster.
-        if max_piece_bits > 0 {
-            total_pieces_needed += (cluster_min_flips + max_piece_bits - 1) / max_piece_bits;
-        } else if cluster_min_flips > 0 {
-            return false;
-        }
-
-        if component_count >= 16 { break; }
+        clusters[num_clusters] = cluster;
+        cluster_demands[num_clusters] = demand;
+        num_clusters += 1;
     }
 
-    // Check: total pieces needed across all independent clusters ≤ remaining pieces.
-    total_pieces_needed <= remaining as u32
+    // Single cluster: reduces to global checks already done.
+    if num_clusters <= 1 { return true; }
+
+    let num_remaining = data.reaches.len() - piece_idx;
+
+    // Build per-piece reach masks and capacities.
+    let mut piece_caps = [0u32; 36];
+    let mut reach_mask = [0u16; 36];
+
+    for pi in piece_idx..data.reaches.len() {
+        let i = pi - piece_idx;
+        piece_caps[i] = data.cell_counts[pi];
+        for j in 0..num_clusters {
+            if !(data.reaches[pi] & clusters[j]).is_zero() {
+                reach_mask[i] |= 1 << j;
+            }
+        }
+    }
+
+    // Per-cluster independent check (Hall's condition on singletons).
+    for j in 0..num_clusters {
+        let mut supply = 0u32;
+        for i in 0..num_remaining {
+            if reach_mask[i] & (1 << j) != 0 {
+                supply += piece_caps[i];
+            }
+        }
+        if supply < cluster_demands[j] {
+            return false;
+        }
+    }
+
+    // Hall's condition on pairs: for every pair of clusters {j1, j2},
+    // the total supply of pieces reaching j1 OR j2 must cover both demands.
+    for j1 in 0..num_clusters {
+        for j2 in (j1 + 1)..num_clusters {
+            let pair_demand = cluster_demands[j1] + cluster_demands[j2];
+            let pair_mask = (1u16 << j1) | (1u16 << j2);
+            let mut supply = 0u32;
+            for i in 0..num_remaining {
+                if reach_mask[i] & pair_mask != 0 {
+                    supply += piece_caps[i];
+                }
+                if supply >= pair_demand { break; }
+            }
+            if supply < pair_demand {
+                return false;
+            }
+        }
+    }
+
+    // Hall's condition on triples (only when cluster count is moderate).
+    if num_clusters >= 3 && num_clusters <= 10 {
+        for j1 in 0..num_clusters {
+            for j2 in (j1 + 1)..num_clusters {
+                for j3 in (j2 + 1)..num_clusters {
+                    let triple_demand = cluster_demands[j1] + cluster_demands[j2] + cluster_demands[j3];
+                    let triple_mask = (1u16 << j1) | (1u16 << j2) | (1u16 << j3);
+                    let mut supply = 0u32;
+                    for i in 0..num_remaining {
+                        if reach_mask[i] & triple_mask != 0 {
+                            supply += piece_caps[i];
+                        }
+                        if supply >= triple_demand { break; }
+                    }
+                    if supply < triple_demand {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    true
 }
 
 /// Run all pruning checks for a given board state and piece index.
