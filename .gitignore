@@ -1,5 +1,7 @@
 /target
 .devcontainer/
 data/ShapeShifter.html
+data/ShapeShifter.mhtml
+data/ShapeShifter_files/
 data/puzzle.json
 data/solution.html
