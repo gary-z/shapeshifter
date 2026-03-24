@@ -111,14 +111,24 @@ pub(crate) struct SolverData {
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
 }
 
-/// Solve with all pruning enabled. Tries cancellation reduction first.
+/// Solve with all pruning enabled. Tries cancellation, pair-merge, then parallel.
 pub fn solve(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default())
+    solve_with_cancellation(game, &PruningConfig::default(), true)
 }
 
-/// Always use parallel solver.
-fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
-    solve_with_config_parallel(game, config)
+/// Solve serial-only. Same cancellation + pair-merge pipeline but no parallel.
+/// Used by benchmarks where the process pool provides parallelism across games.
+pub fn solve_serial(game: &Game) -> SolveResult {
+    solve_with_cancellation(game, &PruningConfig::default(), false)
+}
+
+/// Dispatch to parallel or serial based on flag.
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
+    if parallel {
+        solve_with_config_parallel(game, config)
+    } else {
+        solve_with_config(game, config)
+    }
 }
 
 /// Try solving reduced puzzles by removing cancellable groups of M identical pieces.
@@ -126,7 +136,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -153,7 +163,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 
     if cancellable_groups.is_empty() {
-        return solve_with_config_parallel(game, config);
+        return solve_dispatch(game, config, parallel);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -167,13 +177,13 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     // Cap at a reasonable limit to avoid pathological cases.
     if total_combos > 200 {
         // Too many combos -- fall back to just trying max and full.
-        let result = try_cancellation_combo(game, config, &shape_groups, &cancellable_groups,
+        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
             m, h, w);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_with_config_parallel(game, config);
+        let mut full = solve_dispatch(game, config, parallel);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -211,7 +221,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
     let mut total_nodes = 0u64;
 
     for combo in &combos {
-        let result = try_cancellation_combo(game, config, &shape_groups, &cancellable_groups,
+        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
             combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
@@ -224,7 +234,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
 
     // For M=2: try pair-merge reduction before full solve.
     if m == 2 && pieces.len() >= 4 {
-        let result = try_pair_merge(game, config);
+        let result = try_pair_merge(game, config, parallel);
         if result.solution.is_some() {
             return SolveResult {
                 solution: result.solution,
@@ -236,18 +246,14 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig) -> SolveResult {
 
     // No reduction worked -- solve the full puzzle.
     // Use parallel for large puzzles (cancellation already tried above).
-    let mut full_result = {
-        let n = pieces.len();
-        let area = h as usize * w as usize;
-        solve_with_config_parallel(game, config)
-    };
+    let mut full_result = solve_dispatch(game, config, parallel);
     full_result.nodes_visited += total_nodes;
     full_result
 }
 
 /// For M=2: find a pair of pieces that can simulate a 1x1 piece at every board cell.
 /// Replace them with a 1x1 piece, solve the reduced game, then reconstruct.
-fn try_pair_merge(game: &Game, config: &PruningConfig) -> SolveResult {
+fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
     use std::collections::HashSet;
 
     let pieces = game.pieces();
@@ -333,7 +339,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config);
+    let result = solve_with_cancellation(&reduced_game, config, parallel);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -360,6 +366,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig) -> SolveResult {
 fn try_cancellation_combo(
     game: &Game,
     config: &PruningConfig,
+    parallel: bool,
     shape_groups: &[(crate::piece::Piece, Vec<usize>)],
     cancellable_groups: &[(usize, usize)],
     combo: &[usize], // cancel_sets per cancellable group
@@ -413,7 +420,7 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_dispatch(&reduced_game, config);
+    let result = solve_dispatch(&reduced_game, config, parallel);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];

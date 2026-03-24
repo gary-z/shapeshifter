@@ -13,8 +13,8 @@ fn main() {
     let game = puz.to_game();
 
     let start = Instant::now();
-    // Use serial solver — benchmarks already parallelize across games via process pool.
-    let result = solver::solve_with_config(&game, &solver::PruningConfig::default());
+    // Use serial solver with cancellation — benchmarks parallelize across games via process pool.
+    let result = solver::solve_serial(&game);
     let elapsed = start.elapsed();
 
     let solved = result.solution.is_some();
