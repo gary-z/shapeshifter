@@ -111,6 +111,7 @@ pub(crate) struct SolverData {
     pub(crate) parity_partitions: Vec<ParityPartition>,
     pub(crate) subset_checks: Vec<SubsetReachability>,
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
+    pub(crate) board_mask: Bitboard,
 }
 
 /// Solve with all pruning enabled. Tries cancellation, pair-merge, then parallel.
