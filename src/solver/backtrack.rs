@@ -7,6 +7,17 @@ use crate::board::Board;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
+/// Inline xorshift64 step — very fast, good enough for tie-breaking shuffles.
+#[inline(always)]
+fn xorshift64(state: &Cell<u64>) -> u64 {
+    let mut s = state.get();
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    state.set(s);
+    s
+}
+
 /// Try to solve remaining pieces when they're all 1x1.
 /// Each cell at value d needs (M-d)%M hits. Total hits must equal number of pieces.
 /// Returns true and fills solution if solvable.
@@ -60,6 +71,7 @@ macro_rules! define_backtrack {
             solution: &mut Vec<(usize, usize)>,
             nodes: &Cell<u64>,
             config: &PruningConfig,
+            rng: &Cell<u64>,
             $($abort_param: $abort_ty,)?
         ) -> bool {
             nodes.set(nodes.get() + 1);
@@ -81,19 +93,7 @@ macro_rules! define_backtrack {
                 return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
             }
 
-            let remaining = data.all_placements.len() - piece_idx;
-            let branching = data.all_placements[piece_idx].len();
-
-            if config.active_planes && !prune_active_planes(board, remaining) { return false; }
-            if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
-            if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
-            if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
-            if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
-            if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
-            if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
-            if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
-            if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
-            if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
+            if !prune_node(board, data, piece_idx, config) { return false; }
 
             // Compute locked mask: cells at 0 where remaining coverage < M.
             let locked_mask = if config.cell_locking {
@@ -130,10 +130,28 @@ macro_rules! define_backtrack {
             for i in 0..pl_len { counts[keys[i] as usize] += 1; }
             let mut offsets = [0u8; 26];
             for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
+            // Save bucket boundaries for tie-shuffling.
+            let bucket_starts = offsets;
             for i in 0..pl_len {
                 let k = keys[i] as usize;
                 order[offsets[k] as usize] = i as u8;
                 offsets[k] += 1;
+            }
+
+            // Shuffle within each bucket (Fisher-Yates) to diversify tie-breaking.
+            // rng state of 0 means no shuffling (deterministic baseline).
+            if rng.get() != 0 {
+                for bucket in 0..26 {
+                    let start = bucket_starts[bucket] as usize;
+                    let end = offsets[bucket] as usize;
+                    let len = end - start;
+                    if len > 1 {
+                        for i in (1..len).rev() {
+                            let j = xorshift64(rng) as usize % (i + 1);
+                            order.swap(start + i, start + j);
+                        }
+                    }
+                }
             }
 
             let mut board = board.clone();
@@ -186,6 +204,7 @@ macro_rules! define_backtrack {
                     solution,
                     nodes,
                     config,
+                    rng,
                     $($abort_param,)?
                 ) {
                     return true;

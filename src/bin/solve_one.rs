@@ -13,8 +13,29 @@ fn main() {
     let game = puz.to_game();
 
     let start = Instant::now();
-    // Use serial solver with cancellation — benchmarks parallelize across games via process pool.
-    let result = solver::solve_serial(&game);
+    // Use serial solver with cancellation.
+    // Support DISABLE_PRUNE env var for ablation studies.
+    let mut config = solver::PruningConfig::default();
+    if let Ok(flag) = std::env::var("DISABLE_PRUNE") {
+        match flag.as_str() {
+            "active_planes" => config.active_planes = false,
+            "min_flips_global" => config.min_flips_global = false,
+            "min_flips_rowcol" => config.min_flips_rowcol = false,
+            "min_flips_diagonal" => config.min_flips_diagonal = false,
+            "coverage" => config.coverage = false,
+            "jaggedness" => config.jaggedness = false,
+            "cell_locking" => config.cell_locking = false,
+            "component_checks" => config.component_checks = false,
+            "duplicate_pruning" => config.duplicate_pruning = false,
+            "single_cell_endgame" => config.single_cell_endgame = false,
+            _ => eprintln!("Unknown prune flag: {}", flag),
+        }
+    }
+    let result = if std::env::var("PARALLEL").is_ok() {
+        solver::solve(&game)
+    } else {
+        solver::solve_with_config(&game, &config)
+    };
     let elapsed = start.elapsed();
 
     let solved = result.solution.is_some();

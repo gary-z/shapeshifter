@@ -221,7 +221,9 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     let mut total_nodes = 0u64;
 
     for combo in &combos {
-        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
+        // Cancellation combos use serial: reduced games are usually easy and
+        // parallel pre-enumeration overhead hurts more than it helps.
+        let result = try_cancellation_combo(game, config, false, &shape_groups, &cancellable_groups,
             combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
@@ -245,7 +247,6 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     }
 
     // No reduction worked -- solve the full puzzle.
-    // Use parallel for large puzzles (cancellation already tried above).
     let mut full_result = solve_dispatch(game, config, parallel);
     full_result.nodes_visited += total_nodes;
     full_result
@@ -528,6 +529,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     );
 
     let nodes = Cell::new(0u64);
+    let rng = Cell::new(0u64); // 0 = no shuffling (deterministic)
     let mut sorted_solution = Vec::with_capacity(n);
 
     let found = backtrack::backtrack(
@@ -539,6 +541,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         &mut sorted_solution,
         &nodes,
         config,
+        &rng,
     );
 
     let solution = if found {
@@ -705,7 +708,10 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         &mut all_combos,
         config,
     );
-    eprintln!("enumerate: {:.3?}, combos={}, k={}", t1.elapsed(), all_combos.len(), k);
+    let max_combos: usize = data.all_placements[..k].iter().map(|p| p.len()).product();
+    eprintln!("enumerate: {:.3?}, combos={}/{} ({:.1}% pruned), k={}",
+        t1.elapsed(), all_combos.len(), max_combos,
+        (1.0 - all_combos.len() as f64 / max_combos as f64) * 100.0, k);
 
     // Group combos by resulting board state (dedup).
     // For deduped groups, keep only the first combo (with its boundary info).
@@ -730,9 +736,14 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
         .map(|p| p.get())
         .unwrap_or(4);
 
+    let thread_seed_counter = std::sync::atomic::AtomicU64::new(1);
+
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(|| {
+                // Each thread gets a unique non-zero seed for placement tie-shuffling.
+                let seed = thread_seed_counter.fetch_add(1, Ordering::Relaxed);
+                let rng = Cell::new(seed);
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
                 loop {
@@ -757,6 +768,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
                         &mut solution,
                         &nodes,
                         config,
+                        &rng,
                         &abort,
                     );
 
@@ -818,6 +830,9 @@ fn enumerate_combos_pruned(
         });
         return;
     }
+
+    // Apply the same pruning checks as the backtracker.
+    if !pruning::prune_node(board, data, piece_idx, config) { return; }
 
     let placements = &data.all_placements[piece_idx];
     let mut board = board.clone();

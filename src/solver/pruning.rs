@@ -432,3 +432,28 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
     }
     true
 }
+
+/// Run all pruning checks for a given board state and piece index.
+/// Returns true if the state is feasible (search should continue).
+/// Used by both the backtracker and the combo enumerator.
+pub(crate) fn prune_node(
+    board: &Board,
+    data: &SolverData,
+    piece_idx: usize,
+    config: &super::PruningConfig,
+) -> bool {
+    let remaining = data.all_placements.len() - piece_idx;
+    let branching = data.all_placements[piece_idx].len();
+
+    if config.active_planes && !prune_active_planes(board, remaining) { return false; }
+    if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
+    if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
+    if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
+    if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
+    if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
+    if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
+    if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
+    true
+}
