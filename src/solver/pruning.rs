@@ -433,6 +433,105 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
     true
 }
 
+/// Expand a bitboard horizontally by w_steps and vertically by h_steps,
+/// staying within the valid board mask. This produces a rectangular expansion.
+#[inline(always)]
+fn expand_rect(bb: Bitboard, h_steps: usize, w_steps: usize, board_mask: Bitboard) -> Bitboard {
+    let mut result = bb;
+    for _ in 0..w_steps {
+        result = (result | (result << 1) | (result >> 1)) & board_mask;
+    }
+    for _ in 0..h_steps {
+        result = (result | (result << 15) | (result >> 15)) & board_mask;
+    }
+    result
+}
+
+/// Flood-fill with rectangular expansion matching piece bounding box.
+/// Two non-zero cells are in the same cluster if connected by a chain of
+/// non-zero cells where consecutive cells are within (max_h-1, max_w-1) L∞ distance.
+fn flood_fill_rect(seed_bit: u32, nz: Bitboard, max_h: usize, max_w: usize, board_mask: Bitboard) -> Bitboard {
+    let mut cluster = Bitboard::from_bit(seed_bit) & nz;
+    loop {
+        let expanded = expand_rect(cluster, max_h.saturating_sub(1), max_w.saturating_sub(1), board_mask) & nz;
+        if expanded == cluster { break; }
+        cluster = expanded;
+    }
+    cluster
+}
+
+/// Distance-based partition pruning.
+/// Partitions non-zero cells into clusters where no piece can span between clusters.
+/// For each cluster, checks that reachable pieces have enough bits.
+/// Also checks that the sum of per-cluster minimum piece counts ≤ remaining pieces.
+pub(crate) fn prune_distance_partition(
+    board: &Board,
+    data: &SolverData,
+    piece_idx: usize,
+) -> bool {
+    let max_h = data.line_families[0].suffix_max_span[piece_idx] as usize;
+    let max_w = data.line_families[1].suffix_max_span[piece_idx] as usize;
+    if max_h == 0 || max_w == 0 { return true; }
+
+    let remaining = data.all_placements.len() - piece_idx;
+
+    // Find all non-zero cells.
+    let mut nz = Bitboard::ZERO;
+    for d in 1..data.m {
+        nz |= board.plane(d);
+    }
+    if nz.is_zero() { return true; }
+
+    let mut remaining_nz = nz;
+    let mut total_pieces_needed = 0u32;
+    let mut component_count = 0u32;
+
+    while !remaining_nz.is_zero() {
+        let seed = remaining_nz.lowest_set_bit();
+        let cluster = flood_fill_rect(seed, remaining_nz, max_h, max_w, data.board_mask);
+        remaining_nz = remaining_nz & !cluster;
+        component_count += 1;
+
+        // If only one component, this reduces to the global min_flips check (already done).
+        if remaining_nz.is_zero() && component_count == 1 {
+            return true;
+        }
+
+        // Compute cluster's min_flips.
+        let mut cluster_min_flips = 0u32;
+        for d in 1..data.m {
+            cluster_min_flips += (data.m - d) as u32 * (board.plane(d) & cluster).count_ones();
+        }
+
+        // Sum reachable bits and find max piece size for this cluster.
+        let mut reachable_bits = 0u32;
+        let mut max_piece_bits = 0u32;
+        for pi in piece_idx..data.reaches.len() {
+            if !(data.reaches[pi] & cluster).is_zero() {
+                reachable_bits += data.cell_counts[pi];
+                max_piece_bits = max_piece_bits.max(data.cell_counts[pi]);
+            }
+        }
+
+        // Check: enough bits can reach this cluster.
+        if cluster_min_flips > reachable_bits {
+            return false;
+        }
+
+        // Accumulate minimum pieces needed for this cluster.
+        if max_piece_bits > 0 {
+            total_pieces_needed += (cluster_min_flips + max_piece_bits - 1) / max_piece_bits;
+        } else if cluster_min_flips > 0 {
+            return false;
+        }
+
+        if component_count >= 16 { break; }
+    }
+
+    // Check: total pieces needed across all independent clusters ≤ remaining pieces.
+    total_pieces_needed <= remaining as u32
+}
+
 /// Run all pruning checks for a given board state and piece index.
 /// Returns true if the state is feasible (search should continue).
 /// Used by both the backtracker and the combo enumerator.
@@ -455,5 +554,6 @@ pub(crate) fn prune_node(
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
+    if config.component_checks && !prune_distance_partition(board, data, piece_idx) { return false; }
     true
 }
