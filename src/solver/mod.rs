@@ -223,9 +223,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     let mut total_nodes = 0u64;
 
     for combo in &combos {
-        // Cancellation combos use serial: reduced games are usually easy and
-        // parallel pre-enumeration overhead hurts more than it helps.
-        let result = try_cancellation_combo(game, config, false, &shape_groups, &cancellable_groups,
+        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
             combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {

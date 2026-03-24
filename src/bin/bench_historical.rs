@@ -6,7 +6,7 @@ use wait_timeout::ChildExt;
 
 use shapeshifter::puzzle::PuzzleJson;
 
-const TIMEOUT_SECS: u64 = 120;
+const TIMEOUT_SECS: u64 = 60;
 
 struct Task {
     idx: usize,
@@ -26,9 +26,12 @@ fn main() {
         .map(|l| serde_json::from_str(l).expect("bad JSONL"))
         .collect();
 
-    let max_parallel = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let parallel_mode = std::env::var("PARALLEL").is_ok();
+    let max_parallel = if parallel_mode {
+        1 // One game at a time — each game uses all cores internally
+    } else {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    };
 
     let exe = std::env::current_exe().unwrap();
     let solve_one = exe.parent().unwrap().join("solve_one");
@@ -117,7 +120,12 @@ fn main() {
 fn run_task(task: &Task, solve_one: &std::path::Path)
     -> (usize, u32, usize, Option<u64>, Option<u64>, String)
 {
-    let mut child = match Command::new(solve_one)
+    let parallel = std::env::var("PARALLEL").is_ok();
+    let mut cmd = Command::new(solve_one);
+    if parallel {
+        cmd.env("PARALLEL", "1");
+    }
+    let mut child = match cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
