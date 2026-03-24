@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use rand::seq::SliceRandom;
+
 use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::board::MAX_M;
@@ -727,20 +729,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
     }
 
     // Shuffle work items so threads explore diverse parts of the search space.
-    // Uses a simple xorshift to avoid pulling in rand for this one use.
-    {
-        let n_items = work_items.len();
-        if n_items > 1 {
-            let mut rng = 0xdeadbeef_u64;
-            for i in (1..n_items).rev() {
-                rng ^= rng << 13;
-                rng ^= rng >> 7;
-                rng ^= rng << 17;
-                let j = rng as usize % (i + 1);
-                work_items.swap(i, j);
-            }
-        }
-    }
+    work_items.shuffle(&mut rand::rng());
 
     // Shared abort flag.
     let abort = AtomicBool::new(false);
