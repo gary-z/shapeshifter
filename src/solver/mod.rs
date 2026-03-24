@@ -121,7 +121,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig) -> SolveResult {
     let n = game.pieces().len();
     let area = game.board().height() as usize * game.board().width() as usize;
 
-    if false && n >= 12 && area >= 36 {
+    if n >= 12 && area >= 36 {
         solve_with_config_parallel(game, config)
     } else {
         solve_with_config(game, config)
