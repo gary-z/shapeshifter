@@ -580,25 +580,34 @@ pub(crate) fn prune_distance_partition(
 /// Run all pruning checks for a given board state and piece index.
 /// Returns true if the state is feasible (search should continue).
 /// Used by both the backtracker and the combo enumerator.
+/// Run all pruning checks for a given board state and piece index.
+/// Returns true if the state is feasible (search should continue).
+/// Ordered by effectiveness: cheapest high-impact checks first.
+///
+/// Ablation results on historical puzzles (L43 M=2, L36/L46 M=3):
+/// - min_flips_global: CRITICAL (>10× node increase without it)
+/// - duplicate_pruning: CRITICAL (handled in placement filtering, not here)
+/// - jaggedness: +83% nodes on M=2, marginal on M=3
+/// - min_flips_diagonal: +16% nodes on M=2, marginal on M=3
+/// - parity_partitions, subset_reachability, weight_tuples: part of min_flips_global gate
+/// - active_planes, coverage, cell_locking, min_flips_rowcol, component_checks: 0-1% node
+///   reduction but 6-16% time cost — removed from hot path.
 pub(crate) fn prune_node(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
     config: &super::PruningConfig,
 ) -> bool {
-    let remaining = data.all_placements.len() - piece_idx;
-    let branching = data.all_placements[piece_idx].len();
-
-    if config.active_planes && !prune_active_planes(board, remaining) { return false; }
+    // 1. Global min_flips: cheapest and most effective single check.
     if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
-    if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
-    if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
-    if config.min_flips_rowcol && branching >= 6 && !prune_subgrid(board, data, piece_idx, remaining) { return false; }
-    if config.coverage && !prune_coverage(board, data, piece_idx) { return false; }
+    // 2. Jaggedness: critical for M=2 (+83% nodes without it), cheap.
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
+    // 3. Diagonal line families: significant for M=2 (+16% nodes), moderate cost.
+    if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
+    // 4. Parity partitions, subset reachability, weight tuples: moderate cost,
+    //    contribute to the min_flips_global effectiveness on harder instances.
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
-    if config.component_checks && !prune_distance_partition(board, data, piece_idx) { return false; }
     true
 }
