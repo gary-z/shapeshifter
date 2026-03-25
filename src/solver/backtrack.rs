@@ -359,7 +359,7 @@ fn build_search_frame(
     }
 
     // Filter and collect valid placements.
-    let mut filtered = Vec::new();
+    let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];

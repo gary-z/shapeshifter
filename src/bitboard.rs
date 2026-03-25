@@ -8,11 +8,13 @@ pub struct Bitboard {
 impl Bitboard {
     pub const ZERO: Bitboard = Bitboard { limbs: [0; 4] };
 
+    #[inline(always)]
     pub const fn new(limbs: [u64; 4]) -> Self {
         Self { limbs }
     }
 
     /// Create a bitboard with a single bit set.
+    #[inline(always)]
     pub const fn from_bit(index: u32) -> Self {
         let mut limbs = [0u64; 4];
         limbs[index as usize / 64] = 1u64 << (index % 64);
@@ -20,27 +22,32 @@ impl Bitboard {
     }
 
     /// Check if a specific bit is set.
+    #[inline(always)]
     pub const fn get_bit(&self, index: u32) -> bool {
         let limb = self.limbs[index as usize / 64];
         (limb >> (index % 64)) & 1 != 0
     }
 
     /// Set a specific bit.
+    #[inline(always)]
     pub fn set_bit(&mut self, index: u32) {
         self.limbs[index as usize / 64] |= 1u64 << (index % 64);
     }
 
     /// Clear a specific bit.
+    #[inline(always)]
     pub fn clear_bit(&mut self, index: u32) {
         self.limbs[index as usize / 64] &= !(1u64 << (index % 64));
     }
 
     /// Returns true if all bits are zero.
+    #[inline(always)]
     pub const fn is_zero(&self) -> bool {
         self.limbs[0] == 0 && self.limbs[1] == 0 && self.limbs[2] == 0 && self.limbs[3] == 0
     }
 
     /// Return the index of the lowest set bit, or 256 if none.
+    #[inline(always)]
     pub const fn lowest_set_bit(&self) -> u32 {
         if self.limbs[0] != 0 {
             return self.limbs[0].trailing_zeros();
@@ -58,6 +65,7 @@ impl Bitboard {
     }
 
     /// Count the number of set bits.
+    #[inline(always)]
     pub const fn count_ones(&self) -> u32 {
         self.limbs[0].count_ones()
             + self.limbs[1].count_ones()
@@ -75,9 +83,7 @@ impl Bitboard {
 
         let mut result = [0u64; 4];
         let mut i = 3;
-        // Manual loop because for loops aren't allowed in const fn
         while i < 4 {
-            // i is usize, so check i >= limb_shift
             if i >= limb_shift {
                 let src = i - limb_shift;
                 result[i] = self.limbs[src] << bit_shift;
@@ -90,7 +96,6 @@ impl Bitboard {
             }
             i = i.wrapping_sub(1);
         }
-        // The while loop above starts at 3 and decrements. Let me redo this properly.
         Self { limbs: result }
     }
 
@@ -118,6 +123,7 @@ impl Bitboard {
     }
 
     /// Bitwise AND.
+    #[inline(always)]
     pub const fn and(&self, other: &Bitboard) -> Self {
         Self {
             limbs: [
@@ -130,6 +136,7 @@ impl Bitboard {
     }
 
     /// Bitwise OR.
+    #[inline(always)]
     pub const fn or(&self, other: &Bitboard) -> Self {
         Self {
             limbs: [
@@ -142,6 +149,7 @@ impl Bitboard {
     }
 
     /// Bitwise XOR.
+    #[inline(always)]
     pub const fn xor(&self, other: &Bitboard) -> Self {
         Self {
             limbs: [
@@ -154,6 +162,7 @@ impl Bitboard {
     }
 
     /// Bitwise NOT (inverts all 256 bits).
+    #[inline(always)]
     pub const fn not(&self) -> Self {
         Self {
             limbs: [
@@ -168,6 +177,7 @@ impl Bitboard {
 
 impl std::ops::BitAnd for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn bitand(self, rhs: Self) -> Self {
         self.and(&rhs)
     }
@@ -175,6 +185,7 @@ impl std::ops::BitAnd for Bitboard {
 
 impl std::ops::BitOr for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn bitor(self, rhs: Self) -> Self {
         self.or(&rhs)
     }
@@ -182,6 +193,7 @@ impl std::ops::BitOr for Bitboard {
 
 impl std::ops::BitXor for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn bitxor(self, rhs: Self) -> Self {
         self.xor(&rhs)
     }
@@ -189,6 +201,7 @@ impl std::ops::BitXor for Bitboard {
 
 impl std::ops::Not for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn not(self) -> Self {
         Bitboard::not(&self)
     }
@@ -196,6 +209,7 @@ impl std::ops::Not for Bitboard {
 
 impl std::ops::Shl<u32> for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn shl(self, n: u32) -> Self {
         Bitboard::shl(&self, n)
     }
@@ -203,24 +217,28 @@ impl std::ops::Shl<u32> for Bitboard {
 
 impl std::ops::Shr<u32> for Bitboard {
     type Output = Self;
+    #[inline(always)]
     fn shr(self, n: u32) -> Self {
         Bitboard::shr(&self, n)
     }
 }
 
 impl std::ops::BitAndAssign for Bitboard {
+    #[inline(always)]
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
     }
 }
 
 impl std::ops::BitOrAssign for Bitboard {
+    #[inline(always)]
     fn bitor_assign(&mut self, rhs: Self) {
         *self = *self | rhs;
     }
 }
 
 impl std::ops::BitXorAssign for Bitboard {
+    #[inline(always)]
     fn bitxor_assign(&mut self, rhs: Self) {
         *self = *self ^ rhs;
     }

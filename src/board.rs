@@ -113,17 +113,20 @@ impl Board {
     }
 
     /// Get the bitboard plane for digit `d`.
+    #[inline(always)]
     pub const fn plane(&self, d: u8) -> Bitboard {
         self.planes[d as usize]
     }
 
     /// Returns true if every cell is 0 (the board is solved).
+    #[inline(always)]
     pub fn is_solved(&self) -> bool {
         self.min_flips == 0
     }
 
     /// Apply a piece placement: increment all cells under `piece_mask` by 1 (mod M).
     /// Each plane rotates: cells at digit d move to digit (d+1) % M.
+    #[inline(always)]
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
         let m = self.m as u32;
         // Incremental min_flips update:
@@ -144,6 +147,7 @@ impl Board {
     }
 
     /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
+    #[inline(always)]
     pub fn undo_piece(&mut self, piece_mask: Bitboard) {
         let m = self.m as u32;
         // Incremental min_flips update:
@@ -179,6 +183,7 @@ impl Board {
 
     /// Minimum total cell-increments needed to solve (cached, O(1)).
     /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
+    #[inline(always)]
     pub fn min_flips_needed(&self) -> u32 {
         self.min_flips
     }
@@ -186,6 +191,7 @@ impl Board {
     /// Split jaggedness into (horizontal, vertical) components.
     /// Horizontal = mismatching (r,c)-(r,c+1) pairs. Vertical = (r,c)-(r+1,c) pairs.
     /// Takes precomputed masks to avoid rebuilding them per call.
+    #[inline(always)]
     pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> (u32, u32) {
         let mut h_matching = 0u32;
         let mut v_matching = 0u32;
