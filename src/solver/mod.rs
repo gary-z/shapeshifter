@@ -687,11 +687,10 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     );
     eprintln!("precompute: {:.3?}", t0.elapsed());
 
-    // Seed the steal queue with a single root task.
-    // The budget-based work-stealing will naturally split it as threads go idle.
-    use std::collections::VecDeque;
-    let steal_queue: Mutex<VecDeque<backtrack::StealableTask>> = Mutex::new(VecDeque::new());
-    steal_queue.lock().unwrap().push_back(backtrack::StealableTask {
+    // Seed the work queue with a single root task.
+    // Budget-based splitting will naturally generate work for idle threads.
+    let wq = backtrack::WorkQueue::new();
+    wq.push(backtrack::StealableTask {
         board: board.clone(),
         prefix: Vec::new(),
         depth: 0,
@@ -702,8 +701,6 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
-    // active_count tracks threads currently processing a task.
-    // Termination: queue empty AND active_count == 0 (no one can produce new work).
     let active_count = std::sync::atomic::AtomicUsize::new(0);
     let idle_count = std::sync::atomic::AtomicUsize::new(0);
 
@@ -724,38 +721,18 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
                 loop {
                     if abort.load(Ordering::Relaxed) { break; }
 
-                    // Try to acquire a task.
-                    let task = {
-                        let mut q = steal_queue.lock().unwrap();
-                        if let Some(t) = q.pop_front() {
-                            active_count.fetch_add(1, Ordering::SeqCst);
-                            Some(t)
-                        } else {
-                            None
-                        }
-                    };
+                    // Try non-blocking pop first, then blocking wait.
+                    let task = wq.pop().or_else(|| {
+                        idle_count.fetch_add(1, Ordering::Relaxed);
+                        let t = wq.wait_for_task(&abort, &active_count);
+                        idle_count.fetch_sub(1, Ordering::Relaxed);
+                        t
+                    });
                     let task = match task {
                         Some(t) => t,
-                        None => {
-                            // Queue empty. Spin-wait for new work or termination.
-                            idle_count.fetch_add(1, Ordering::SeqCst);
-                            let got = loop {
-                                if abort.load(Ordering::Relaxed) { break None; }
-                                // Termination: no active threads → no one can push new work.
-                                if active_count.load(Ordering::SeqCst) == 0 { break None; }
-                                std::thread::yield_now();
-                                if let Some(t) = steal_queue.lock().unwrap().pop_front() {
-                                    active_count.fetch_add(1, Ordering::SeqCst);
-                                    break Some(t);
-                                }
-                            };
-                            idle_count.fetch_sub(1, Ordering::SeqCst);
-                            match got {
-                                Some(t) => t,
-                                None => break,
-                            }
-                        }
+                        None => break, // terminated
                     };
+                    active_count.fetch_add(1, Ordering::SeqCst);
 
                     solution.clear();
                     solution.extend_from_slice(&task.prefix);
@@ -772,12 +749,12 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
                         config,
                         &rng,
                         &abort,
-                        &steal_queue,
+                        &wq,
                         &idle_count,
                         exhaustive,
                     );
 
-                    active_count.fetch_sub(1, Ordering::Relaxed);
+                    active_count.fetch_sub(1, Ordering::SeqCst);
                     total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
 
                     if found {

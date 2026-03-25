@@ -230,7 +230,7 @@ define_backtrack!(backtrack_abortable, abort: abort: &AtomicBool);
 // ---------------------------------------------------------------------------
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::sync::atomic::AtomicUsize;
 
 /// A frame on the explicit search stack for the iterative backtracker.
@@ -252,6 +252,57 @@ pub(crate) struct StealableTask {
     pub depth: usize,
     pub min_placement: usize,
     pub prev_dup: usize,
+}
+
+/// Shared work queue with condvar for idle thread notification.
+pub(crate) struct WorkQueue {
+    queue: Mutex<VecDeque<StealableTask>>,
+    condvar: Condvar,
+}
+
+impl WorkQueue {
+    pub fn new() -> Self {
+        Self { queue: Mutex::new(VecDeque::new()), condvar: Condvar::new() }
+    }
+
+    pub fn push(&self, task: StealableTask) {
+        self.queue.lock().unwrap().push_back(task);
+        self.condvar.notify_one();
+    }
+
+    pub fn push_many(&self, tasks: Vec<StealableTask>) {
+        if tasks.is_empty() { return; }
+        let mut q = self.queue.lock().unwrap();
+        for t in tasks {
+            q.push_back(t);
+        }
+        self.condvar.notify_all();
+    }
+
+    pub fn pop(&self) -> Option<StealableTask> {
+        self.queue.lock().unwrap().pop_front()
+    }
+
+    /// Block until a task is available, abort is set, or termination is detected
+    /// (active_count == 0 means no thread can produce new work).
+    pub fn wait_for_task(
+        &self,
+        abort: &AtomicBool,
+        active_count: &AtomicUsize,
+    ) -> Option<StealableTask> {
+        let mut q = self.queue.lock().unwrap();
+        loop {
+            if abort.load(Ordering::Relaxed) { return None; }
+            if let Some(t) = q.pop_front() { return Some(t); }
+            if active_count.load(Ordering::SeqCst) == 0 { return None; }
+            // Wait for notify (from push/push_many) with a timeout
+            // to recheck active_count periodically.
+            let (new_q, _) = self.condvar.wait_timeout(
+                q, std::time::Duration::from_millis(1)
+            ).unwrap();
+            q = new_q;
+        }
+    }
 }
 
 /// Build a search frame: compute placement ordering, filter, and collect valid moves.
@@ -370,7 +421,7 @@ fn split_work(
     base_solution_len: usize,
     data: &SolverData,
     config: &PruningConfig,
-    queue: &Mutex<VecDeque<StealableTask>>,
+    wq: &WorkQueue,
 ) {
     // Find shallowest frame with remaining placements (largest subtrees).
     for (si, frame) in stack.iter_mut().enumerate() {
@@ -385,7 +436,6 @@ fn split_work(
             board.apply_piece(mask);
             let depth = frame.piece_idx + 1;
 
-            // Build the solution prefix up to this frame's depth, then add this placement.
             let prefix_len = base_solution_len + si;
             let mut prefix = solution_prefix[..prefix_len].to_vec();
             prefix.push((row, col));
@@ -393,23 +443,13 @@ fn split_work(
             let (next_min, next_prev) = next_dup_state(data, frame.piece_idx, pl_idx, config);
 
             tasks.push(StealableTask {
-                board,
-                prefix,
-                depth,
-                min_placement: next_min,
-                prev_dup: next_prev,
+                board, prefix, depth,
+                min_placement: next_min, prev_dup: next_prev,
             });
         }
-        // Mark all as donated.
         frame.cursor = frame.placements.len();
-        // Push to shared queue.
-        if !tasks.is_empty() {
-            let mut q = queue.lock().unwrap();
-            for t in tasks {
-                q.push_back(t);
-            }
-        }
-        return; // Only split at one level.
+        wq.push_many(tasks);
+        return;
     }
 }
 
@@ -430,7 +470,7 @@ pub(crate) fn backtrack_stealing(
     config: &PruningConfig,
     rng: &Cell<u64>,
     abort: &AtomicBool,
-    queue: &Mutex<VecDeque<StealableTask>>,
+    wq: &WorkQueue,
     idle_count: &AtomicUsize,
     exhaustive: bool,
 ) -> bool {
@@ -531,7 +571,7 @@ pub(crate) fn backtrack_stealing(
         if budget == 0 {
             budget = SPLIT_BUDGET;
             if idle_count.load(Ordering::Relaxed) > 0 {
-                split_work(&mut stack, solution, base_solution_len, data, config, queue);
+                split_work(&mut stack, solution, base_solution_len, data, config, wq);
             }
         }
 
