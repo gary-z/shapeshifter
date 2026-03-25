@@ -813,15 +813,16 @@ fn build_weight_tuple_checks(
         // For a group with current weight w and width W:
         //   piece covers C cells in this group.
         //   Let nz = number of covered cells that are non-zero.
-        //   nz ∈ [max(0, C - (W - ceil(w/(m-1)))), min(C, floor(w/1))]
-        //   ... but for general M this is complex. Simpler sound bound:
-        //   nz ∈ [0, min(C, W)]  (always valid, slightly loose for large w or small w)
         //   Weight change: each non-zero cell hit decreases weight by 1.
         //                  each zero cell hit increases weight by (M-1).
         //   new_w = w - nz + (M-1) * (C - nz) = w + (M-1)*C - M*nz
         //
-        // Tighter for M=2: nz ∈ [max(0, C - (W - w)), min(C, w)]
-        //   since weight = count of 1-cells for M=2.
+        // Bounds on nz (non-zero cells hit by the piece in this group):
+        //   nz_count (non-zero cells in group) ∈ [ceil(w/(M-1)), min(w, W)]
+        //   nz ≤ nz_count ≤ w  ⟹  nz ≤ min(C, w)
+        //   C - nz ≤ W - nz_count ≤ W - ceil(w/(M-1))
+        //     ⟹  nz ≥ max(0, C - W + ceil(w/(M-1)))
+        // For M=2: w = nz_count exactly, so these simplify to the same bounds.
 
         // Precompute per-piece per-group coverage counts from placements.
         struct PlacementEffect {
@@ -912,16 +913,16 @@ fn build_weight_tuple_checks(
                         }
 
                         // Bounds on nz (non-zero cells hit).
-                        let nz_min = if m_val == 2 {
-                            c.saturating_sub(gw - w)
-                        } else {
-                            c.saturating_sub(gw)
-                        };
-                        let nz_max = if m_val == 2 {
-                            c.min(w)
-                        } else {
-                            c.min(gw)
-                        };
+                        // nz_count (number of non-zero cells in group) satisfies:
+                        //   ceil(w/(M-1)) <= nz_count <= min(w, W)
+                        // For M=2, w = nz_count exactly, so bounds are tight.
+                        // For M>=3, w >= nz_count (each non-zero cell contributes
+                        // at least 1 to weight), so nz <= min(C, w).
+                        // Zero cells = W - nz_count >= W - min(w, W), and
+                        // C - nz <= zero cells, so nz >= C - (W - ceil(w/(M-1))).
+                        let nz_count_min = if m_val == 2 { w } else { (w + m_val - 2) / (m_val - 1) };
+                        let nz_min = c.saturating_sub(gw - nz_count_min);
+                        let nz_max = c.min(w);
 
                         for nz in nz_min..=nz_max {
                             let new_w_raw = w as i64 + (m_val - 1) as i64 * (c - nz) as i64 - nz as i64;
