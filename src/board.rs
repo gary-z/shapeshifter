@@ -141,7 +141,6 @@ impl Board {
             i -= 1;
         }
         self.planes[0] = (self.planes[0] & !piece_mask) | top;
-        self.recount_active_planes();
     }
 
     /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
@@ -160,7 +159,6 @@ impl Board {
             self.planes[i] = (self.planes[i] & !piece_mask) | moving;
         }
         self.planes[m - 1] = (self.planes[m - 1] & !piece_mask) | bottom;
-        self.recount_active_planes();
     }
 
     fn recount_active_planes(&mut self) {
