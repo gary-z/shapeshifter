@@ -116,19 +116,25 @@ pub(crate) struct SolverData {
 
 /// Solve with all pruning enabled. Tries cancellation, pair-merge, then parallel.
 pub fn solve(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), true)
+    solve_with_cancellation(game, &PruningConfig::default(), true, false)
+}
+
+/// Solve in exhaustive mode: explore the full tree even after finding a solution.
+/// Used for benchmarking parallel efficiency without the luck factor.
+pub fn solve_exhaustive(game: &Game) -> SolveResult {
+    solve_with_cancellation(game, &PruningConfig::default(), true, true)
 }
 
 /// Solve serial-only. Same cancellation + pair-merge pipeline but no parallel.
 /// Used by benchmarks where the process pool provides parallelism across games.
 pub fn solve_serial(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), false)
+    solve_with_cancellation(game, &PruningConfig::default(), false, false)
 }
 
 /// Dispatch to parallel or serial based on flag.
-fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     if parallel {
-        solve_with_config_parallel(game, config)
+        solve_with_config_parallel(game, config, exhaustive)
     } else {
         solve_with_config(game, config)
     }
@@ -139,7 +145,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool) -> SolveR
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -166,7 +172,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     }
 
     if cancellable_groups.is_empty() {
-        return solve_dispatch(game, config, parallel);
+        return solve_dispatch(game, config, parallel, exhaustive);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -180,13 +186,13 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     // Cap at a reasonable limit to avoid pathological cases.
     if total_combos > 200 {
         // Too many combos -- fall back to just trying max and full.
-        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
+        let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
             m, h, w);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_dispatch(game, config, parallel);
+        let mut full = solve_dispatch(game, config, parallel, exhaustive);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -224,7 +230,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     let mut total_nodes = 0u64;
 
     for combo in &combos {
-        let result = try_cancellation_combo(game, config, parallel, &shape_groups, &cancellable_groups,
+        let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
@@ -237,7 +243,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
 
     // For M=2: try pair-merge reduction before full solve.
     if m == 2 && pieces.len() >= 4 {
-        let result = try_pair_merge(game, config, parallel);
+        let result = try_pair_merge(game, config, parallel, exhaustive);
         if result.solution.is_some() {
             return SolveResult {
                 solution: result.solution,
@@ -248,14 +254,14 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool) 
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config, parallel);
+    let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
     full_result.nodes_visited += total_nodes;
     full_result
 }
 
 /// For M=2: find a pair of pieces that can simulate a 1x1 piece at every board cell.
 /// Replace them with a 1x1 piece, solve the reduced game, then reconstruct.
-fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool) -> SolveResult {
+fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     use std::collections::HashSet;
 
     let pieces = game.pieces();
@@ -341,7 +347,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool) -> SolveR
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config, parallel);
+    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -369,6 +375,7 @@ fn try_cancellation_combo(
     game: &Game,
     config: &PruningConfig,
     parallel: bool,
+    exhaustive: bool,
     shape_groups: &[(crate::piece::Piece, Vec<usize>)],
     cancellable_groups: &[(usize, usize)],
     combo: &[usize], // cancel_sets per cancellable group
@@ -422,7 +429,7 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_dispatch(&reduced_game, config, parallel);
+    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -597,7 +604,7 @@ struct WorkItem {
 /// 1. Sorts pieces and precomputes solver data (shared across threads).
 /// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
 /// 3. Spawns worker threads to search from each unique state.
-fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResult {
+fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: bool) -> SolveResult {
     eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
     let pieces = game.pieces();
@@ -779,7 +786,9 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig) -> SolveResul
                     total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
 
                     if found {
-                        abort.store(true, Ordering::Relaxed);
+                        if !exhaustive {
+                            abort.store(true, Ordering::Relaxed);
+                        }
                         let mut guard = result.lock().unwrap();
                         if guard.is_none() {
                             *guard = Some((item.prefix.clone(), solution.clone()));

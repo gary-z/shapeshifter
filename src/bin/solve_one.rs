@@ -31,7 +31,9 @@ fn main() {
             _ => eprintln!("Unknown prune flag: {}", flag),
         }
     }
-    let result = if std::env::var("PARALLEL").is_ok() {
+    let result = if std::env::var("EXHAUSTIVE").is_ok() {
+        solver::solve_exhaustive(&game)
+    } else if std::env::var("PARALLEL").is_ok() {
         solver::solve(&game)
     } else {
         solver::solve_with_config(&game, &config)
