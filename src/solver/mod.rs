@@ -592,11 +592,13 @@ impl BoardKey {
 /// A single work item for the parallel solver.
 struct WorkItem {
     board: Board,
-    /// Prefix of the solution (placements for pieces 0..k in sorted order).
+    /// Prefix of the solution (placements for pieces 0..depth in sorted order).
     prefix: Vec<(usize, usize)>,
-    /// min_placement for piece k (for duplicate symmetry breaking across the boundary).
+    /// Depth at which to start the backtrack (piece index).
+    depth: usize,
+    /// min_placement for the piece at `depth` (for duplicate symmetry breaking).
     min_placement_at_k: usize,
-    /// prev_dup_placement for piece k (for skip table at the boundary).
+    /// prev_dup_placement for the piece at `depth` (for skip table).
     prev_dup_at_k: usize,
 }
 
@@ -734,14 +736,30 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
         }
     }
 
-    // Shuffle work items so threads explore diverse parts of the search space.
-    work_items.shuffle(&mut rand::rng());
+    // Seed the shared work-stealing queue with initial work items (shuffled).
+    use std::collections::VecDeque;
+    let steal_queue: Mutex<VecDeque<backtrack::StealableTask>> = Mutex::new(VecDeque::new());
+    {
+        work_items.shuffle(&mut rand::rng());
+        let mut q = steal_queue.lock().unwrap();
+        for item in work_items {
+            q.push_back(backtrack::StealableTask {
+                board: item.board,
+                prefix: item.prefix,
+                depth: item.depth,
+                min_placement: item.min_placement_at_k,
+                prev_dup: item.prev_dup_at_k,
+            });
+        }
+    }
 
-    // Shared abort flag.
     let abort = AtomicBool::new(false);
-    let result: Mutex<Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)>> = Mutex::new(None);
+    let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
-    let next_work = std::sync::atomic::AtomicUsize::new(0);
+    // active_count tracks threads currently processing a task.
+    // Termination: queue empty AND active_count == 0 (no one can produce new work).
+    let active_count = std::sync::atomic::AtomicUsize::new(0);
+    let idle_count = std::sync::atomic::AtomicUsize::new(0);
 
     let num_threads = std::thread::available_parallelism()
         .map(|p| p.get())
@@ -752,37 +770,68 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(|| {
-                // Each thread gets a unique non-zero seed for placement tie-shuffling.
                 let seed = thread_seed_counter.fetch_add(1, Ordering::Relaxed);
                 let rng = Cell::new(seed);
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
+
                 loop {
-                    if abort.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let idx = next_work.fetch_add(1, Ordering::Relaxed);
-                    if idx >= work_items.len() {
-                        break;
-                    }
-                    let item = &work_items[idx];
+                    if abort.load(Ordering::Relaxed) { break; }
+
+                    // Try to acquire a task.
+                    let task = {
+                        let mut q = steal_queue.lock().unwrap();
+                        if let Some(t) = q.pop_front() {
+                            active_count.fetch_add(1, Ordering::SeqCst);
+                            Some(t)
+                        } else {
+                            None
+                        }
+                    };
+                    let task = match task {
+                        Some(t) => t,
+                        None => {
+                            // Queue empty. Spin-wait for new work or termination.
+                            idle_count.fetch_add(1, Ordering::SeqCst);
+                            let got = loop {
+                                if abort.load(Ordering::Relaxed) { break None; }
+                                // Termination: no active threads → no one can push new work.
+                                if active_count.load(Ordering::SeqCst) == 0 { break None; }
+                                std::thread::yield_now();
+                                if let Some(t) = steal_queue.lock().unwrap().pop_front() {
+                                    active_count.fetch_add(1, Ordering::SeqCst);
+                                    break Some(t);
+                                }
+                            };
+                            idle_count.fetch_sub(1, Ordering::SeqCst);
+                            match got {
+                                Some(t) => t,
+                                None => break,
+                            }
+                        }
+                    };
 
                     solution.clear();
+                    solution.extend_from_slice(&task.prefix);
                     nodes.set(0);
 
-                    let found = backtrack::backtrack_abortable(
-                        &item.board,
+                    let found = backtrack::backtrack_stealing(
+                        &task.board,
                         &data,
-                        k,
-                        item.min_placement_at_k,
-                        item.prev_dup_at_k,
+                        task.depth,
+                        task.min_placement,
+                        task.prev_dup,
                         &mut solution,
                         &nodes,
                         config,
                         &rng,
                         &abort,
+                        &steal_queue,
+                        &idle_count,
+                        exhaustive,
                     );
 
+                    active_count.fetch_sub(1, Ordering::Relaxed);
                     total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
 
                     if found {
@@ -791,7 +840,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
                         }
                         let mut guard = result.lock().unwrap();
                         if guard.is_none() {
-                            *guard = Some((item.prefix.clone(), solution.clone()));
+                            *guard = Some(solution.clone());
                         }
                     }
                 }
@@ -802,10 +851,7 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     let result = result.into_inner().unwrap();
     let nodes_visited = total_nodes.load(Ordering::Relaxed);
 
-    let solution = result.map(|(prefix, suffix)| {
-        let mut sorted_solution = prefix;
-        sorted_solution.extend_from_slice(&suffix);
-        // Map solution back to original piece order.
+    let solution = result.map(|sorted_solution| {
         let mut solution = vec![(0, 0); n];
         for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
             solution[order[sorted_idx]] = (row, col);
@@ -838,6 +884,7 @@ fn enumerate_combos_pruned(
         results.push(WorkItem {
             board: board.clone(),
             prefix: prefix.clone(),
+            depth: k,
             min_placement_at_k: min_placement,
             prev_dup_at_k: prev_dup_placement,
         });

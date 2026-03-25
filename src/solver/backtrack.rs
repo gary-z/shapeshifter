@@ -9,7 +9,7 @@ use super::{PruningConfig, SolverData};
 
 /// Inline xorshift64 step — very fast, good enough for tie-breaking shuffles.
 #[inline(always)]
-fn xorshift64(state: &Cell<u64>) -> u64 {
+pub(crate) fn xorshift64(state: &Cell<u64>) -> u64 {
     let mut s = state.get();
     s ^= s << 13;
     s ^= s >> 7;
@@ -224,3 +224,323 @@ define_backtrack!(backtrack);
 
 // Abortable backtrack: checks abort flag every 1024 nodes.
 define_backtrack!(backtrack_abortable, abort: abort: &AtomicBool);
+
+// ---------------------------------------------------------------------------
+// Iterative backtrack with budget-based work stealing
+// ---------------------------------------------------------------------------
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+
+/// A frame on the explicit search stack for the iterative backtracker.
+struct SearchFrame {
+    /// Board state BEFORE any placement at this level.
+    board: Board,
+    /// Which piece this frame places.
+    piece_idx: usize,
+    /// Pre-filtered, ordered placements: (original_pl_idx, row, col, mask).
+    placements: Vec<(usize, usize, usize, Bitboard)>,
+    /// Next index into `placements` to try.
+    cursor: usize,
+}
+
+/// A stealable task: a search starting point at any depth.
+pub(crate) struct StealableTask {
+    pub board: Board,
+    pub prefix: Vec<(usize, usize)>,
+    pub depth: usize,
+    pub min_placement: usize,
+    pub prev_dup: usize,
+}
+
+/// Build a search frame: compute placement ordering, filter, and collect valid moves.
+fn build_search_frame(
+    board: &Board,
+    data: &SolverData,
+    piece_idx: usize,
+    min_placement: usize,
+    prev_dup_placement: usize,
+    config: &PruningConfig,
+    rng: &Cell<u64>,
+) -> SearchFrame {
+    let placements = &data.all_placements[piece_idx];
+    let pl_len = placements.len();
+
+    // Locked mask.
+    let locked_mask = if config.cell_locking {
+        board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
+    } else {
+        Bitboard::ZERO
+    };
+
+    // Counting sort by zeros_hit ascending.
+    let zero_plane = board.plane(0);
+    let mut order = [0u8; 196];
+    let mut keys = [0u8; 196];
+    for i in 0..pl_len {
+        keys[i] = (placements[i].2 & zero_plane).count_ones() as u8;
+    }
+    let mut counts = [0u8; 26];
+    for i in 0..pl_len { counts[keys[i] as usize] += 1; }
+    let mut offsets = [0u8; 26];
+    for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
+    let bucket_starts = offsets;
+    for i in 0..pl_len {
+        let k = keys[i] as usize;
+        order[offsets[k] as usize] = i as u8;
+        offsets[k] += 1;
+    }
+
+    // Shuffle within buckets for tie diversity.
+    if rng.get() != 0 {
+        for bucket in 0..26 {
+            let start = bucket_starts[bucket] as usize;
+            let end = offsets[bucket] as usize;
+            let len = end - start;
+            if len > 1 {
+                for i in (1..len).rev() {
+                    let j = xorshift64(rng) as usize % (i + 1);
+                    order.swap(start + i, start + j);
+                }
+            }
+        }
+    }
+
+    // Filter and collect valid placements.
+    let mut filtered = Vec::new();
+    for oi in 0..pl_len {
+        let pl_idx = order[oi] as usize;
+        let (row, col, mask) = placements[pl_idx];
+
+        if config.duplicate_pruning && pl_idx < min_placement {
+            continue;
+        }
+        if !(mask & locked_mask).is_zero() {
+            continue;
+        }
+        if prev_dup_placement < usize::MAX {
+            if let Some(ref table) = data.skip_tables[piece_idx] {
+                let num_curr = placements.len();
+                if table[prev_dup_placement * num_curr + pl_idx] {
+                    continue;
+                }
+            }
+        }
+        filtered.push((pl_idx, row, col, mask));
+    }
+
+    SearchFrame {
+        board: board.clone(),
+        piece_idx,
+        placements: filtered,
+        cursor: 0,
+    }
+}
+
+/// Compute (next_min_placement, next_prev_dup) for the piece after `piece_idx`,
+/// given that we chose `pl_idx` at `piece_idx`.
+#[inline]
+fn next_dup_state(
+    data: &SolverData,
+    piece_idx: usize,
+    pl_idx: usize,
+    config: &PruningConfig,
+) -> (usize, usize) {
+    let next = piece_idx + 1;
+    let is_next_dup = config.duplicate_pruning
+        && next < data.all_placements.len()
+        && data.is_dup_of_prev[next];
+    let next_min = if is_next_dup { pl_idx } else { 0 };
+    let next_prev = if next < data.all_placements.len()
+        && data.skip_tables[next].is_some()
+    {
+        pl_idx
+    } else {
+        usize::MAX
+    };
+    (next_min, next_prev)
+}
+
+/// Split work from the explicit stack and push to the shared steal queue.
+/// Finds the shallowest frame with remaining placements and donates them.
+fn split_work(
+    stack: &mut [SearchFrame],
+    solution_prefix: &[(usize, usize)],
+    base_solution_len: usize,
+    data: &SolverData,
+    config: &PruningConfig,
+    queue: &Mutex<VecDeque<StealableTask>>,
+) {
+    // Find shallowest frame with remaining placements (largest subtrees).
+    for (si, frame) in stack.iter_mut().enumerate() {
+        if frame.cursor >= frame.placements.len() {
+            continue;
+        }
+        // Donate remaining placements from this frame.
+        let mut tasks = Vec::new();
+        for ci in frame.cursor..frame.placements.len() {
+            let (pl_idx, row, col, mask) = frame.placements[ci];
+            let mut board = frame.board.clone();
+            board.apply_piece(mask);
+            let depth = frame.piece_idx + 1;
+
+            // Build the solution prefix up to this frame's depth, then add this placement.
+            let prefix_len = base_solution_len + si;
+            let mut prefix = solution_prefix[..prefix_len].to_vec();
+            prefix.push((row, col));
+
+            let (next_min, next_prev) = next_dup_state(data, frame.piece_idx, pl_idx, config);
+
+            tasks.push(StealableTask {
+                board,
+                prefix,
+                depth,
+                min_placement: next_min,
+                prev_dup: next_prev,
+            });
+        }
+        // Mark all as donated.
+        frame.cursor = frame.placements.len();
+        // Push to shared queue.
+        if !tasks.is_empty() {
+            let mut q = queue.lock().unwrap();
+            for t in tasks {
+                q.push_back(t);
+            }
+        }
+        return; // Only split at one level.
+    }
+}
+
+/// Node budget before checking whether to split.
+const SPLIT_BUDGET: u64 = 4096;
+
+/// Iterative backtracker with budget-based work stealing.
+/// Runs DFS with an explicit stack. Every SPLIT_BUDGET nodes, if idle threads
+/// exist, donates remaining work at the shallowest stack level.
+pub(crate) fn backtrack_stealing(
+    initial_board: &Board,
+    data: &SolverData,
+    start_depth: usize,
+    initial_min: usize,
+    initial_prev_dup: usize,
+    solution: &mut Vec<(usize, usize)>,
+    nodes: &Cell<u64>,
+    config: &PruningConfig,
+    rng: &Cell<u64>,
+    abort: &AtomicBool,
+    queue: &Mutex<VecDeque<StealableTask>>,
+    idle_count: &AtomicUsize,
+    exhaustive: bool,
+) -> bool {
+    let n = data.all_placements.len();
+    let base_solution_len = solution.len();
+
+    // Check terminal / single-cell endgame before building first frame.
+    if start_depth == n {
+        return initial_board.is_solved();
+    }
+    if config.single_cell_endgame && start_depth >= data.single_cell_start {
+        let num_remaining = n - start_depth;
+        return solve_single_cells(initial_board, data.m, data.h, data.w, num_remaining, solution);
+    }
+
+    // Pruning at root.
+    if !prune_node(initial_board, data, start_depth, config) {
+        return false;
+    }
+
+    let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
+    stack.push(build_search_frame(
+        initial_board, data, start_depth, initial_min, initial_prev_dup, config, rng,
+    ));
+
+    let mut budget = SPLIT_BUDGET;
+    let mut found = false;
+
+    loop {
+        // Abort check.
+        if abort.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Stack empty → this subtree is exhausted.
+        if stack.is_empty() {
+            break;
+        }
+
+        let frame = stack.last_mut().unwrap();
+
+        // All placements at this level tried → backtrack.
+        if frame.cursor >= frame.placements.len() {
+            stack.pop();
+            continue;
+        }
+
+        // Take next placement.
+        let (pl_idx, row, col, mask) = frame.placements[frame.cursor];
+        frame.cursor += 1;
+        let piece_idx = frame.piece_idx;
+
+        // Apply placement.
+        let mut board = frame.board.clone();
+        board.apply_piece(mask);
+
+        // Update solution: truncate to this frame's depth, then push.
+        let sol_depth = base_solution_len + stack.len() - 1;
+        solution.truncate(sol_depth);
+        solution.push((row, col));
+
+        nodes.set(nodes.get() + 1);
+
+        let next_piece = piece_idx + 1;
+
+        // Terminal: placed all pieces.
+        if next_piece == n {
+            if board.is_solved() {
+                found = true;
+                if !exhaustive {
+                    return true;
+                }
+            }
+            continue;
+        }
+
+        // Single-cell endgame.
+        if config.single_cell_endgame && next_piece >= data.single_cell_start {
+            let num_remaining = n - next_piece;
+            let saved_len = solution.len();
+            if solve_single_cells(&board, data.m, data.h, data.w, num_remaining, solution) {
+                found = true;
+                if !exhaustive {
+                    return true;
+                }
+                solution.truncate(saved_len);
+            }
+            continue;
+        }
+
+        // Pruning.
+        if !prune_node(&board, data, next_piece, config) {
+            continue;
+        }
+
+        // Budget check: should we split?
+        budget = budget.saturating_sub(1);
+        if budget == 0 {
+            budget = SPLIT_BUDGET;
+            if idle_count.load(Ordering::Relaxed) > 0 {
+                split_work(&mut stack, solution, base_solution_len, data, config, queue);
+            }
+        }
+
+        // Push new frame for next depth.
+        let (next_min, next_prev) = next_dup_state(data, piece_idx, pl_idx, config);
+        stack.push(build_search_frame(
+            &board, data, next_piece, next_min, next_prev, config, rng,
+        ));
+    }
+
+    found
+}

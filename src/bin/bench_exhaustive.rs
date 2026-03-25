@@ -12,7 +12,7 @@ use rand::SeedableRng;
 use shapeshifter::generate::generate_for_level;
 use shapeshifter::level::get_level;
 
-const TIMEOUT_SECS: u64 = 60;
+const TIMEOUT_SECS: u64 = 120;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -33,10 +33,10 @@ fn main() {
     );
 
     println!(
-        "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:<8}",
-        "Level", "Game", "Pcs", "Board", "Nodes", "Time", "Status"
+        "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
+        "Level", "Game", "Pcs", "Board", "Nodes", "Time", "Nodes/sec", "Status"
     );
-    println!("{}", "-".repeat(68));
+    println!("{}", "-".repeat(80));
 
     for level in start_level..=end_level {
         let spec = match get_level(level) {
@@ -83,7 +83,7 @@ fn main() {
             let wait_result = child.wait_timeout(timeout);
             let stdout_pipe = child.stdout.take();
 
-            let (nodes_str, time_str, status) = match wait_result {
+            let (nodes_str, time_str, nps_str, status) = match wait_result {
                 Ok(Some(exit)) if exit.success() => {
                     if let Some(mut pipe) = stdout_pipe {
                         use std::io::Read;
@@ -92,30 +92,31 @@ fn main() {
                         if let Some(line) = stdout.lines().next() {
                             let parts: Vec<&str> = line.split_whitespace().collect();
                             if parts.len() >= 3 {
-                                let nodes = parts[0].to_string();
+                                let nodes: u64 = parts[0].parse().unwrap_or(0);
                                 let ms: u64 = parts[1].parse().unwrap_or(0);
+                                let nps = if ms > 0 { nodes * 1000 / ms } else { 0 };
                                 let time = format!("{:.3?}", Duration::from_millis(ms));
-                                (nodes, time, "DONE".to_string())
+                                (format!("{}", nodes), time, format!("{}", nps), "DONE".to_string())
                             } else {
-                                ("-".to_string(), "-".to_string(), "ERROR".to_string())
+                                ("-".into(), "-".into(), "-".into(), "ERROR".into())
                             }
                         } else {
-                            ("-".to_string(), "-".to_string(), "ERROR".to_string())
+                            ("-".into(), "-".into(), "-".into(), "ERROR".into())
                         }
                     } else {
-                        ("-".to_string(), "-".to_string(), "ERROR".to_string())
+                        ("-".into(), "-".into(), "-".into(), "ERROR".into())
                     }
                 }
                 _ => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    ("-".to_string(), format!(">{}s", TIMEOUT_SECS), "TIMEOUT".to_string())
+                    ("-".into(), format!(">{}s", TIMEOUT_SECS), "-".into(), "TIMEOUT".into())
                 }
             };
 
             println!(
-                "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:<8}",
-                level, g, n_pieces, board_desc, nodes_str, time_str, status,
+                "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
+                level, g, n_pieces, board_desc, nodes_str, time_str, nps_str, status,
             );
         }
     }
