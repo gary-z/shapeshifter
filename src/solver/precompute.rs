@@ -916,13 +916,14 @@ fn build_weight_tuple_checks(
                         // nz_count (number of non-zero cells in group) satisfies:
                         //   ceil(w/(M-1)) <= nz_count <= min(w, W)
                         // For M=2, w = nz_count exactly, so bounds are tight.
-                        // For M>=3, w >= nz_count (each non-zero cell contributes
-                        // at least 1 to weight), so nz <= min(C, w).
+                        // For M>=3, nz_count <= min(w, W) (each non-zero cell
+                        // contributes at least 1 to weight, and at most W exist),
+                        // so nz <= min(C, w, W).
                         // Zero cells = W - nz_count >= W - min(w, W), and
                         // C - nz <= zero cells, so nz >= C - (W - ceil(w/(M-1))).
                         let nz_count_min = if m_val == 2 { w } else { (w + m_val - 2) / (m_val - 1) };
                         let nz_min = c.saturating_sub(gw - nz_count_min);
-                        let nz_max = c.min(w);
+                        let nz_max = c.min(w).min(gw);
 
                         for nz in nz_min..=nz_max {
                             let new_w_raw = w as i64 + (m_val - 1) as i64 * (c - nz) as i64 - nz as i64;
