@@ -1,9 +1,9 @@
 use rand::{Rng, RngExt};
 
-use crate::board::Board;
+use crate::core::board::Board;
 use crate::game::Game;
 use crate::level::LevelSpec;
-use crate::piece::Piece;
+use crate::core::piece::Piece;
 
 /// Generate a random connected piece that fits within the given max dimensions.
 /// The piece will have between 1 and max_h * max_w filled cells.

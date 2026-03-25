@@ -1,5 +1,5 @@
-use crate::board::Board;
-use crate::piece::Piece;
+use crate::core::board::Board;
+use crate::core::piece::Piece;
 
 /// A game instance: the board state, the list of pieces, and which piece is next.
 #[derive(Clone)]

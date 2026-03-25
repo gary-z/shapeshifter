@@ -9,10 +9,10 @@ use std::sync::Mutex;
 
 use rand::seq::SliceRandom;
 
-use crate::bitboard::Bitboard;
-use crate::board::Board;
-use crate::board::MAX_M;
-use crate::coverage::CoverageCounter;
+use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
+use crate::core::board::MAX_M;
+use crate::core::coverage::CoverageCounter;
 use crate::game::Game;
 
 use pruning::*;
@@ -152,7 +152,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     let w = game.board().width();
 
     // Count pieces per shape, preserving original indices.
-    let mut shape_groups: Vec<(crate::piece::Piece, Vec<usize>)> = Vec::new();
+    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
     for (i, piece) in pieces.iter().enumerate() {
         if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
             group.1.push(i);
@@ -329,8 +329,8 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
     };
 
     // Build reduced game: replace pieces[pi] and pieces[pj] with a 1x1 piece.
-    let p1x1 = crate::piece::Piece::from_grid(&[&[true]]);
-    let mut reduced_pieces: Vec<crate::piece::Piece> = Vec::with_capacity(n - 1);
+    let p1x1 = crate::core::piece::Piece::from_grid(&[&[true]]);
+    let mut reduced_pieces: Vec<crate::core::piece::Piece> = Vec::with_capacity(n - 1);
     let mut idx_map: Vec<usize> = Vec::with_capacity(n - 1);
     let mut merged_reduced_idx = 0;
     for k in 0..n {
@@ -376,7 +376,7 @@ fn try_cancellation_combo(
     config: &PruningConfig,
     parallel: bool,
     exhaustive: bool,
-    shape_groups: &[(crate::piece::Piece, Vec<usize>)],
+    shape_groups: &[(crate::core::piece::Piece, Vec<usize>)],
     cancellable_groups: &[(usize, usize)],
     combo: &[usize], // cancel_sets per cancellable group
     m: usize,
@@ -386,7 +386,7 @@ fn try_cancellation_combo(
     let pieces = game.pieces();
 
     // Build kept and cancelled index lists.
-    let mut cancelled_per_group: Vec<Option<(crate::piece::Piece, Vec<usize>)>> =
+    let mut cancelled_per_group: Vec<Option<(crate::core::piece::Piece, Vec<usize>)>> =
         vec![None; shape_groups.len()];
     for (ci, &(g, _)) in cancellable_groups.iter().enumerate() {
         let cancel_count = combo[ci] * m;
@@ -426,7 +426,7 @@ fn try_cancellation_combo(
         return SolveResult { solution: None, nodes_visited: 1 };
     }
 
-    let reduced_pieces: Vec<crate::piece::Piece> =
+    let reduced_pieces: Vec<crate::core::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
     let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
@@ -874,9 +874,9 @@ fn enumerate_combos_pruned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Board;
+    use crate::core::board::Board;
     use crate::game::Game;
-    use crate::piece::Piece;
+    use crate::core::piece::Piece;
 
     fn verify_solution(game: &Game, solution: &Solution) {
         let mut board = game.board().clone();

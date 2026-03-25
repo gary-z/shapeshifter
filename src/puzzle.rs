@@ -1,7 +1,7 @@
 use serde::Deserialize;
-use crate::board::Board;
+use crate::core::board::Board;
 use crate::game::Game;
-use crate::piece::Piece;
+use crate::core::piece::Piece;
 
 #[derive(Deserialize, serde::Serialize)]
 pub struct PuzzleJson {
@@ -117,12 +117,12 @@ h2 {{ color: #444; border-bottom: 1px solid #ccc; padding-bottom: 5px; }}
 }
 
 fn render_board(
-    board: &crate::board::Board,
+    board: &crate::core::board::Board,
     h: usize,
     w: usize,
     puzzle: &PuzzleJson,
     assets_dir: &str,
-    piece_mask: Option<crate::bitboard::Bitboard>,
+    piece_mask: Option<crate::core::bitboard::Bitboard>,
     click_pos: Option<(usize, usize)>,
 ) -> String {
     let mut s = format!("<div class=\"board\" style=\"grid-template-columns: repeat({}, 50px)\">\n", w);

@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::bitboard::Bitboard;
-use crate::board::Board;
+use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
 
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
