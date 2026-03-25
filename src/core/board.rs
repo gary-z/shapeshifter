@@ -1,4 +1,4 @@
-use crate::bitboard::Bitboard;
+use crate::core::bitboard::Bitboard;
 
 /// Maximum value of M (number of digit states per cell).
 pub const MAX_M: usize = 5;

@@ -1,6 +1,6 @@
-use crate::bitboard::Bitboard;
-use crate::board::Board;
-use crate::coverage::has_sufficient_coverage;
+use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
+use crate::core::coverage::has_sufficient_coverage;
 
 use super::SolverData;
 

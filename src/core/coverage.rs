@@ -1,4 +1,4 @@
-use crate::bitboard::Bitboard;
+use crate::core::bitboard::Bitboard;
 
 /// Maximum bits needed to count up to 36 pieces.
 const COUNT_BITS: usize = 6;
@@ -116,7 +116,7 @@ pub fn precompute_suffix_coverage(reaches: &[Bitboard]) -> Vec<CoverageCounter> 
 /// Check if the board is potentially solvable given remaining coverage.
 /// Returns false (prune) if any non-zero cell can't be hit enough times.
 pub fn has_sufficient_coverage(
-    board: &crate::board::Board,
+    board: &crate::core::board::Board,
     coverage: &CoverageCounter,
     m: u8,
 ) -> bool {

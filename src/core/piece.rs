@@ -1,4 +1,4 @@
-use crate::bitboard::Bitboard;
+use crate::core::bitboard::Bitboard;
 
 /// A puzzle piece defined by its filled cells, anchored at (0, 0).
 /// The shape is stored as a Bitboard using the 15-column stride layout.

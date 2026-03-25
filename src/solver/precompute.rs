@@ -1,6 +1,6 @@
-use crate::bitboard::Bitboard;
-use crate::coverage::{precompute_suffix_coverage, CoverageCounter};
-use crate::piece::Piece;
+use crate::core::bitboard::Bitboard;
+use crate::core::coverage::{precompute_suffix_coverage, CoverageCounter};
+use crate::core::piece::Piece;
 
 use super::pruning::*;
 use super::SolverData;
@@ -781,7 +781,7 @@ fn build_weight_tuple_checks(
     bh: usize, bw: usize, m: u8, n: usize,
     all_placements: &[Vec<(usize, usize, Bitboard)>],
     order: &[usize],
-    pieces: &[crate::piece::Piece],
+    pieces: &[crate::core::piece::Piece],
 ) -> Vec<WeightTupleReachability> {
     let m_val = m as u32;
     let max_total_configs = 50_000; // budget: skip if state space too large
