@@ -687,71 +687,17 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     );
     eprintln!("precompute: {:.3?}", t0.elapsed());
 
-    // Choose K: find the smallest K in {2, 3} such that the product of
-    // placement counts for pieces 0..K is < 50_000.
-    let k = {
-        let mut k = 2;
-        if n >= 3 {
-            let combos_2: usize = data.all_placements[..2].iter().map(|p| p.len()).product();
-            if combos_2 >= 50_000 {
-                k = 2;
-            } else {
-                let combos_3: usize = data.all_placements[..3].iter().map(|p| p.len()).product();
-                if combos_3 < 50_000 {
-                    k = 3;
-                }
-            }
-        }
-        k.min(n)
-    };
-
-    let mut all_combos: Vec<WorkItem> = Vec::new();
-    let t1 = std::time::Instant::now();
-    enumerate_combos_pruned(
-        &board,
-        &data,
-        k,
-        0,
-        0,
-        usize::MAX,
-        &mut Vec::with_capacity(k),
-        &mut all_combos,
-        config,
-    );
-    let max_combos: usize = data.all_placements[..k].iter().map(|p| p.len()).product();
-    eprintln!("enumerate: {:.3?}, combos={}/{} ({:.1}% pruned), k={}",
-        t1.elapsed(), all_combos.len(), max_combos,
-        (1.0 - all_combos.len() as f64 / max_combos as f64) * 100.0, k);
-
-    // Group combos by resulting board state (dedup).
-    // For deduped groups, keep only the first combo (with its boundary info).
-    let mut state_map: HashMap<BoardKey, usize> = HashMap::new();
-    let mut work_items: Vec<WorkItem> = Vec::new();
-
-    for combo in all_combos {
-        let key = BoardKey::from_board(&combo.board);
-        if let std::collections::hash_map::Entry::Vacant(e) = state_map.entry(key) {
-            e.insert(work_items.len());
-            work_items.push(combo);
-        }
-    }
-
-    // Seed the shared work-stealing queue with initial work items (shuffled).
+    // Seed the steal queue with a single root task.
+    // The budget-based work-stealing will naturally split it as threads go idle.
     use std::collections::VecDeque;
     let steal_queue: Mutex<VecDeque<backtrack::StealableTask>> = Mutex::new(VecDeque::new());
-    {
-        work_items.shuffle(&mut rand::rng());
-        let mut q = steal_queue.lock().unwrap();
-        for item in work_items {
-            q.push_back(backtrack::StealableTask {
-                board: item.board,
-                prefix: item.prefix,
-                depth: item.depth,
-                min_placement: item.min_placement_at_k,
-                prev_dup: item.prev_dup_at_k,
-            });
-        }
-    }
+    steal_queue.lock().unwrap().push_back(backtrack::StealableTask {
+        board: board.clone(),
+        prefix: Vec::new(),
+        depth: 0,
+        min_placement: 0,
+        prev_dup: usize::MAX,
+    });
 
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
