@@ -1122,36 +1122,40 @@ mod tests {
         configs: &[(u8, u8, u8, u8)],
         seeds: &[u64],
     ) -> (u64, usize) {
+        use rayon::prelude::*;
         use crate::generate::generate_game;
         use crate::level::LevelSpec;
 
-        let mut total_nodes = 0u64;
-        let mut failures = 0usize;
-        for &(m, rows, cols, shapes) in configs {
-            let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
-            };
-            for &seed in seeds {
-                let mut rng =
-                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = generate_game(&spec, &mut rng);
-                let result = solve_with_config(&game, config);
-                total_nodes += result.nodes_visited;
-                match &result.solution {
-                    None => failures += 1,
-                    Some(s) => {
-                        let mut board = game.board().clone();
-                        for (i, &(row, col)) in s.iter().enumerate() {
-                            let mask = game.pieces()[i].placed_at(row, col);
-                            board.apply_piece(mask);
+        // Parallelize across games, each game solved serially for determinism.
+        let results: Vec<(u64, usize)> = configs
+            .par_iter()
+            .flat_map(|&(m, rows, cols, shapes)| {
+                let spec = LevelSpec {
+                    level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
+                };
+                seeds.par_iter().map(move |&seed| {
+                    let mut rng =
+                        <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                    let game = generate_game(&spec, &mut rng);
+                    let result = solve_with_config(&game, config);
+                    let failed = match &result.solution {
+                        None => 1,
+                        Some(s) => {
+                            let mut board = game.board().clone();
+                            for (i, &(row, col)) in s.iter().enumerate() {
+                                let mask = game.pieces()[i].placed_at(row, col);
+                                board.apply_piece(mask);
+                            }
+                            if !board.is_solved() { 1 } else { 0 }
                         }
-                        if !board.is_solved() {
-                            failures += 1;
-                        }
-                    }
-                }
-            }
-        }
+                    };
+                    (result.nodes_visited, failed)
+                }).collect::<Vec<_>>()
+            })
+            .collect();
+
+        let total_nodes = results.iter().map(|r| r.0).sum();
+        let failures = results.iter().map(|r| r.1).sum();
         (total_nodes, failures)
     }
 
@@ -1416,6 +1420,7 @@ mod tests {
 
     #[test]
     fn test_pair_skip_tables_non_identical() {
+        use rayon::prelude::*;
         use crate::generate::generate_game;
         use crate::level::LevelSpec;
 
@@ -1427,45 +1432,36 @@ mod tests {
         ];
         let seeds: Vec<u64> = (0..30).collect();
 
-        let mut total_with = 0u64;
-        let mut total_without = 0u64;
-        let mut failures = 0usize;
-
-        for &(m, rows, cols, shapes) in &configs {
-            let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
-            };
-            for &seed in &seeds {
-                let mut rng =
-                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = generate_game(&spec, &mut rng);
-
-                let result_with = solve(&game);
-                total_with += result_with.nodes_visited;
-
-                if let Some(ref sol) = result_with.solution {
-                    let mut board = game.board().clone();
-                    for (i, &(row, col)) in sol.iter().enumerate() {
-                        let mask = game.pieces()[i].placed_at(row, col);
-                        board.apply_piece(mask);
+        let failures: usize = configs
+            .par_iter()
+            .flat_map(|&(m, rows, cols, shapes)| {
+                let spec = LevelSpec {
+                    level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
+                };
+                seeds.par_iter().map(move |&seed| {
+                    let mut rng =
+                        <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                    let game = generate_game(&spec, &mut rng);
+                    let result_with = solve(&game);
+                    if let Some(ref sol) = result_with.solution {
+                        let mut board = game.board().clone();
+                        for (i, &(row, col)) in sol.iter().enumerate() {
+                            let mask = game.pieces()[i].placed_at(row, col);
+                            board.apply_piece(mask);
+                        }
+                        if !board.is_solved() { 1 } else { 0 }
+                    } else {
+                        1
                     }
-                    if !board.is_solved() {
-                        failures += 1;
-                    }
-                } else {
-                    failures += 1;
-                }
-            }
-        }
+                }).collect::<Vec<_>>()
+            })
+            .sum();
 
         assert_eq!(failures, 0, "pair skip tables caused {} failures", failures);
     }
 
     #[test]
     fn test_pair_skip_tables_soundness_stress() {
-        use crate::generate::generate_game;
-        use crate::level::LevelSpec;
-
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
             (3, 4, 4, 8), (3, 4, 4, 12),
@@ -1515,25 +1511,42 @@ mod tests {
 
     #[test]
     fn test_pair_merge_soundness_stress() {
-        use rand::SeedableRng;
+        use rayon::prelude::*;
 
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14), (2, 6, 6, 12),
         ];
+        let seeds: Vec<u64> = (0..10).collect();
 
-        for &(m, h, w, n) in &configs {
-            for seed in 0..10u64 {
+        let failures: Vec<String> = configs
+            .par_iter()
+            .flat_map(|&(m, h, w, n)| {
                 let spec = crate::level::LevelSpec {
                     level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
                 };
-                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
-                if let Some(ref sol) = result.solution {
-                    verify_solution(&game, sol);
-                }
-            }
-        }
+                seeds.par_iter().filter_map(move |&seed| {
+                    let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                    let game = crate::generate::generate_game(&spec, &mut rng);
+                    let result = solve(&game);
+                    if let Some(ref sol) = result.solution {
+                        let mut board = game.board().clone();
+                        for (i, &(row, col)) in sol.iter().enumerate() {
+                            let mask = game.pieces()[i].placed_at(row, col);
+                            board.apply_piece(mask);
+                        }
+                        if !board.is_solved() {
+                            Some(format!("FAIL: invalid solution M={} {}x{} pieces={} seed={}", m, h, w, n, seed))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None // original test allowed no-solution cases
+                    }
+                }).collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert!(failures.is_empty(), "pair merge stress failures: {:?}", failures);
     }
 
     #[test]
@@ -1556,24 +1569,42 @@ mod tests {
 
     #[test]
     fn test_subset_no_false_zero_effect() {
-        use rand::SeedableRng;
+        use rayon::prelude::*;
 
         let configs = vec![
             (2, 4, 4, 10), (3, 4, 4, 8), (2, 6, 6, 12),
         ];
-        for &(m, h, w, n) in &configs {
-            for seed in 0..20u64 {
+        let seeds: Vec<u64> = (0..20).collect();
+
+        let failures: Vec<String> = configs
+            .par_iter()
+            .flat_map(|&(m, h, w, n)| {
                 let spec = crate::level::LevelSpec {
                     level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
                 };
-                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
-                if let Some(ref sol) = result.solution {
-                    verify_solution(&game, sol);
-                }
-            }
-        }
+                seeds.par_iter().filter_map(move |&seed| {
+                    let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                    let game = crate::generate::generate_game(&spec, &mut rng);
+                    let result = solve(&game);
+                    if let Some(ref sol) = result.solution {
+                        let mut board = game.board().clone();
+                        for (i, &(row, col)) in sol.iter().enumerate() {
+                            let mask = game.pieces()[i].placed_at(row, col);
+                            board.apply_piece(mask);
+                        }
+                        if !board.is_solved() {
+                            Some(format!("FAIL: invalid solution M={} {}x{} pieces={} seed={}", m, h, w, n, seed))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }).collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert!(failures.is_empty(), "subset no-false-zero failures: {:?}", failures);
     }
 
     // --- Cancellation reduction test ---
