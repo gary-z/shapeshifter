@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
@@ -10,6 +11,10 @@ fn main() {
     let mut json_path = None;
     let mut assets_dir = "x";
     let mut output_path = None;
+    let mut parallel = false;
+    let mut exhaustive = false;
+    let mut worker = false;
+    let mut disable_prune = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -22,6 +27,28 @@ fn main() {
                 i += 1;
                 output_path = Some(&args[i]);
             }
+            "--parallel" => parallel = true,
+            "--exhaustive" => exhaustive = true,
+            "--worker" => worker = true,
+            "--disable-prune" => {
+                i += 1;
+                disable_prune = Some(args[i].clone());
+            }
+            "-h" | "--help" => {
+                eprintln!(
+                    "Usage: solve [puzzle.json] [OPTIONS]\n\n\
+                     Reads puzzle JSON from a file argument or stdin.\n\n\
+                     Options:\n  \
+                       --parallel        Use parallel solver (all cores)\n  \
+                       --exhaustive      Explore full search tree\n  \
+                       --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
+                       --disable-prune RULE  Disable a pruning rule (for ablation)\n  \
+                       --assets-dir URL  Base URL for piece images in HTML output\n  \
+                       -o, --output PATH Write solution HTML to PATH\n  \
+                       -h, --help        Show this help"
+                );
+                std::process::exit(0);
+            }
             _ => {
                 json_path = Some(&args[i]);
             }
@@ -29,45 +56,85 @@ fn main() {
         i += 1;
     }
 
-    let json_path = json_path.unwrap_or_else(|| {
-        eprintln!("Usage: solve <puzzle.json> [--assets-dir URL] [-o solution.html]");
-        std::process::exit(1);
-    });
-
-    let puz = PuzzleJson::load(json_path);
+    // Load puzzle from file or stdin.
+    let puz: PuzzleJson = if let Some(path) = json_path {
+        PuzzleJson::load(path)
+    } else {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .expect("failed to read stdin");
+        serde_json::from_str(&input).expect("failed to parse puzzle JSON from stdin")
+    };
     let game = puz.to_game();
 
-    // Default output path: sibling of input named solution.html
-    let default_output = Path::new(json_path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("solution.html");
-    let output_path = output_path
-        .map(|s| s.as_str())
-        .unwrap_or_else(|| default_output.to_str().unwrap());
-
-    println!(
-        "Level {}: {}x{}, M={}, {} pieces",
-        puz.level,
-        puz.rows,
-        puz.columns,
-        puz.m,
-        puz.pieces.len()
-    );
+    // Build pruning config.
+    let mut config = solver::PruningConfig::default();
+    if let Some(flag) = &disable_prune {
+        match flag.as_str() {
+            "active_planes" => config.active_planes = false,
+            "min_flips_global" => config.min_flips_global = false,
+            "min_flips_rowcol" => config.min_flips_rowcol = false,
+            "min_flips_diagonal" => config.min_flips_diagonal = false,
+            "coverage" => config.coverage = false,
+            "jaggedness" => config.jaggedness = false,
+            "cell_locking" => config.cell_locking = false,
+            "component_checks" => config.component_checks = false,
+            "duplicate_pruning" => config.duplicate_pruning = false,
+            "single_cell_endgame" => config.single_cell_endgame = false,
+            _ => eprintln!("Unknown prune flag: {}", flag),
+        }
+    }
 
     let start = Instant::now();
-    let result = solver::solve(&game);
+    let result = if exhaustive {
+        solver::solve_exhaustive(&game)
+    } else if parallel {
+        solver::solve(&game)
+    } else {
+        solver::solve_with_config(&game, &config)
+    };
     let elapsed = start.elapsed();
+
+    if worker {
+        // Compact output for benchmark harnesses: nodes elapsed_ms solved
+        let solved = result.solution.is_some();
+        println!("{} {} {}", result.nodes_visited, elapsed.as_millis(), solved);
+        return;
+    }
+
+    // Interactive output with optional HTML guide.
+    println!(
+        "Level {}: {}x{}, M={}, {} pieces",
+        puz.level, puz.rows, puz.columns, puz.m,
+        puz.pieces.len()
+    );
 
     match result.solution {
         Some(solution) => {
             println!("Solved in {:.3?} ({} nodes)", elapsed, result.nodes_visited);
+
+            let default_output = json_path
+                .map(|p| {
+                    Path::new(p)
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join("solution.html")
+                })
+                .unwrap_or_else(|| Path::new("solution.html").to_path_buf());
+            let out = output_path
+                .map(|s| s.as_str())
+                .unwrap_or_else(|| default_output.to_str().unwrap());
+
             let html = puzzle::generate_html_guide(&puz, &game, &solution, assets_dir);
-            std::fs::write(output_path, &html).expect("failed to write solution HTML");
-            println!("Written to {}", output_path);
+            std::fs::write(out, &html).expect("failed to write solution HTML");
+            println!("Written to {}", out);
         }
         None => {
-            eprintln!("No solution found ({:.3?}, {} nodes)", elapsed, result.nodes_visited);
+            eprintln!(
+                "No solution found ({:.3?}, {} nodes)",
+                elapsed, result.nodes_visited
+            );
             std::process::exit(1);
         }
     }
