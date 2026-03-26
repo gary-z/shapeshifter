@@ -67,9 +67,9 @@ fn main() {
 
     let start = Instant::now();
     let result = if corner_presolve {
-        solver::solve_corner_presolve(&game)
+        solver::solve_corner_presolve(&game, parallel)
     } else if exhaustive {
-        solver::solve_exhaustive(&game)
+        solver::solve_exhaustive(&game, parallel)
     } else if parallel {
         solver::solve(&game)
     } else {
