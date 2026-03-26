@@ -48,7 +48,6 @@ fn run_task(
     timeout_secs: u64,
     parallel: bool,
     exhaustive: bool,
-    corner_presolve: bool,
 ) -> TaskResult {
     let mut cmd = Command::new(solver_path);
     cmd.arg("--worker");
@@ -57,9 +56,6 @@ fn run_task(
     }
     if exhaustive {
         cmd.arg("--exhaustive");
-    }
-    if corner_presolve {
-        cmd.arg("--corner-presolve");
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -240,7 +236,6 @@ fn run_bench(
     max_parallel: usize,
     parallel: bool,
     exhaustive: bool,
-    corner_presolve: bool,
     show_nodes_per_sec: bool,
 ) {
     let total = tasks.len();
@@ -265,7 +260,7 @@ fn run_bench(
                         None => break,
                     };
 
-                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive, corner_presolve);
+                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive);
                     let _ = result_tx.send(r);
                 }
             });
@@ -392,7 +387,6 @@ fn main() {
     let mut positional = Vec::new();
     let mut parallel = false;
     let mut exhaustive = false;
-    let mut corner_presolve = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
 
@@ -401,7 +395,6 @@ fn main() {
         match args[i].as_str() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
-            "--corner-presolve" => corner_presolve = true,
             "--timeout" => {
                 i += 1;
                 timeout_secs = Some(args[i].parse().expect("invalid timeout"));
@@ -472,7 +465,6 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
-                corner_presolve,
                 exhaustive,
             );
         }
@@ -506,7 +498,6 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
-                corner_presolve,
                 false,
             );
         }

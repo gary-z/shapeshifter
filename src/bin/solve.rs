@@ -14,7 +14,6 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
-    let mut corner_presolve = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -30,7 +29,6 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
-            "--corner-presolve" => corner_presolve = true,
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: solve [puzzle.json] [OPTIONS]\n\n\
@@ -39,7 +37,6 @@ fn main() {
                        --parallel        Use parallel solver (all cores)\n  \
                        --exhaustive      Explore full search tree\n  \
                        --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
-                       --corner-presolve Corner placement shaving\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
                        -h, --help        Show this help"
@@ -66,15 +63,7 @@ fn main() {
     let game = puz.to_game();
 
     let start = Instant::now();
-    let result = if corner_presolve {
-        solver::solve_corner_presolve(&game, parallel)
-    } else if exhaustive {
-        solver::solve_exhaustive(&game, parallel)
-    } else if parallel {
-        solver::solve(&game)
-    } else {
-        solver::solve_serial(&game)
-    };
+    let result = solver::solve(&game, parallel, exhaustive);
     let elapsed = start.elapsed();
 
     if worker {
