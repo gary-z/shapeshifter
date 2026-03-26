@@ -114,28 +114,14 @@ pub(crate) struct SolverData {
     pub(crate) board_mask: Bitboard,
 }
 
-/// Solve with all pruning enabled. Tries cancellation, pair-merge, then parallel.
-pub fn solve(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), true, false)
-}
-
-/// Dispatch to the parallel or serial mask-based solver.
-fn solve_with_mask(game: &Game, mask: Option<&PlacementMask>, parallel: bool) -> SolveResult {
-    if parallel {
-        solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
-    } else {
-        solve_with_config_and_mask(game, &PruningConfig::default(), mask)
-    }
-}
-
-/// Solve with corner placement shaving.
+/// Main entry point: corner-presolve then cancellation/pair-merge pipeline.
 ///
 /// For each piece that can cover a board corner cell, forces it at that corner
 /// placement and attempts to solve the remaining pieces. If the reduced solve
 /// proves infeasible, that placement is shaved (removed from the valid set).
 /// After trying all corner forcings, falls back to the full solver with the
 /// accumulated placement mask.
-pub fn solve_corner_presolve(game: &Game, parallel: bool) -> SolveResult {
+pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     // Build all cancellation reductions (most aggressive first), plus the original game.
     let reductions = build_all_cancellation_reductions(game);
 
@@ -180,10 +166,19 @@ pub fn solve_corner_presolve(game: &Game, parallel: bool) -> SolveResult {
 
     // No reduction worked. Fall back to standard solver.
     eprintln!("corner_presolve: all reductions exhausted, falling back to standard solver");
-    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, false);
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive);
     SolveResult {
         solution: full.solution,
         nodes_visited: total_nodes + full.nodes_visited,
+    }
+}
+
+/// Dispatch to the parallel or serial mask-based solver.
+fn solve_with_mask(game: &Game, mask: Option<&PlacementMask>, parallel: bool) -> SolveResult {
+    if parallel {
+        solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
+    } else {
+        solve_with_config_and_mask(game, &PruningConfig::default(), mask)
     }
 }
 
@@ -337,18 +332,6 @@ fn ensure_mask(
     if mask[piece_idx].is_none() {
         mask[piece_idx] = Some(vec![true; all_placements[piece_idx].len()]);
     }
-}
-
-/// Solve in exhaustive mode: explore the full tree even after finding a solution.
-/// Used for benchmarking parallel efficiency without the luck factor.
-pub fn solve_exhaustive(game: &Game, parallel: bool) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), parallel, true)
-}
-
-/// Solve serial-only. Same cancellation + pair-merge pipeline but no parallel.
-/// Used by benchmarks where the process pool provides parallelism across games.
-pub fn solve_serial(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), false, false)
 }
 
 /// Dispatch to parallel or serial based on flag.
@@ -1387,7 +1370,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 1);
         assert_eq!(sol[0], (0, 0));
         verify_solution(&game, &sol);
@@ -1399,7 +1382,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -1410,7 +1393,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1420,7 +1403,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 9);
         verify_solution(&game, &sol);
     }
@@ -1432,7 +1415,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 3);
         verify_solution(&game, &sol);
     }
@@ -1444,7 +1427,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1455,7 +1438,7 @@ mod tests {
         let big = Piece::from_grid(&[&[true, true], &[true, false]]); // L-shape, 3 cells
         let small = Piece::from_grid(&[&[true]]); // 1x1
         let game = Game::new(board, vec![big, small]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -1464,7 +1447,7 @@ mod tests {
     fn test_generated_game_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
         let game = crate::generate::generate_for_level(1, &mut rng).unwrap();
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), game.pieces().len());
         verify_solution(&game, &sol);
     }
@@ -1473,7 +1456,7 @@ mod tests {
     fn test_generated_level_5_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(123);
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         verify_solution(&game, &sol);
     }
 
@@ -1484,7 +1467,7 @@ mod tests {
         assert_eq!(board.min_flips_needed(), 9);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1494,7 +1477,7 @@ mod tests {
         let p0 = Piece::from_grid(&[&[true]]);
         let p1 = Piece::from_grid(&[&[true, true]]);
         let game = Game::new(board, vec![p0, p1]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -1505,7 +1488,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1513,7 +1496,7 @@ mod tests {
         for level in [1, 5, 10, 20, 25, 30] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
             let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
-            let result = solve(&game);
+            let result = solve(&game, false, false);
             assert!(result.solution.is_some(), "level {level} should be solvable");
             verify_solution(&game, &result.solution.unwrap());
         }
@@ -1572,7 +1555,7 @@ mod tests {
                     let mut rng =
                         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                     let game = generate_game(&spec, &mut rng);
-                    let result = solve(&game);
+                    let result = solve(&game, false, false);
                     match result.solution {
                         None => Some(format!(
                             "FAIL: no solution found for M={} {}x{} pieces={} seed={}",
@@ -1934,7 +1917,7 @@ mod tests {
                     <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = generate_game(&spec, &mut rng);
 
-                let result_with = solve(&game);
+                let result_with = solve(&game, false, false);
                 total_with += result_with.nodes_visited;
 
                 if let Some(ref sol) = result_with.solution {
@@ -2002,7 +1985,7 @@ mod tests {
         let p1x2 = Piece::from_grid(&[&[true, true]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p1x2, p1x1, p1x1, p1x1]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "pair-merge game should solve");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -2022,7 +2005,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -2041,7 +2024,7 @@ mod tests {
         let p_l = Piece::from_grid(&[&[true, true], &[true, false]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p_l, p1x1, p1x1]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some());
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -2062,7 +2045,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -2077,7 +2060,7 @@ mod tests {
         let board = Board::new_solved(3, 3, 2);
         let p = Piece::from_grid(&[&[true, true], &[true, false]]);
         let game = Game::new(board, vec![p, p, p, p]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
