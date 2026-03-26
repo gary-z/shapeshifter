@@ -44,4 +44,4 @@ cargo build --release --bin solve --manifest-path "$SCRIPT_DIR/Cargo.toml" 2>/de
 
 # Solve and generate visual guide
 echo ""
-"$SCRIPT_DIR/target/release/solve" "$JSON_FILE" --assets-dir "$ASSETS_DIR" -o "$SOLUTION_FILE"
+"$SCRIPT_DIR/target/release/solve" "$JSON_FILE" --parallel --assets-dir "$ASSETS_DIR" -o "$SOLUTION_FILE"
