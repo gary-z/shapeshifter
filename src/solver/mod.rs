@@ -121,21 +121,36 @@ pub(crate) struct SolverData {
 /// backtracker runs. Sub-solves during shaving go through the full
 /// cancellation pipeline so they can prove infeasibility faster.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
+    solve_with_options(game, parallel, exhaustive, true)
+}
+
+/// Like `solve`, but allows disabling corner presolve.
+pub fn solve_with_options(game: &Game, parallel: bool, exhaustive: bool, corner_presolve: bool) -> SolveResult {
     let mut total_nodes = 0u64;
-    let (result, mask) = corner_presolve_shave(game, &mut total_nodes, parallel);
-    if let Some(solution) = result.solution {
+
+    if corner_presolve {
+        let (result, mask) = corner_presolve_shave(game, &mut total_nodes, parallel);
+        if let Some(solution) = result.solution {
+            return SolveResult {
+                solution: Some(solution),
+                nodes_visited: total_nodes,
+            };
+        }
+
+        // Corner presolve didn't solve directly. Run cancellation pipeline with shaved mask.
+        eprintln!("corner_presolve: falling back to cancellation pipeline with shaved mask");
+        let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, Some(&mask));
         return SolveResult {
-            solution: Some(solution),
-            nodes_visited: total_nodes,
+            solution: full.solution,
+            nodes_visited: total_nodes + full.nodes_visited,
         };
     }
 
-    // Corner presolve didn't solve directly. Run cancellation pipeline with shaved mask.
-    eprintln!("corner_presolve: falling back to cancellation pipeline with shaved mask");
-    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, Some(&mask));
+    // No corner presolve — go straight to cancellation pipeline.
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, None);
     SolveResult {
         solution: full.solution,
-        nodes_visited: total_nodes + full.nodes_visited,
+        nodes_visited: full.nodes_visited,
     }
 }
 

@@ -14,6 +14,7 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
+    let mut no_corner_presolve = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -29,6 +30,7 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
+            "--no-corner-presolve" => no_corner_presolve = true,
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: solve [puzzle.json] [OPTIONS]\n\n\
@@ -63,7 +65,7 @@ fn main() {
     let game = puz.to_game();
 
     let start = Instant::now();
-    let result = solver::solve(&game, parallel, exhaustive);
+    let result = solver::solve_with_options(&game, parallel, exhaustive, !no_corner_presolve);
     let elapsed = start.elapsed();
 
     if worker {
