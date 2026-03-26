@@ -119,6 +119,15 @@ pub fn solve(game: &Game) -> SolveResult {
     solve_with_cancellation(game, &PruningConfig::default(), true, false)
 }
 
+/// Dispatch to the parallel or serial mask-based solver.
+fn solve_with_mask(game: &Game, mask: Option<&PlacementMask>, parallel: bool) -> SolveResult {
+    if parallel {
+        solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
+    } else {
+        solve_with_config_and_mask(game, &PruningConfig::default(), mask)
+    }
+}
+
 /// Solve with corner placement shaving.
 ///
 /// For each piece that can cover a board corner cell, forces it at that corner
@@ -126,7 +135,7 @@ pub fn solve(game: &Game) -> SolveResult {
 /// proves infeasible, that placement is shaved (removed from the valid set).
 /// After trying all corner forcings, falls back to the full solver with the
 /// accumulated placement mask.
-pub fn solve_corner_presolve(game: &Game) -> SolveResult {
+pub fn solve_corner_presolve(game: &Game, parallel: bool) -> SolveResult {
     // Build all cancellation reductions (most aggressive first), plus the original game.
     let reductions = build_all_cancellation_reductions(game);
 
@@ -152,7 +161,7 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
             }
         };
 
-        let result = corner_presolve_on_game(work_game, &mut total_nodes);
+        let result = corner_presolve_on_game(work_game, &mut total_nodes, parallel);
 
         if let Some(work_sol) = result.solution {
             let h = work_game.board().height();
@@ -169,9 +178,9 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
         }
     }
 
-    // No reduction worked. Fall back to standard parallel solver.
+    // No reduction worked. Fall back to standard solver.
     eprintln!("corner_presolve: all reductions exhausted, falling back to standard solver");
-    let full = solve(game);
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, false);
     SolveResult {
         solution: full.solution,
         nodes_visited: total_nodes + full.nodes_visited,
@@ -180,7 +189,7 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
 
 /// Run corner presolve on a single (possibly reduced) game.
 /// Returns a solution in terms of the given game's piece indices.
-fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
+fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -> SolveResult {
     let board = game.board();
     let pieces = game.pieces();
     let h = board.height();
@@ -274,7 +283,7 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
         let reduced_game = Game::new(new_board, reduced_pieces);
 
         let attempt_start = std::time::Instant::now();
-        let result = solve_parallel_with_mask(&reduced_game, Some(&reduced_mask));
+        let result = solve_with_mask(&reduced_game, Some(&reduced_mask), parallel);
         let attempt_elapsed = attempt_start.elapsed();
         *total_nodes += result.nodes_visited;
 
@@ -311,7 +320,7 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
     );
 
     // Fall back to full solve with accumulated mask.
-    let full = solve_parallel_with_mask(game, Some(&mask));
+    let full = solve_with_mask(game, Some(&mask), parallel);
     *total_nodes += full.nodes_visited;
     SolveResult {
         solution: full.solution,
@@ -332,8 +341,8 @@ fn ensure_mask(
 
 /// Solve in exhaustive mode: explore the full tree even after finding a solution.
 /// Used for benchmarking parallel efficiency without the luck factor.
-pub fn solve_exhaustive(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), true, true)
+pub fn solve_exhaustive(game: &Game, parallel: bool) -> SolveResult {
+    solve_with_cancellation(game, &PruningConfig::default(), parallel, true)
 }
 
 /// Solve serial-only. Same cancellation + pair-merge pipeline but no parallel.
