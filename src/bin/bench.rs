@@ -48,6 +48,7 @@ fn run_task(
     timeout_secs: u64,
     parallel: bool,
     exhaustive: bool,
+    no_corner_presolve: bool,
 ) -> TaskResult {
     let mut cmd = Command::new(solver_path);
     cmd.arg("--worker");
@@ -56,6 +57,9 @@ fn run_task(
     }
     if exhaustive {
         cmd.arg("--exhaustive");
+    }
+    if no_corner_presolve {
+        cmd.arg("--no-corner-presolve");
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -237,6 +241,7 @@ fn run_bench(
     parallel: bool,
     exhaustive: bool,
     show_nodes_per_sec: bool,
+    no_corner_presolve: bool,
 ) {
     let total = tasks.len();
 
@@ -260,7 +265,7 @@ fn run_bench(
                         None => break,
                     };
 
-                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive);
+                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive, no_corner_presolve);
                     let _ = result_tx.send(r);
                 }
             });
@@ -387,6 +392,7 @@ fn main() {
     let mut positional = Vec::new();
     let mut parallel = false;
     let mut exhaustive = false;
+    let mut no_corner_presolve = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
 
@@ -395,6 +401,7 @@ fn main() {
         match args[i].as_str() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
+            "--no-corner-presolve" => no_corner_presolve = true,
             "--timeout" => {
                 i += 1;
                 timeout_secs = Some(args[i].parse().expect("invalid timeout"));
@@ -466,6 +473,7 @@ fn main() {
                 parallel,
                 exhaustive,
                 exhaustive,
+                no_corner_presolve,
             );
         }
         "historical" => {
@@ -499,6 +507,7 @@ fn main() {
                 parallel,
                 exhaustive,
                 false,
+                no_corner_presolve,
             );
         }
         other => {
