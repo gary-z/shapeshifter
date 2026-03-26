@@ -127,6 +127,60 @@ pub fn solve(game: &Game) -> SolveResult {
 /// After trying all corner forcings, falls back to the full solver with the
 /// accumulated placement mask.
 pub fn solve_corner_presolve(game: &Game) -> SolveResult {
+    // Build all cancellation reductions (most aggressive first), plus the original game.
+    let reductions = build_all_cancellation_reductions(game);
+
+    let mut total_nodes = 0u64;
+
+    for (red_idx, reduction) in reductions.iter().enumerate() {
+        let (work_game, reduction_ref) = match reduction {
+            Some(r) => {
+                eprintln!(
+                    "corner_presolve: reduction {}/{}: cancelled {} pieces ({} -> {})",
+                    red_idx + 1, reductions.len(),
+                    r.original_n - r.kept_indices.len(),
+                    r.original_n, r.kept_indices.len()
+                );
+                (&r.game, Some(r))
+            }
+            None => {
+                eprintln!(
+                    "corner_presolve: reduction {}/{}: no cancellation ({} pieces)",
+                    red_idx + 1, reductions.len(), game.pieces().len()
+                );
+                (game, None)
+            }
+        };
+
+        let result = corner_presolve_on_game(work_game, &mut total_nodes);
+
+        if let Some(work_sol) = result.solution {
+            let h = work_game.board().height();
+            let w = work_game.board().width();
+            let final_sol = if let Some(red) = reduction_ref {
+                reconstruct_cancelled_solution(red, &work_sol, h, w)
+            } else {
+                work_sol
+            };
+            return SolveResult {
+                solution: Some(final_sol),
+                nodes_visited: total_nodes,
+            };
+        }
+    }
+
+    // No reduction worked. Fall back to standard solver.
+    eprintln!("corner_presolve: all reductions exhausted, falling back to standard solver");
+    let full = solve_serial(game);
+    SolveResult {
+        solution: full.solution,
+        nodes_visited: total_nodes + full.nodes_visited,
+    }
+}
+
+/// Run corner presolve on a single (possibly reduced) game.
+/// Returns a solution in terms of the given game's piece indices.
+fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
     let board = game.board();
     let pieces = game.pieces();
     let h = board.height();
@@ -171,11 +225,10 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
             .then_with(|| all_piece_placements[a.0].len().cmp(&all_piece_placements[b.0].len()))
     });
 
-    let mut total_nodes = 0u64;
     let mut shaved = 0u32;
 
     eprintln!(
-        "corner_presolve: {} corner-covering placements across {} pieces",
+        "  {} corner-covering placements across {} pieces",
         corner_forcings.len(), n
     );
 
@@ -193,7 +246,7 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
 
         let mut reduced_pieces: Vec<crate::core::piece::Piece> = Vec::with_capacity(n - 1);
         let mut reduced_mask: PlacementMask = Vec::with_capacity(n - 1);
-        let mut idx_map: Vec<usize> = Vec::with_capacity(n - 1); // reduced idx -> original idx
+        let mut idx_map: Vec<usize> = Vec::with_capacity(n - 1);
         for j in 0..n {
             if j != piece_idx {
                 reduced_pieces.push(pieces[j]);
@@ -203,13 +256,13 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
         }
 
         if reduced_pieces.is_empty() {
-            total_nodes += 1;
+            *total_nodes += 1;
             if new_board.is_solved() {
-                let mut full_sol = vec![(0usize, 0usize); n];
-                full_sol[piece_idx] = (row, col);
+                let mut sol = vec![(0usize, 0usize); n];
+                sol[piece_idx] = (row, col);
                 return SolveResult {
-                    solution: Some(full_sol),
-                    nodes_visited: total_nodes,
+                    solution: Some(sol),
+                    nodes_visited: *total_nodes,
                 };
             }
             ensure_mask(&mut mask, piece_idx, &all_piece_placements);
@@ -225,47 +278,46 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
             &reduced_game, &config, Some(&reduced_mask),
         );
         let attempt_elapsed = attempt_start.elapsed();
-        total_nodes += result.nodes_visited;
+        *total_nodes += result.nodes_visited;
 
         if let Some(reduced_sol) = result.solution {
-            // Reconstruct full solution.
-            let mut full_sol = vec![(0usize, 0usize); n];
-            full_sol[piece_idx] = (row, col);
+            let mut sol = vec![(0usize, 0usize); n];
+            sol[piece_idx] = (row, col);
             for (ri, &(r, c)) in reduced_sol.iter().enumerate() {
-                full_sol[idx_map[ri]] = (r, c);
+                sol[idx_map[ri]] = (r, c);
             }
             eprintln!(
-                "corner_presolve: [{}/{}] piece {} at ({},{}) -> SOLVED, {} nodes, {:.3?}, {} shaved",
+                "  [{}/{}] piece {} at ({},{}) -> SOLVED, {} nodes, {:.3?}, {} shaved",
                 attempt_num + 1, total_forcings, piece_idx, row, col,
-                total_nodes, attempt_elapsed, shaved
+                *total_nodes, attempt_elapsed, shaved
             );
             return SolveResult {
-                solution: Some(full_sol),
-                nodes_visited: total_nodes,
+                solution: Some(sol),
+                nodes_visited: *total_nodes,
             };
         }
 
-        // Exhaustive search completed with no solution: shave this placement.
         ensure_mask(&mut mask, piece_idx, &all_piece_placements);
         mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
         shaved += 1;
         eprintln!(
-            "corner_presolve: [{}/{}] piece {} at ({},{}) -> shaved, {} nodes, {:.3?}, {} shaved total",
+            "  [{}/{}] piece {} at ({},{}) -> shaved, {} nodes, {:.3?}, {} shaved total",
             attempt_num + 1, total_forcings, piece_idx, row, col,
             result.nodes_visited, attempt_elapsed, shaved
         );
     }
 
     eprintln!(
-        "corner_presolve: done, {} shaved, {} total nodes, falling back with mask",
-        shaved, total_nodes
+        "  {} shaved, {} total nodes, falling back with mask",
+        shaved, *total_nodes
     );
 
     // Fall back to full solve with accumulated mask.
     let full = solve_with_config_and_mask(game, &config, Some(&mask));
+    *total_nodes += full.nodes_visited;
     SolveResult {
         solution: full.solution,
-        nodes_visited: total_nodes + full.nodes_visited,
+        nodes_visited: *total_nodes,
     }
 }
 
@@ -614,6 +666,221 @@ fn try_cancellation_combo(
     }
 
     SolveResult { solution: None, nodes_visited: result.nodes_visited }
+}
+
+/// Result of cancellation reduction: a smaller game plus mapping back to the original.
+struct CancellationReduction {
+    /// The reduced game with cancelled pieces removed.
+    game: Game,
+    /// `kept_indices[reduced_idx]` = original piece index.
+    kept_indices: Vec<usize>,
+    /// For each cancelled group: (shape, original indices) to fill with dummy placements.
+    cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)>,
+    /// Total number of pieces in the original game.
+    original_n: usize,
+}
+
+/// Try to reduce a game by cancelling groups of M identical pieces.
+/// Uses the most aggressive cancellation (remove as many as possible).
+/// Returns None if no cancellation is possible.
+fn reduce_by_cancellation(game: &Game) -> Option<CancellationReduction> {
+    let m = game.board().m() as usize;
+    let pieces = game.pieces();
+    let h = game.board().height();
+    let w = game.board().width();
+    let n = pieces.len();
+
+    // Count pieces per shape, preserving original indices.
+    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
+            group.1.push(i);
+        } else {
+            shape_groups.push((*piece, vec![i]));
+        }
+    }
+
+    let mut any_cancelled = false;
+    let mut kept_indices: Vec<usize> = Vec::new();
+    let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+
+    for (shape, indices) in &shape_groups {
+        let max_cancel = (indices.len() / m) * m;
+        if max_cancel > 0 {
+            any_cancelled = true;
+            let keep = indices.len() - max_cancel;
+            for &idx in &indices[..keep] {
+                kept_indices.push(idx);
+            }
+            cancelled.push((*shape, indices[keep..].to_vec()));
+        } else {
+            for &idx in indices {
+                kept_indices.push(idx);
+            }
+        }
+    }
+
+    if !any_cancelled {
+        return None;
+    }
+
+    let reduced_pieces: Vec<crate::core::piece::Piece> =
+        kept_indices.iter().map(|&i| pieces[i]).collect();
+
+    if reduced_pieces.is_empty() {
+        // All pieces cancelled — only solvable if board is already solved.
+        // Return None and let caller handle it.
+        return None;
+    }
+
+    let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+
+    Some(CancellationReduction {
+        game: reduced_game,
+        kept_indices,
+        cancelled,
+        original_n: n,
+    })
+}
+
+/// Reconstruct a full solution from a reduced solution + cancellation info.
+fn reconstruct_cancelled_solution(
+    reduction: &CancellationReduction,
+    reduced_sol: &Solution,
+    h: u8,
+    w: u8,
+) -> Solution {
+    let mut full_sol = vec![(0usize, 0usize); reduction.original_n];
+    for (ri, &(row, col)) in reduced_sol.iter().enumerate() {
+        full_sol[reduction.kept_indices[ri]] = (row, col);
+    }
+    for (shape, indices) in &reduction.cancelled {
+        let placements = shape.placements(h, w);
+        if let Some(&(r, c, _)) = placements.first() {
+            for &idx in indices {
+                full_sol[idx] = (r, c);
+            }
+        }
+    }
+    full_sol
+}
+
+/// Build all cancellation reductions for a game, sorted most aggressive first,
+/// plus `None` for the original (uncancelled) game at the end.
+fn build_all_cancellation_reductions(game: &Game) -> Vec<Option<CancellationReduction>> {
+    let m = game.board().m() as usize;
+    let pieces = game.pieces();
+    let h = game.board().height();
+    let w = game.board().width();
+    let n = pieces.len();
+
+    // Group pieces by shape.
+    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
+            group.1.push(i);
+        } else {
+            shape_groups.push((*piece, vec![i]));
+        }
+    }
+
+    // Find cancellable groups.
+    let mut cancellable_groups: Vec<(usize, usize)> = Vec::new(); // (group_idx, max_sets)
+    for (g, (_, indices)) in shape_groups.iter().enumerate() {
+        let max_sets = indices.len() / m;
+        if max_sets > 0 {
+            cancellable_groups.push((g, max_sets));
+        }
+    }
+
+    if cancellable_groups.is_empty() {
+        return vec![None]; // Only the original game.
+    }
+
+    // Enumerate all combos (excluding all-zeros which is the original game).
+    let num_cgroups = cancellable_groups.len();
+    let total_combos: usize = cancellable_groups.iter()
+        .map(|(_, max_sets)| max_sets + 1)
+        .product();
+
+    // Cap combo enumeration.
+    let combos = if total_combos > 200 {
+        // Just try max cancellation.
+        vec![cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>()]
+    } else {
+        let mut combos: Vec<Vec<usize>> = Vec::new();
+        let mut current = vec![0usize; num_cgroups];
+        loop {
+            if current.iter().any(|&c| c > 0) {
+                combos.push(current.clone());
+            }
+            let mut carry = true;
+            for i in 0..num_cgroups {
+                if carry {
+                    current[i] += 1;
+                    if current[i] > cancellable_groups[i].1 {
+                        current[i] = 0;
+                    } else {
+                        carry = false;
+                    }
+                }
+            }
+            if carry { break; }
+        }
+        // Sort: most pieces cancelled first.
+        combos.sort_unstable_by(|a, b| {
+            let ta: usize = a.iter().sum();
+            let tb: usize = b.iter().sum();
+            tb.cmp(&ta)
+        });
+        combos
+    };
+
+    let mut results: Vec<Option<CancellationReduction>> = Vec::new();
+
+    for combo in &combos {
+        let mut kept_indices: Vec<usize> = Vec::new();
+        let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+
+        for (g, (shape, indices)) in shape_groups.iter().enumerate() {
+            // Find cancel count for this group.
+            let cancel_sets = cancellable_groups.iter()
+                .find(|&&(gi, _)| gi == g)
+                .and_then(|&(ci_idx, _)| {
+                    // Find position of g in cancellable_groups to index into combo.
+                    cancellable_groups.iter().position(|&(gi, _)| gi == g)
+                        .map(|pos| combo[pos])
+                })
+                .unwrap_or(0);
+            let cancel_count = cancel_sets * m;
+            let keep = indices.len() - cancel_count;
+            for &idx in &indices[..keep] {
+                kept_indices.push(idx);
+            }
+            if cancel_count > 0 {
+                cancelled.push((*shape, indices[keep..].to_vec()));
+            }
+        }
+
+        if kept_indices.is_empty() {
+            continue; // Skip: all pieces cancelled.
+        }
+
+        let reduced_pieces: Vec<crate::core::piece::Piece> =
+            kept_indices.iter().map(|&i| pieces[i]).collect();
+        let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+
+        results.push(Some(CancellationReduction {
+            game: reduced_game,
+            kept_indices,
+            cancelled,
+            original_n: n,
+        }));
+    }
+
+    // Add the original game (no cancellation) at the end.
+    results.push(None);
+    results
 }
 
 /// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
