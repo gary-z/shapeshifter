@@ -222,7 +222,7 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
 
         let attempt_start = std::time::Instant::now();
         let result = solve_with_config_and_mask(
-            &reduced_game, &config, Some(&reduced_mask), None,
+            &reduced_game, &config, Some(&reduced_mask),
         );
         let attempt_elapsed = attempt_start.elapsed();
         total_nodes += result.nodes_visited;
@@ -262,7 +262,7 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
     );
 
     // Fall back to full solve with accumulated mask.
-    let full = solve_with_config_and_mask(game, &config, Some(&mask), None);
+    let full = solve_with_config_and_mask(game, &config, Some(&mask));
     SolveResult {
         solution: full.solution,
         nodes_visited: total_nodes + full.nodes_visited,
@@ -622,18 +622,16 @@ pub type PlacementMask = Vec<Option<Vec<bool>>>;
 
 /// Backtracking solver with configurable pruning.
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
-    solve_with_config_and_mask(game, config, None, None)
+    solve_with_config_and_mask(game, config, None)
 }
 
-/// Backtracking solver with configurable pruning, optional placement mask, and
-/// optional abort flag. When mask is provided, only placements where
-/// `mask[piece][pl] == true` are considered. When abort is provided, the search
-/// stops early when the flag is set (returns no solution).
+/// Backtracking solver with configurable pruning and optional placement mask.
+/// When a placement mask is provided, only placements where
+/// `mask[piece][pl] == true` are considered.
 pub fn solve_with_config_and_mask(
     game: &Game,
     config: &PruningConfig,
     mask: Option<&PlacementMask>,
-    abort: Option<&AtomicBool>,
 ) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
@@ -731,28 +729,21 @@ pub fn solve_with_config_and_mask(
         m,
     );
 
-    // Check abort before expensive backtrack.
-    if let Some(a) = abort {
-        if a.load(Ordering::Relaxed) {
-            return SolveResult { solution: None, nodes_visited: 0 };
-        }
-    }
-
     let nodes = Cell::new(0u64);
     let rng = Cell::new(0u64); // 0 = no shuffling (deterministic)
     let mut sorted_solution = Vec::with_capacity(n);
 
-    let found = if let Some(abort_flag) = abort {
-        backtrack::backtrack_abortable(
-            &board, &data, 0, 0, usize::MAX,
-            &mut sorted_solution, &nodes, config, &rng, abort_flag,
-        )
-    } else {
-        backtrack::backtrack(
-            &board, &data, 0, 0, usize::MAX,
-            &mut sorted_solution, &nodes, config, &rng,
-        )
-    };
+    let found = backtrack::backtrack(
+        &board,
+        &data,
+        0,
+        0,
+        usize::MAX, // no prev dup placement
+        &mut sorted_solution,
+        &nodes,
+        config,
+        &rng,
+    );
 
     let solution = if found {
         // Map solution back to original piece order.
