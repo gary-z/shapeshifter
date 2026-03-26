@@ -274,9 +274,7 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
         let reduced_game = Game::new(new_board, reduced_pieces);
 
         let attempt_start = std::time::Instant::now();
-        let result = solve_with_config_and_mask(
-            &reduced_game, &config, Some(&reduced_mask),
-        );
+        let result = solve_parallel_with_mask(&reduced_game, Some(&reduced_mask));
         let attempt_elapsed = attempt_start.elapsed();
         *total_nodes += result.nodes_visited;
 
@@ -313,7 +311,7 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64) -> SolveResult {
     );
 
     // Fall back to full solve with accumulated mask.
-    let full = solve_with_config_and_mask(game, &config, Some(&mask));
+    let full = solve_parallel_with_mask(game, Some(&mask));
     *total_nodes += full.nodes_visited;
     SolveResult {
         solution: full.solution,
@@ -887,9 +885,14 @@ fn build_all_cancellation_reductions(game: &Game) -> Vec<Option<CancellationRedu
 /// or `Some(vec of bools)` indexed by placement index.
 pub type PlacementMask = Vec<Option<Vec<bool>>>;
 
-/// Backtracking solver with configurable pruning.
+/// Backtracking solver with configurable pruning (serial).
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     solve_with_config_and_mask(game, config, None)
+}
+
+/// Parallel solver with optional placement mask.
+pub fn solve_parallel_with_mask(game: &Game, mask: Option<&PlacementMask>) -> SolveResult {
+    solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
 }
 
 /// Backtracking solver with configurable pruning and optional placement mask.
@@ -1067,6 +1070,12 @@ struct WorkItem {
 /// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
 /// 3. Spawns worker threads to search from each unique state.
 fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: bool) -> SolveResult {
+    solve_with_config_parallel_and_mask(game, config, exhaustive, None)
+}
+
+fn solve_with_config_parallel_and_mask(
+    game: &Game, config: &PruningConfig, exhaustive: bool, mask: Option<&PlacementMask>,
+) -> SolveResult {
     eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
     let pieces = game.pieces();
@@ -1074,11 +1083,27 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     let w = board.width();
 
     // Build (original_index, placements) and sort: fewer placements first.
-    // (Same sorting as solve_with_config.)
+    // Apply placement mask if provided.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
+        .map(|(i, p)| {
+            let all_pl = p.placements(h, w);
+            let filtered = if let Some(m) = mask {
+                if let Some(ref piece_mask) = m[i] {
+                    all_pl.into_iter()
+                        .enumerate()
+                        .filter(|(j, _)| piece_mask[*j])
+                        .map(|(_, pl)| pl)
+                        .collect()
+                } else {
+                    all_pl
+                }
+            } else {
+                all_pl
+            };
+            (i, filtered)
+        })
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
