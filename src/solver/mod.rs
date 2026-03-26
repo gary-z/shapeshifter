@@ -179,7 +179,9 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
         corner_forcings.len(), n
     );
 
-    for &(piece_idx, pl_idx, row, col, pl_mask, _) in &corner_forcings {
+    let total_forcings = corner_forcings.len();
+
+    for (attempt_num, &(piece_idx, pl_idx, row, col, pl_mask, _)) in corner_forcings.iter().enumerate() {
         // Skip if this placement was already shaved.
         if let Some(ref pm) = mask[piece_idx] {
             if !pm[pl_idx] { continue; }
@@ -210,7 +212,6 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
                     nodes_visited: total_nodes,
                 };
             }
-            // Shave this placement.
             ensure_mask(&mut mask, piece_idx, &all_piece_placements);
             mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
             shaved += 1;
@@ -219,34 +220,12 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
 
         let reduced_game = Game::new(new_board, reduced_pieces);
 
-        // Per-attempt budget: use abort flag + timer thread.
-        let abort = std::sync::Arc::new(AtomicBool::new(false));
-        let abort_clone = abort.clone();
-        let budget = std::time::Duration::from_secs(2);
-        let timer = std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            while start.elapsed() < budget {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                if abort_clone.load(Ordering::Relaxed) { return; }
-            }
-            abort_clone.store(true, Ordering::Relaxed);
-        });
-
         let attempt_start = std::time::Instant::now();
         let result = solve_with_config_and_mask(
-            &reduced_game, &config, Some(&reduced_mask), Some(&abort),
+            &reduced_game, &config, Some(&reduced_mask), None,
         );
-        abort.store(true, Ordering::Relaxed);
-        let _ = timer.join();
-
         let attempt_elapsed = attempt_start.elapsed();
         total_nodes += result.nodes_visited;
-        let timed_out = attempt_elapsed >= budget;
-        eprintln!(
-            "  piece {} at ({},{}) -> {} nodes, {:.3?}, found={}, timeout={}",
-            piece_idx, row, col, result.nodes_visited, attempt_elapsed,
-            result.solution.is_some(), timed_out
-        );
 
         if let Some(reduced_sol) = result.solution {
             // Reconstruct full solution.
@@ -256,8 +235,9 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
                 full_sol[idx_map[ri]] = (r, c);
             }
             eprintln!(
-                "corner_presolve: solved by forcing piece {} at ({},{}), {} nodes, {} shaved",
-                piece_idx, row, col, total_nodes, shaved
+                "corner_presolve: [{}/{}] piece {} at ({},{}) -> SOLVED, {} nodes, {:.3?}, {} shaved",
+                attempt_num + 1, total_forcings, piece_idx, row, col,
+                total_nodes, attempt_elapsed, shaved
             );
             return SolveResult {
                 solution: Some(full_sol),
@@ -265,17 +245,19 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
             };
         }
 
-        // Only shave if the solver completed (not timed out).
-        // A timeout means we can't conclude infeasibility.
-        if !timed_out {
-            ensure_mask(&mut mask, piece_idx, &all_piece_placements);
-            mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
-            shaved += 1;
-        }
+        // Exhaustive search completed with no solution: shave this placement.
+        ensure_mask(&mut mask, piece_idx, &all_piece_placements);
+        mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
+        shaved += 1;
+        eprintln!(
+            "corner_presolve: [{}/{}] piece {} at ({},{}) -> shaved, {} nodes, {:.3?}, {} shaved total",
+            attempt_num + 1, total_forcings, piece_idx, row, col,
+            result.nodes_visited, attempt_elapsed, shaved
+        );
     }
 
     eprintln!(
-        "corner_presolve: {} shaved, {} nodes, falling back with mask",
+        "corner_presolve: done, {} shaved, {} total nodes, falling back with mask",
         shaved, total_nodes
     );
 
