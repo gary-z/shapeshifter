@@ -169,9 +169,9 @@ pub fn solve_corner_presolve(game: &Game) -> SolveResult {
         }
     }
 
-    // No reduction worked. Fall back to standard solver.
+    // No reduction worked. Fall back to standard parallel solver.
     eprintln!("corner_presolve: all reductions exhausted, falling back to standard solver");
-    let full = solve_serial(game);
+    let full = solve(game);
     SolveResult {
         solution: full.solution,
         nodes_visited: total_nodes + full.nodes_visited,
