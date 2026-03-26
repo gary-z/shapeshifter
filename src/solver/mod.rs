@@ -116,75 +116,35 @@ pub(crate) struct SolverData {
 
 /// Main entry point: corner-presolve then cancellation/pair-merge pipeline.
 ///
-/// For each piece that can cover a board corner cell, forces it at that corner
-/// placement and attempts to solve the remaining pieces. If the reduced solve
-/// proves infeasible, that placement is shaved (removed from the valid set).
-/// After trying all corner forcings, falls back to the full solver with the
-/// accumulated placement mask.
+/// Corner presolve shaves provably infeasible placements, then the
+/// cancellation/pair-merge pipeline reduces the piece set before the
+/// backtracker runs. Sub-solves during shaving go through the full
+/// cancellation pipeline so they can prove infeasibility faster.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
-    // Build all cancellation reductions (most aggressive first), plus the original game.
-    let reductions = build_all_cancellation_reductions(game);
-
     let mut total_nodes = 0u64;
-
-    for (red_idx, reduction) in reductions.iter().enumerate() {
-        let (work_game, reduction_ref) = match reduction {
-            Some(r) => {
-                eprintln!(
-                    "corner_presolve: reduction {}/{}: cancelled {} pieces ({} -> {})",
-                    red_idx + 1, reductions.len(),
-                    r.original_n - r.kept_indices.len(),
-                    r.original_n, r.kept_indices.len()
-                );
-                (&r.game, Some(r))
-            }
-            None => {
-                eprintln!(
-                    "corner_presolve: reduction {}/{}: no cancellation ({} pieces)",
-                    red_idx + 1, reductions.len(), game.pieces().len()
-                );
-                (game, None)
-            }
+    let (result, mask) = corner_presolve_shave(game, &mut total_nodes, parallel);
+    if let Some(solution) = result.solution {
+        return SolveResult {
+            solution: Some(solution),
+            nodes_visited: total_nodes,
         };
-
-        let result = corner_presolve_on_game(work_game, &mut total_nodes, parallel);
-
-        if let Some(work_sol) = result.solution {
-            let h = work_game.board().height();
-            let w = work_game.board().width();
-            let final_sol = if let Some(red) = reduction_ref {
-                reconstruct_cancelled_solution(red, &work_sol, h, w)
-            } else {
-                work_sol
-            };
-            return SolveResult {
-                solution: Some(final_sol),
-                nodes_visited: total_nodes,
-            };
-        }
     }
 
-    // No reduction worked. Fall back to standard solver.
-    eprintln!("corner_presolve: all reductions exhausted, falling back to standard solver");
-    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive);
+    // Corner presolve didn't solve directly. Run cancellation pipeline with shaved mask.
+    eprintln!("corner_presolve: falling back to cancellation pipeline with shaved mask");
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, Some(&mask));
     SolveResult {
         solution: full.solution,
         nodes_visited: total_nodes + full.nodes_visited,
     }
 }
 
-/// Dispatch to the parallel or serial mask-based solver.
-fn solve_with_mask(game: &Game, mask: Option<&PlacementMask>, parallel: bool) -> SolveResult {
-    if parallel {
-        solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
-    } else {
-        solve_with_config_and_mask(game, &PruningConfig::default(), mask)
-    }
-}
-
-/// Run corner presolve on a single (possibly reduced) game.
-/// Returns a solution in terms of the given game's piece indices.
-fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -> SolveResult {
+/// Shave corner placements and return (result, accumulated_mask).
+///
+/// If a sub-solve finds a solution, it is returned immediately.
+/// Otherwise the accumulated placement mask (with shaved entries) is returned
+/// so the caller can pass it to the cancellation pipeline.
+fn corner_presolve_shave(game: &Game, total_nodes: &mut u64, parallel: bool) -> (SolveResult, PlacementMask) {
     let board = game.board();
     let pieces = game.pieces();
     let h = board.height();
@@ -264,10 +224,10 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -
             if new_board.is_solved() {
                 let mut sol = vec![(0usize, 0usize); n];
                 sol[piece_idx] = (row, col);
-                return SolveResult {
+                return (SolveResult {
                     solution: Some(sol),
                     nodes_visited: *total_nodes,
-                };
+                }, mask);
             }
             ensure_mask(&mut mask, piece_idx, &all_piece_placements);
             mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
@@ -277,8 +237,9 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -
 
         let reduced_game = Game::new(new_board, reduced_pieces);
 
+        // Sub-solves go through the full cancellation pipeline (non-exhaustive).
         let attempt_start = std::time::Instant::now();
-        let result = solve_with_mask(&reduced_game, Some(&reduced_mask), parallel);
+        let result = solve_with_cancellation(&reduced_game, &config, parallel, false, Some(&reduced_mask));
         let attempt_elapsed = attempt_start.elapsed();
         *total_nodes += result.nodes_visited;
 
@@ -293,10 +254,10 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -
                 attempt_num + 1, total_forcings, piece_idx, row, col,
                 *total_nodes, attempt_elapsed, shaved
             );
-            return SolveResult {
+            return (SolveResult {
                 solution: Some(sol),
                 nodes_visited: *total_nodes,
-            };
+            }, mask);
         }
 
         ensure_mask(&mut mask, piece_idx, &all_piece_placements);
@@ -310,17 +271,11 @@ fn corner_presolve_on_game(game: &Game, total_nodes: &mut u64, parallel: bool) -
     }
 
     eprintln!(
-        "  {} shaved, {} total nodes, falling back with mask",
+        "  {} shaved, {} total nodes",
         shaved, *total_nodes
     );
 
-    // Fall back to full solve with accumulated mask.
-    let full = solve_with_mask(game, Some(&mask), parallel);
-    *total_nodes += full.nodes_visited;
-    SolveResult {
-        solution: full.solution,
-        nodes_visited: *total_nodes,
-    }
+    (SolveResult { solution: None, nodes_visited: *total_nodes }, mask)
 }
 
 /// Ensure mask[piece_idx] is initialized (Some with all-true).
@@ -334,12 +289,12 @@ fn ensure_mask(
     }
 }
 
-/// Dispatch to parallel or serial based on flag.
-fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
+/// Dispatch to parallel or serial based on flag, with optional placement mask.
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
     if parallel {
-        solve_with_config_parallel(game, config, exhaustive)
+        solve_with_config_parallel_and_mask(game, config, exhaustive, mask)
     } else {
-        solve_with_config(game, config)
+        solve_with_config_and_mask(game, config, mask)
     }
 }
 
@@ -348,7 +303,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -375,7 +330,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     if cancellable_groups.is_empty() {
-        return solve_dispatch(game, config, parallel, exhaustive);
+        return solve_dispatch(game, config, parallel, exhaustive, mask);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -391,11 +346,11 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
         // Too many combos -- fall back to just trying max and full.
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
-            m, h, w);
+            m, h, w, mask);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_dispatch(game, config, parallel, exhaustive);
+        let mut full = solve_dispatch(game, config, parallel, exhaustive, mask);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -434,7 +389,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
 
     for combo in &combos {
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
-            combo, m, h, w);
+            combo, m, h, w, mask);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
             return SolveResult {
@@ -457,7 +412,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
+    let mut full_result = solve_dispatch(game, config, parallel, exhaustive, mask);
     full_result.nodes_visited += total_nodes;
     full_result
 }
@@ -550,7 +505,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive);
+    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive, None);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -585,6 +540,7 @@ fn try_cancellation_combo(
     m: usize,
     h: u8,
     w: u8,
+    mask: Option<&PlacementMask>,
 ) -> SolveResult {
     let pieces = game.pieces();
 
@@ -632,7 +588,11 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::core::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
+    // Remap placement mask: reduced piece i corresponds to original piece kept_indices[i].
+    let reduced_mask: Option<PlacementMask> = mask.map(|m| {
+        kept_indices.iter().map(|&orig_idx| m[orig_idx].clone()).collect()
+    });
+    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive, reduced_mask.as_ref());
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -882,10 +842,6 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     solve_with_config_and_mask(game, config, None)
 }
 
-/// Parallel solver with optional placement mask.
-pub fn solve_parallel_with_mask(game: &Game, mask: Option<&PlacementMask>) -> SolveResult {
-    solve_with_config_parallel_and_mask(game, &PruningConfig::default(), false, mask)
-}
 
 /// Backtracking solver with configurable pruning and optional placement mask.
 /// When a placement mask is provided, only placements where
