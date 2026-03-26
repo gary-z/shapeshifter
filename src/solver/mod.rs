@@ -119,6 +119,185 @@ pub fn solve(game: &Game) -> SolveResult {
     solve_with_cancellation(game, &PruningConfig::default(), true, false)
 }
 
+/// Solve with corner placement shaving.
+///
+/// For each piece that can cover a board corner cell, forces it at that corner
+/// placement and attempts to solve the remaining pieces. If the reduced solve
+/// proves infeasible, that placement is shaved (removed from the valid set).
+/// After trying all corner forcings, falls back to the full solver with the
+/// accumulated placement mask.
+pub fn solve_corner_presolve(game: &Game) -> SolveResult {
+    let board = game.board();
+    let pieces = game.pieces();
+    let h = board.height();
+    let w = board.width();
+    let n = pieces.len();
+    let config = PruningConfig::default();
+
+    // Build corner cell mask.
+    let corners: [(usize, usize); 4] = [
+        (0, 0),
+        (0, w as usize - 1),
+        (h as usize - 1, 0),
+        (h as usize - 1, w as usize - 1),
+    ];
+    let mut corner_mask = Bitboard::ZERO;
+    for &(r, c) in &corners {
+        corner_mask.set_bit((r * 15 + c) as u32);
+    }
+
+    // Build full placement lists per piece (original order).
+    let all_piece_placements: Vec<Vec<(usize, usize, Bitboard)>> = (0..n)
+        .map(|i| pieces[i].placements(h, w))
+        .collect();
+
+    // Initialize placement mask: all valid.
+    let mut mask: PlacementMask = (0..n).map(|_| None).collect();
+
+    // Collect corner-covering (piece, placement_idx) pairs.
+    let mut corner_forcings: Vec<(usize, usize, usize, usize, Bitboard, u32)> = Vec::new();
+    for i in 0..n {
+        for (pl_idx, &(row, col, pl_mask)) in all_piece_placements[i].iter().enumerate() {
+            let corners_hit = (pl_mask & corner_mask).count_ones();
+            if corners_hit > 0 {
+                corner_forcings.push((i, pl_idx, row, col, pl_mask, corners_hit));
+            }
+        }
+    }
+
+    // Sort: most corners covered first, then fewest total placements (most constrained).
+    corner_forcings.sort_by(|a, b| {
+        b.5.cmp(&a.5)
+            .then_with(|| all_piece_placements[a.0].len().cmp(&all_piece_placements[b.0].len()))
+    });
+
+    let mut total_nodes = 0u64;
+    let mut shaved = 0u32;
+
+    eprintln!(
+        "corner_presolve: {} corner-covering placements across {} pieces",
+        corner_forcings.len(), n
+    );
+
+    for &(piece_idx, pl_idx, row, col, pl_mask, _) in &corner_forcings {
+        // Skip if this placement was already shaved.
+        if let Some(ref pm) = mask[piece_idx] {
+            if !pm[pl_idx] { continue; }
+        }
+
+        // Build reduced game: apply forced piece, solve remaining n-1 pieces.
+        let mut new_board = board.clone();
+        new_board.apply_piece(pl_mask);
+
+        let mut reduced_pieces: Vec<crate::core::piece::Piece> = Vec::with_capacity(n - 1);
+        let mut reduced_mask: PlacementMask = Vec::with_capacity(n - 1);
+        let mut idx_map: Vec<usize> = Vec::with_capacity(n - 1); // reduced idx -> original idx
+        for j in 0..n {
+            if j != piece_idx {
+                reduced_pieces.push(pieces[j]);
+                reduced_mask.push(mask[j].clone());
+                idx_map.push(j);
+            }
+        }
+
+        if reduced_pieces.is_empty() {
+            total_nodes += 1;
+            if new_board.is_solved() {
+                let mut full_sol = vec![(0usize, 0usize); n];
+                full_sol[piece_idx] = (row, col);
+                return SolveResult {
+                    solution: Some(full_sol),
+                    nodes_visited: total_nodes,
+                };
+            }
+            // Shave this placement.
+            ensure_mask(&mut mask, piece_idx, &all_piece_placements);
+            mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
+            shaved += 1;
+            continue;
+        }
+
+        let reduced_game = Game::new(new_board, reduced_pieces);
+
+        // Per-attempt budget: use abort flag + timer thread.
+        let abort = std::sync::Arc::new(AtomicBool::new(false));
+        let abort_clone = abort.clone();
+        let budget = std::time::Duration::from_secs(2);
+        let timer = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while start.elapsed() < budget {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                if abort_clone.load(Ordering::Relaxed) { return; }
+            }
+            abort_clone.store(true, Ordering::Relaxed);
+        });
+
+        let attempt_start = std::time::Instant::now();
+        let result = solve_with_config_and_mask(
+            &reduced_game, &config, Some(&reduced_mask), Some(&abort),
+        );
+        abort.store(true, Ordering::Relaxed);
+        let _ = timer.join();
+
+        let attempt_elapsed = attempt_start.elapsed();
+        total_nodes += result.nodes_visited;
+        let timed_out = attempt_elapsed >= budget;
+        eprintln!(
+            "  piece {} at ({},{}) -> {} nodes, {:.3?}, found={}, timeout={}",
+            piece_idx, row, col, result.nodes_visited, attempt_elapsed,
+            result.solution.is_some(), timed_out
+        );
+
+        if let Some(reduced_sol) = result.solution {
+            // Reconstruct full solution.
+            let mut full_sol = vec![(0usize, 0usize); n];
+            full_sol[piece_idx] = (row, col);
+            for (ri, &(r, c)) in reduced_sol.iter().enumerate() {
+                full_sol[idx_map[ri]] = (r, c);
+            }
+            eprintln!(
+                "corner_presolve: solved by forcing piece {} at ({},{}), {} nodes, {} shaved",
+                piece_idx, row, col, total_nodes, shaved
+            );
+            return SolveResult {
+                solution: Some(full_sol),
+                nodes_visited: total_nodes,
+            };
+        }
+
+        // Only shave if the solver completed (not timed out).
+        // A timeout means we can't conclude infeasibility.
+        if !timed_out {
+            ensure_mask(&mut mask, piece_idx, &all_piece_placements);
+            mask[piece_idx].as_mut().unwrap()[pl_idx] = false;
+            shaved += 1;
+        }
+    }
+
+    eprintln!(
+        "corner_presolve: {} shaved, {} nodes, falling back with mask",
+        shaved, total_nodes
+    );
+
+    // Fall back to full solve with accumulated mask.
+    let full = solve_with_config_and_mask(game, &config, Some(&mask), None);
+    SolveResult {
+        solution: full.solution,
+        nodes_visited: total_nodes + full.nodes_visited,
+    }
+}
+
+/// Ensure mask[piece_idx] is initialized (Some with all-true).
+fn ensure_mask(
+    mask: &mut PlacementMask,
+    piece_idx: usize,
+    all_placements: &[Vec<(usize, usize, Bitboard)>],
+) {
+    if mask[piece_idx].is_none() {
+        mask[piece_idx] = Some(vec![true; all_placements[piece_idx].len()]);
+    }
+}
+
 /// Solve in exhaustive mode: explore the full tree even after finding a solution.
 /// Used for benchmarking parallel efficiency without the luck factor.
 pub fn solve_exhaustive(game: &Game) -> SolveResult {
@@ -455,8 +634,25 @@ fn try_cancellation_combo(
     SolveResult { solution: None, nodes_visited: result.nodes_visited }
 }
 
+/// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
+/// or `Some(vec of bools)` indexed by placement index.
+pub type PlacementMask = Vec<Option<Vec<bool>>>;
+
 /// Backtracking solver with configurable pruning.
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
+    solve_with_config_and_mask(game, config, None, None)
+}
+
+/// Backtracking solver with configurable pruning, optional placement mask, and
+/// optional abort flag. When mask is provided, only placements where
+/// `mask[piece][pl] == true` are considered. When abort is provided, the search
+/// stops early when the flag is set (returns no solution).
+pub fn solve_with_config_and_mask(
+    game: &Game,
+    config: &PruningConfig,
+    mask: Option<&PlacementMask>,
+    abort: Option<&AtomicBool>,
+) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -464,10 +660,27 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     // Build (original_index, placements) and sort: fewer placements first.
     // Secondary sort by shape to group duplicates together.
+    // Apply placement mask: filter out excluded placements.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
+        .map(|(i, p)| {
+            let all_pl = p.placements(h, w);
+            let filtered = if let Some(m) = mask {
+                if let Some(ref piece_mask) = m[i] {
+                    all_pl.into_iter()
+                        .enumerate()
+                        .filter(|(j, _)| piece_mask[*j])
+                        .map(|(_, pl)| pl)
+                        .collect()
+                } else {
+                    all_pl
+                }
+            } else {
+                all_pl
+            };
+            (i, filtered)
+        })
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -536,21 +749,28 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         m,
     );
 
+    // Check abort before expensive backtrack.
+    if let Some(a) = abort {
+        if a.load(Ordering::Relaxed) {
+            return SolveResult { solution: None, nodes_visited: 0 };
+        }
+    }
+
     let nodes = Cell::new(0u64);
     let rng = Cell::new(0u64); // 0 = no shuffling (deterministic)
     let mut sorted_solution = Vec::with_capacity(n);
 
-    let found = backtrack::backtrack(
-        &board,
-        &data,
-        0,
-        0,
-        usize::MAX, // no prev dup placement
-        &mut sorted_solution,
-        &nodes,
-        config,
-        &rng,
-    );
+    let found = if let Some(abort_flag) = abort {
+        backtrack::backtrack_abortable(
+            &board, &data, 0, 0, usize::MAX,
+            &mut sorted_solution, &nodes, config, &rng, abort_flag,
+        )
+    } else {
+        backtrack::backtrack(
+            &board, &data, 0, 0, usize::MAX,
+            &mut sorted_solution, &nodes, config, &rng,
+        )
+    };
 
     let solution = if found {
         // Map solution back to original piece order.

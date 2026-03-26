@@ -14,6 +14,7 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
+    let mut corner_presolve = false;
     let mut disable_prune = None;
 
     let mut i = 1;
@@ -30,6 +31,7 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
+            "--corner-presolve" => corner_presolve = true,
             "--disable-prune" => {
                 i += 1;
                 disable_prune = Some(args[i].clone());
@@ -87,7 +89,9 @@ fn main() {
     }
 
     let start = Instant::now();
-    let result = if exhaustive {
+    let result = if corner_presolve {
+        solver::solve_corner_presolve(&game)
+    } else if exhaustive {
         solver::solve_exhaustive(&game)
     } else if parallel {
         solver::solve(&game)
