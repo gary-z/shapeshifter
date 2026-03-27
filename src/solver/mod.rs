@@ -114,29 +114,21 @@ pub(crate) struct SolverData {
     pub(crate) board_mask: Bitboard,
 }
 
-/// Solve with all pruning enabled. Tries cancellation, pair-merge, then parallel.
-pub fn solve(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), true, false)
+/// Main entry point: cancellation/pair-merge pipeline.
+pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, None);
+    SolveResult {
+        solution: full.solution,
+        nodes_visited: full.nodes_visited,
+    }
 }
 
-/// Solve in exhaustive mode: explore the full tree even after finding a solution.
-/// Used for benchmarking parallel efficiency without the luck factor.
-pub fn solve_exhaustive(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), true, true)
-}
-
-/// Solve serial-only. Same cancellation + pair-merge pipeline but no parallel.
-/// Used by benchmarks where the process pool provides parallelism across games.
-pub fn solve_serial(game: &Game) -> SolveResult {
-    solve_with_cancellation(game, &PruningConfig::default(), false, false)
-}
-
-/// Dispatch to parallel or serial based on flag.
-fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
+/// Dispatch to parallel or serial based on flag, with optional placement mask.
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
     if parallel {
-        solve_with_config_parallel(game, config, exhaustive)
+        solve_with_config_parallel_and_mask(game, config, exhaustive, mask)
     } else {
-        solve_with_config(game, config)
+        solve_with_config_and_mask(game, config, mask)
     }
 }
 
@@ -145,7 +137,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -172,7 +164,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     if cancellable_groups.is_empty() {
-        return solve_dispatch(game, config, parallel, exhaustive);
+        return solve_dispatch(game, config, parallel, exhaustive, mask);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -188,11 +180,11 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
         // Too many combos -- fall back to just trying max and full.
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
-            m, h, w);
+            m, h, w, mask);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_dispatch(game, config, parallel, exhaustive);
+        let mut full = solve_dispatch(game, config, parallel, exhaustive, mask);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -231,7 +223,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
 
     for combo in &combos {
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
-            combo, m, h, w);
+            combo, m, h, w, mask);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
             return SolveResult {
@@ -254,7 +246,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
+    let mut full_result = solve_dispatch(game, config, parallel, exhaustive, mask);
     full_result.nodes_visited += total_nodes;
     full_result
 }
@@ -347,7 +339,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive);
+    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive, None);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -382,6 +374,7 @@ fn try_cancellation_combo(
     m: usize,
     h: u8,
     w: u8,
+    mask: Option<&PlacementMask>,
 ) -> SolveResult {
     let pieces = game.pieces();
 
@@ -429,7 +422,11 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::core::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
+    // Remap placement mask: reduced piece i corresponds to original piece kept_indices[i].
+    let reduced_mask: Option<PlacementMask> = mask.map(|m| {
+        kept_indices.iter().map(|&orig_idx| m[orig_idx].clone()).collect()
+    });
+    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive, reduced_mask.as_ref());
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -455,8 +452,239 @@ fn try_cancellation_combo(
     SolveResult { solution: None, nodes_visited: result.nodes_visited }
 }
 
-/// Backtracking solver with configurable pruning.
+/// Result of cancellation reduction: a smaller game plus mapping back to the original.
+struct CancellationReduction {
+    /// The reduced game with cancelled pieces removed.
+    game: Game,
+    /// `kept_indices[reduced_idx]` = original piece index.
+    kept_indices: Vec<usize>,
+    /// For each cancelled group: (shape, original indices) to fill with dummy placements.
+    cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)>,
+    /// Total number of pieces in the original game.
+    original_n: usize,
+}
+
+/// Try to reduce a game by cancelling groups of M identical pieces.
+/// Uses the most aggressive cancellation (remove as many as possible).
+/// Returns None if no cancellation is possible.
+fn reduce_by_cancellation(game: &Game) -> Option<CancellationReduction> {
+    let m = game.board().m() as usize;
+    let pieces = game.pieces();
+    let h = game.board().height();
+    let w = game.board().width();
+    let n = pieces.len();
+
+    // Count pieces per shape, preserving original indices.
+    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
+            group.1.push(i);
+        } else {
+            shape_groups.push((*piece, vec![i]));
+        }
+    }
+
+    let mut any_cancelled = false;
+    let mut kept_indices: Vec<usize> = Vec::new();
+    let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+
+    for (shape, indices) in &shape_groups {
+        let max_cancel = (indices.len() / m) * m;
+        if max_cancel > 0 {
+            any_cancelled = true;
+            let keep = indices.len() - max_cancel;
+            for &idx in &indices[..keep] {
+                kept_indices.push(idx);
+            }
+            cancelled.push((*shape, indices[keep..].to_vec()));
+        } else {
+            for &idx in indices {
+                kept_indices.push(idx);
+            }
+        }
+    }
+
+    if !any_cancelled {
+        return None;
+    }
+
+    let reduced_pieces: Vec<crate::core::piece::Piece> =
+        kept_indices.iter().map(|&i| pieces[i]).collect();
+
+    if reduced_pieces.is_empty() {
+        // All pieces cancelled — only solvable if board is already solved.
+        // Return None and let caller handle it.
+        return None;
+    }
+
+    let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+
+    Some(CancellationReduction {
+        game: reduced_game,
+        kept_indices,
+        cancelled,
+        original_n: n,
+    })
+}
+
+/// Reconstruct a full solution from a reduced solution + cancellation info.
+fn reconstruct_cancelled_solution(
+    reduction: &CancellationReduction,
+    reduced_sol: &Solution,
+    h: u8,
+    w: u8,
+) -> Solution {
+    let mut full_sol = vec![(0usize, 0usize); reduction.original_n];
+    for (ri, &(row, col)) in reduced_sol.iter().enumerate() {
+        full_sol[reduction.kept_indices[ri]] = (row, col);
+    }
+    for (shape, indices) in &reduction.cancelled {
+        let placements = shape.placements(h, w);
+        if let Some(&(r, c, _)) = placements.first() {
+            for &idx in indices {
+                full_sol[idx] = (r, c);
+            }
+        }
+    }
+    full_sol
+}
+
+/// Build all cancellation reductions for a game, sorted most aggressive first,
+/// plus `None` for the original (uncancelled) game at the end.
+fn build_all_cancellation_reductions(game: &Game) -> Vec<Option<CancellationReduction>> {
+    let m = game.board().m() as usize;
+    let pieces = game.pieces();
+    let h = game.board().height();
+    let w = game.board().width();
+    let n = pieces.len();
+
+    // Group pieces by shape.
+    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
+            group.1.push(i);
+        } else {
+            shape_groups.push((*piece, vec![i]));
+        }
+    }
+
+    // Find cancellable groups.
+    let mut cancellable_groups: Vec<(usize, usize)> = Vec::new(); // (group_idx, max_sets)
+    for (g, (_, indices)) in shape_groups.iter().enumerate() {
+        let max_sets = indices.len() / m;
+        if max_sets > 0 {
+            cancellable_groups.push((g, max_sets));
+        }
+    }
+
+    if cancellable_groups.is_empty() {
+        return vec![None]; // Only the original game.
+    }
+
+    // Enumerate all combos (excluding all-zeros which is the original game).
+    let num_cgroups = cancellable_groups.len();
+    let total_combos: usize = cancellable_groups.iter()
+        .map(|(_, max_sets)| max_sets + 1)
+        .product();
+
+    // Cap combo enumeration.
+    let combos = if total_combos > 200 {
+        // Just try max cancellation.
+        vec![cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>()]
+    } else {
+        let mut combos: Vec<Vec<usize>> = Vec::new();
+        let mut current = vec![0usize; num_cgroups];
+        loop {
+            if current.iter().any(|&c| c > 0) {
+                combos.push(current.clone());
+            }
+            let mut carry = true;
+            for i in 0..num_cgroups {
+                if carry {
+                    current[i] += 1;
+                    if current[i] > cancellable_groups[i].1 {
+                        current[i] = 0;
+                    } else {
+                        carry = false;
+                    }
+                }
+            }
+            if carry { break; }
+        }
+        // Sort: most pieces cancelled first.
+        combos.sort_unstable_by(|a, b| {
+            let ta: usize = a.iter().sum();
+            let tb: usize = b.iter().sum();
+            tb.cmp(&ta)
+        });
+        combos
+    };
+
+    let mut results: Vec<Option<CancellationReduction>> = Vec::new();
+
+    for combo in &combos {
+        let mut kept_indices: Vec<usize> = Vec::new();
+        let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
+
+        for (g, (shape, indices)) in shape_groups.iter().enumerate() {
+            // Find cancel count for this group.
+            let cancel_sets = cancellable_groups.iter()
+                .find(|&&(gi, _)| gi == g)
+                .and_then(|&(ci_idx, _)| {
+                    // Find position of g in cancellable_groups to index into combo.
+                    cancellable_groups.iter().position(|&(gi, _)| gi == g)
+                        .map(|pos| combo[pos])
+                })
+                .unwrap_or(0);
+            let cancel_count = cancel_sets * m;
+            let keep = indices.len() - cancel_count;
+            for &idx in &indices[..keep] {
+                kept_indices.push(idx);
+            }
+            if cancel_count > 0 {
+                cancelled.push((*shape, indices[keep..].to_vec()));
+            }
+        }
+
+        if kept_indices.is_empty() {
+            continue; // Skip: all pieces cancelled.
+        }
+
+        let reduced_pieces: Vec<crate::core::piece::Piece> =
+            kept_indices.iter().map(|&i| pieces[i]).collect();
+        let reduced_game = Game::new(game.board().clone(), reduced_pieces);
+
+        results.push(Some(CancellationReduction {
+            game: reduced_game,
+            kept_indices,
+            cancelled,
+            original_n: n,
+        }));
+    }
+
+    // Add the original game (no cancellation) at the end.
+    results.push(None);
+    results
+}
+
+/// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
+/// or `Some(vec of bools)` indexed by placement index.
+pub type PlacementMask = Vec<Option<Vec<bool>>>;
+
+/// Backtracking solver with configurable pruning (serial).
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
+    solve_with_config_and_mask(game, config, None)
+}
+
+
+/// Backtracking solver with configurable pruning and optional placement mask.
+/// When a placement mask is provided, only placements where
+/// `mask[piece][pl] == true` are considered.
+pub fn solve_with_config_and_mask(
+    game: &Game,
+    config: &PruningConfig,
+    mask: Option<&PlacementMask>,
+) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -464,10 +692,27 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     // Build (original_index, placements) and sort: fewer placements first.
     // Secondary sort by shape to group duplicates together.
+    // Apply placement mask: filter out excluded placements.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
+        .map(|(i, p)| {
+            let all_pl = p.placements(h, w);
+            let filtered = if let Some(m) = mask {
+                if let Some(ref piece_mask) = m[i] {
+                    all_pl.into_iter()
+                        .enumerate()
+                        .filter(|(j, _)| piece_mask[*j])
+                        .map(|(_, pl)| pl)
+                        .collect()
+                } else {
+                    all_pl
+                }
+            } else {
+                all_pl
+            };
+            (i, filtered)
+        })
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -607,6 +852,12 @@ struct WorkItem {
 /// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
 /// 3. Spawns worker threads to search from each unique state.
 fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: bool) -> SolveResult {
+    solve_with_config_parallel_and_mask(game, config, exhaustive, None)
+}
+
+fn solve_with_config_parallel_and_mask(
+    game: &Game, config: &PruningConfig, exhaustive: bool, mask: Option<&PlacementMask>,
+) -> SolveResult {
     eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
     let pieces = game.pieces();
@@ -614,11 +865,27 @@ fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: b
     let w = board.width();
 
     // Build (original_index, placements) and sort: fewer placements first.
-    // (Same sorting as solve_with_config.)
+    // Apply placement mask if provided.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
+        .map(|(i, p)| {
+            let all_pl = p.placements(h, w);
+            let filtered = if let Some(m) = mask {
+                if let Some(ref piece_mask) = m[i] {
+                    all_pl.into_iter()
+                        .enumerate()
+                        .filter(|(j, _)| piece_mask[*j])
+                        .map(|(_, pl)| pl)
+                        .collect()
+                } else {
+                    all_pl
+                }
+            } else {
+                all_pl
+            };
+            (i, filtered)
+        })
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -893,7 +1160,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 1);
         assert_eq!(sol[0], (0, 0));
         verify_solution(&game, &sol);
@@ -905,7 +1172,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -916,7 +1183,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -926,7 +1193,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 9);
         verify_solution(&game, &sol);
     }
@@ -938,7 +1205,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 3);
         verify_solution(&game, &sol);
     }
@@ -950,7 +1217,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -961,7 +1228,7 @@ mod tests {
         let big = Piece::from_grid(&[&[true, true], &[true, false]]); // L-shape, 3 cells
         let small = Piece::from_grid(&[&[true]]); // 1x1
         let game = Game::new(board, vec![big, small]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -970,7 +1237,7 @@ mod tests {
     fn test_generated_game_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
         let game = crate::generate::generate_for_level(1, &mut rng).unwrap();
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), game.pieces().len());
         verify_solution(&game, &sol);
     }
@@ -979,7 +1246,7 @@ mod tests {
     fn test_generated_level_5_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(123);
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         verify_solution(&game, &sol);
     }
 
@@ -990,7 +1257,7 @@ mod tests {
         assert_eq!(board.min_flips_needed(), 9);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1000,7 +1267,7 @@ mod tests {
         let p0 = Piece::from_grid(&[&[true]]);
         let p1 = Piece::from_grid(&[&[true, true]]);
         let game = Game::new(board, vec![p0, p1]);
-        let sol = solve(&game).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -1011,7 +1278,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -1019,7 +1286,7 @@ mod tests {
         for level in [1, 5, 10, 20, 25, 30] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
             let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
-            let result = solve(&game);
+            let result = solve(&game, false, false);
             assert!(result.solution.is_some(), "level {level} should be solvable");
             verify_solution(&game, &result.solution.unwrap());
         }
@@ -1078,7 +1345,7 @@ mod tests {
                     let mut rng =
                         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                     let game = generate_game(&spec, &mut rng);
-                    let result = solve(&game);
+                    let result = solve(&game, false, false);
                     match result.solution {
                         None => Some(format!(
                             "FAIL: no solution found for M={} {}x{} pieces={} seed={}",
@@ -1440,7 +1707,7 @@ mod tests {
                     <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = generate_game(&spec, &mut rng);
 
-                let result_with = solve(&game);
+                let result_with = solve(&game, false, false);
                 total_with += result_with.nodes_visited;
 
                 if let Some(ref sol) = result_with.solution {
@@ -1508,7 +1775,7 @@ mod tests {
         let p1x2 = Piece::from_grid(&[&[true, true]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p1x2, p1x1, p1x1, p1x1]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "pair-merge game should solve");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -1528,7 +1795,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -1547,7 +1814,7 @@ mod tests {
         let p_l = Piece::from_grid(&[&[true, true], &[true, false]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p_l, p1x1, p1x1]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some());
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -1568,7 +1835,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -1583,7 +1850,7 @@ mod tests {
         let board = Board::new_solved(3, 3, 2);
         let p = Piece::from_grid(&[&[true, true], &[true, false]]);
         let game = Game::new(board, vec![p, p, p, p]);
-        let result = solve(&game);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }

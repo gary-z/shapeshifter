@@ -14,7 +14,6 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
-    let mut disable_prune = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -30,10 +29,6 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
-            "--disable-prune" => {
-                i += 1;
-                disable_prune = Some(args[i].clone());
-            }
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: solve [puzzle.json] [OPTIONS]\n\n\
@@ -42,7 +37,6 @@ fn main() {
                        --parallel        Use parallel solver (all cores)\n  \
                        --exhaustive      Explore full search tree\n  \
                        --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
-                       --disable-prune RULE  Disable a pruning rule (for ablation)\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
                        -h, --help        Show this help"
@@ -68,32 +62,8 @@ fn main() {
     };
     let game = puz.to_game();
 
-    // Build pruning config.
-    let mut config = solver::PruningConfig::default();
-    if let Some(flag) = &disable_prune {
-        match flag.as_str() {
-            "active_planes" => config.active_planes = false,
-            "min_flips_global" => config.min_flips_global = false,
-            "min_flips_rowcol" => config.min_flips_rowcol = false,
-            "min_flips_diagonal" => config.min_flips_diagonal = false,
-            "coverage" => config.coverage = false,
-            "jaggedness" => config.jaggedness = false,
-            "cell_locking" => config.cell_locking = false,
-            "component_checks" => config.component_checks = false,
-            "duplicate_pruning" => config.duplicate_pruning = false,
-            "single_cell_endgame" => config.single_cell_endgame = false,
-            _ => eprintln!("Unknown prune flag: {}", flag),
-        }
-    }
-
     let start = Instant::now();
-    let result = if exhaustive {
-        solver::solve_exhaustive(&game)
-    } else if parallel {
-        solver::solve(&game)
-    } else {
-        solver::solve_with_config(&game, &config)
-    };
+    let result = solver::solve(&game, parallel, exhaustive);
     let elapsed = start.elapsed();
 
     if worker {
