@@ -155,16 +155,6 @@ impl Board {
         }
     }
 
-    fn recount_active_planes(&mut self) {
-        let mut count = 0u8;
-        for d in 1..self.m as usize {
-            if !self.planes[d].is_zero() {
-                count += 1;
-            }
-        }
-        self.active_planes = count;
-    }
-
     /// Number of non-zero planes (planes with d > 0 that have any bits set).
     /// Each piece placement can reduce this by at most 1.
     pub fn active_planes(&self) -> u8 {

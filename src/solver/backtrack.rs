@@ -224,9 +224,6 @@ macro_rules! define_backtrack {
 // Serial backtrack: no abort parameter, no overhead.
 define_backtrack!(backtrack);
 
-// Abortable backtrack: checks abort flag every 1024 nodes.
-define_backtrack!(backtrack_abortable, abort: abort: &AtomicBool);
-
 // ---------------------------------------------------------------------------
 // Iterative backtrack with budget-based work stealing
 // ---------------------------------------------------------------------------

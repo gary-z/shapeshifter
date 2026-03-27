@@ -10,7 +10,6 @@ use shapeshifter::level::get_level;
 use shapeshifter::puzzle::PuzzleJson;
 
 struct Task {
-    idx: usize,
     level: u32,
     game_idx: u32,
     n_pieces: usize,
@@ -19,7 +18,6 @@ struct Task {
 }
 
 struct TaskResult {
-    idx: usize,
     level: u32,
     game_idx: u32,
     n_pieces: usize,
@@ -66,7 +64,6 @@ fn run_task(
         Err(e) => {
             eprintln!("Failed to spawn worker: {}", e);
             return TaskResult {
-                idx: task.idx,
                 level: task.level,
                 game_idx: task.game_idx,
                 n_pieces: task.n_pieces,
@@ -99,8 +96,7 @@ fn run_task(
                         let elapsed_ms = parts[1].parse().ok();
                         let solved = parts[2] == "true";
                         return TaskResult {
-                            idx: task.idx,
-                            level: task.level,
+                                        level: task.level,
                             game_idx: task.game_idx,
                             n_pieces: task.n_pieces,
                             board_desc: task.board_desc.clone(),
@@ -112,7 +108,6 @@ fn run_task(
                 }
             }
             TaskResult {
-                idx: task.idx,
                 level: task.level,
                 game_idx: task.game_idx,
                 n_pieces: task.n_pieces,
@@ -126,7 +121,6 @@ fn run_task(
             let _ = child.kill();
             let _ = child.wait();
             TaskResult {
-                idx: task.idx,
                 level: task.level,
                 game_idx: task.game_idx,
                 n_pieces: task.n_pieces,
@@ -140,7 +134,6 @@ fn run_task(
             let _ = child.kill();
             let _ = child.wait();
             TaskResult {
-                idx: task.idx,
                 level: task.level,
                 game_idx: task.game_idx,
                 n_pieces: task.n_pieces,
@@ -177,7 +170,6 @@ fn build_simulated_tasks(
     games_per: u32,
 ) -> Vec<Task> {
     let mut tasks = Vec::new();
-    let mut idx = 0;
     for level in start_level..=end_level {
         let spec = match get_level(level) {
             Some(s) => s,
@@ -191,14 +183,12 @@ fn build_simulated_tasks(
             let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
             let json = game_to_json(&game, level, &spec);
             tasks.push(Task {
-                idx,
                 level,
                 game_idx: g,
                 n_pieces,
                 board_desc,
                 json,
             });
-            idx += 1;
         }
     }
     tasks
@@ -218,7 +208,6 @@ fn build_historical_tasks(path: &str) -> Vec<Task> {
         .map(|(idx, puz)| {
             let board_desc = format!("{}x{}/M{}", puz.rows, puz.columns, puz.m);
             Task {
-                idx,
                 level: puz.level,
                 game_idx: idx as u32,
                 n_pieces: puz.pieces.len(),
