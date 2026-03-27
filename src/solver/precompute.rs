@@ -56,6 +56,15 @@ pub(crate) fn build_solver_data(
         })
         .collect();
 
+    // Precompute suffix reaches: suffix_reaches[i] = OR of reaches[i..n].
+    let suffix_reaches = {
+        let mut sr = vec![Bitboard::ZERO; n + 1];
+        for i in (0..n).rev() {
+            sr[i] = sr[i + 1] | reaches[i];
+        }
+        sr
+    };
+
     // Precompute suffix coverage in binary bitboard layers.
     let suffix_coverage = precompute_suffix_coverage(&reaches);
 
@@ -276,11 +285,33 @@ pub(crate) fn build_solver_data(
         }
     }
 
+    // Mod-3 diagonal partitions: (r+c)%3 groups. Captures diagonal mod-3 structure.
+    if bh >= 4 && bw >= 4 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|r, c| (r + c) % 3 == target_group,
+                3,
+                &|pr, pc, off| (pr + pc + off) % 3 == target_group,
+            ));
+        }
+    }
+
+    // Mod-3 anti-diagonal partitions: (r+2*c)%3 groups (independent from (r+c)%3).
+    if bh >= 4 && bw >= 4 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|r, c| (r + 2 * c) % 3 == target_group,
+                3,
+                &|pr, pc, off| (pr + 2 * pc + off) % 3 == target_group,
+            ));
+        }
+    }
+
     // Precompute subset reachability for border regions.
     let max_subset_k: usize = match m {
         2 => 14,   // 16384 states — enables full row pairs on 7-wide boards
-        3 => 6,    // 729 states
-        4 => 5,    // 625 states (reduced from previous 4)
+        3 => 8,    // 6561 states — enables full row/column subsets on 8-wide boards
+        4 => 5,    // 1024 states (reduced from previous 4)
         _ => 4,    // 625 states for M=5
     };
     let subset_checks = {
@@ -773,6 +804,7 @@ pub(crate) fn build_solver_data(
         subset_checks,
         weight_tuple_checks,
         board_mask,
+        suffix_reaches,
     }
 }
 

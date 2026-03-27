@@ -178,6 +178,18 @@ macro_rules! define_backtrack {
                     }
                 }
 
+                // Min-flips lookahead: predict min_flips after this placement
+                // without the cost of apply_piece + recursive call + undo_piece.
+                // min_flips_after = current + M * zeros_hit - piece_area.
+                if piece_idx + 1 < data.all_placements.len() {
+                    let min_flips_after = board.min_flips_needed()
+                        + data.m as u32 * keys[pl_idx] as u32
+                        - data.cell_counts[piece_idx];
+                    if min_flips_after > data.remaining_bits[piece_idx + 1] {
+                        continue;
+                    }
+                }
+
                 board.apply_piece(mask);
                 solution.push((row, col));
 
@@ -376,6 +388,15 @@ fn build_search_frame(
                 if table[prev_dup_placement * num_curr + pl_idx] {
                     continue;
                 }
+            }
+        }
+        // Min-flips lookahead: skip placements that will immediately fail the global budget.
+        if piece_idx + 1 < data.all_placements.len() {
+            let min_flips_after = board.min_flips_needed()
+                + data.m as u32 * keys[pl_idx] as u32
+                - data.cell_counts[piece_idx];
+            if min_flips_after > data.remaining_bits[piece_idx + 1] {
+                continue;
             }
         }
         filtered.push((pl_idx, row, col, mask));
