@@ -56,15 +56,6 @@ pub(crate) fn build_solver_data(
         })
         .collect();
 
-    // Precompute suffix reaches: suffix_reaches[i] = OR of reaches[i..n].
-    let suffix_reaches = {
-        let mut sr = vec![Bitboard::ZERO; n + 1];
-        for i in (0..n).rev() {
-            sr[i] = sr[i + 1] | reaches[i];
-        }
-        sr
-    };
-
     // Precompute suffix coverage in binary bitboard layers.
     let suffix_coverage = precompute_suffix_coverage(&reaches);
 
@@ -804,7 +795,6 @@ pub(crate) fn build_solver_data(
         subset_checks,
         weight_tuple_checks,
         board_mask,
-        suffix_reaches,
     }
 }
 
