@@ -112,6 +112,8 @@ pub(crate) struct SolverData {
     pub(crate) subset_checks: Vec<SubsetReachability>,
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
     pub(crate) board_mask: Bitboard,
+    /// suffix_reaches[i] = OR of reaches[i..n]: union of all cells reachable by remaining pieces.
+    pub(crate) suffix_reaches: Vec<Bitboard>,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.

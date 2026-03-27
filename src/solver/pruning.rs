@@ -311,6 +311,17 @@ pub(crate) fn prune_active_planes(board: &Board, remaining: usize) -> bool {
     board.active_planes() as usize <= remaining
 }
 
+/// Check that every non-zero cell is reachable by at least one remaining piece.
+/// Uses precomputed suffix OR of piece reach masks. Very cheap: ~6 bitboard ops.
+#[inline(always)]
+pub(crate) fn prune_unreachable_cells(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    let mut nz = Bitboard::ZERO;
+    for d in 1..data.m {
+        nz |= board.plane(d);
+    }
+    (nz & !data.suffix_reaches[piece_idx]).is_zero()
+}
+
 #[inline(always)]
 pub(crate) fn prune_min_flips_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     data.remaining_bits[piece_idx] >= board.min_flips_needed()
@@ -603,6 +614,7 @@ pub(crate) fn prune_node(
     // subgrid, component_checks) are omitted. Validated on simulated L36-60:
     // 78/125 vs 79/125 solves — negligible impact, +14-27% throughput gain.
     if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
+    if !prune_unreachable_cells(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
     if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
