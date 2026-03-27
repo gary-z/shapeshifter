@@ -147,22 +147,12 @@ impl Board {
     }
 
     /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
+    /// Equivalent to applying the piece M-1 more times (since M increments wraps to identity).
     #[inline(always)]
     pub fn undo_piece(&mut self, piece_mask: Bitboard) {
-        let m = self.m as u32;
-        // Incremental min_flips update:
-        // Cells at 1 go to 0 (cost M-1 → 0), all others increase by 1.
-        // delta = popcount(mask) - M * popcount(plane[1] & mask)
-        let ones_hit = (self.planes[1] & piece_mask).count_ones();
-        self.min_flips = self.min_flips + piece_mask.count_ones() - m * ones_hit;
-
-        let m = m as usize;
-        let bottom = self.planes[0] & piece_mask;
-        for i in 0..m - 1 {
-            let moving = self.planes[i + 1] & piece_mask;
-            self.planes[i] = (self.planes[i] & !piece_mask) | moving;
+        for _ in 1..self.m {
+            self.apply_piece(piece_mask);
         }
-        self.planes[m - 1] = (self.planes[m - 1] & !piece_mask) | bottom;
     }
 
     fn recount_active_planes(&mut self) {
