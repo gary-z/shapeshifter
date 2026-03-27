@@ -154,7 +154,9 @@ macro_rules! define_backtrack {
                 }
             }
 
-            let mut board = board.clone();
+            // Copy-make: snapshot the board once, copy+apply per sibling (no undo).
+            // A 168-byte memcpy is cheaper than the bitboard manipulation in undo_piece.
+            let board_snapshot = *board;
             for oi in 0..pl_len {
                 let pl_idx = order[oi] as usize;
                 let (row, col, mask) = placements[pl_idx];
@@ -178,6 +180,7 @@ macro_rules! define_backtrack {
                     }
                 }
 
+                let mut board = board_snapshot;
                 board.apply_piece(mask);
                 solution.push((row, col));
 
@@ -211,7 +214,6 @@ macro_rules! define_backtrack {
                 }
 
                 solution.pop();
-                board.undo_piece(mask);
             }
 
             false
