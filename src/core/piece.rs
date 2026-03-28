@@ -54,7 +54,7 @@ impl Piece {
 
     /// Number of filled cells in the piece.
     pub const fn cell_count(&self) -> u32 {
-        self.shape.count_ones()
+        self.shape.count_ones_const()
     }
 
     /// White cell count when placed at even parity ((r0+c0)%2 == 0).
@@ -75,7 +75,7 @@ impl Piece {
     pub fn max_row_thickness(&self) -> u32 {
         let mut max = 0u32;
         for r in 0..self.height as usize {
-            let row_bits = (self.shape >> (r as u32 * 15)).limbs[0] & ((1u64 << self.width) - 1);
+            let row_bits = (self.shape >> (r as u32 * 15)).limbs()[0] & ((1u64 << self.width) - 1);
             let count = row_bits.count_ones();
             if count > max {
                 max = count;

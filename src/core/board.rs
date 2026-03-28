@@ -136,14 +136,16 @@ impl Board {
         self.min_flips = self.min_flips + m * zeros_hit - piece_mask.count_ones();
 
         let m = m as usize;
+        // Hoist the NOT outside the loop: compute the keep-mask once.
+        let keep_mask = !piece_mask;
         let top = self.planes[m - 1] & piece_mask;
         let mut i = m - 1;
         while i > 0 {
             let moving = self.planes[i - 1] & piece_mask;
-            self.planes[i] = (self.planes[i] & !piece_mask) | moving;
+            self.planes[i] = (self.planes[i] & keep_mask) | moving;
             i -= 1;
         }
-        self.planes[0] = (self.planes[0] & !piece_mask) | top;
+        self.planes[0] = (self.planes[0] & keep_mask) | top;
     }
 
     /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
