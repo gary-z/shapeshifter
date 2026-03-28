@@ -1,185 +1,176 @@
-/// A 256-bit bitboard stored as four u64 limbs in little-endian order.
-/// Bit index `i` lives in limb `i / 64`, bit position `i % 64`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+use std::simd::{u64x4, num::SimdUint, cmp::SimdPartialEq};
+
+/// A 256-bit bitboard stored as a SIMD u64x4 vector.
+/// Bit index `i` lives in lane `i / 64`, bit position `i % 64`.
+///
+/// Uses `std::simd` portable SIMD for branchless 256-bit operations.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct Bitboard {
-    pub limbs: [u64; 4],
+    v: u64x4,
+}
+
+impl Default for Bitboard {
+    fn default() -> Self {
+        Self::ZERO
+    }
 }
 
 impl Bitboard {
-    pub const ZERO: Bitboard = Bitboard { limbs: [0; 4] };
+    pub const ZERO: Bitboard = Bitboard { v: u64x4::from_array([0; 4]) };
 
     #[inline(always)]
     pub const fn new(limbs: [u64; 4]) -> Self {
-        Self { limbs }
+        Self { v: u64x4::from_array(limbs) }
+    }
+
+    /// Access the underlying limbs (for backwards compat).
+    #[inline(always)]
+    pub fn limbs(&self) -> [u64; 4] {
+        self.v.to_array()
     }
 
     /// Create a bitboard with a single bit set.
     #[inline(always)]
-    pub const fn from_bit(index: u32) -> Self {
-        let mut limbs = [0u64; 4];
-        limbs[index as usize / 64] = 1u64 << (index % 64);
-        Self { limbs }
+    pub fn from_bit(index: u32) -> Self {
+        let mut arr = [0u64; 4];
+        arr[index as usize / 64] = 1u64 << (index % 64);
+        Self { v: u64x4::from_array(arr) }
     }
 
     /// Check if a specific bit is set.
     #[inline(always)]
-    pub const fn get_bit(&self, index: u32) -> bool {
-        let limb = self.limbs[index as usize / 64];
-        (limb >> (index % 64)) & 1 != 0
+    pub fn get_bit(&self, index: u32) -> bool {
+        let arr = self.v.to_array();
+        (arr[index as usize / 64] >> (index % 64)) & 1 != 0
     }
 
     /// Set a specific bit.
     #[inline(always)]
     pub fn set_bit(&mut self, index: u32) {
-        self.limbs[index as usize / 64] |= 1u64 << (index % 64);
+        let mut arr = self.v.to_array();
+        arr[index as usize / 64] |= 1u64 << (index % 64);
+        self.v = u64x4::from_array(arr);
     }
 
     /// Clear a specific bit.
     #[inline(always)]
     pub fn clear_bit(&mut self, index: u32) {
-        self.limbs[index as usize / 64] &= !(1u64 << (index % 64));
+        let mut arr = self.v.to_array();
+        arr[index as usize / 64] &= !(1u64 << (index % 64));
+        self.v = u64x4::from_array(arr);
     }
 
     /// Returns true if all bits are zero.
     #[inline(always)]
-    pub const fn is_zero(&self) -> bool {
-        self.limbs[0] == 0 && self.limbs[1] == 0 && self.limbs[2] == 0 && self.limbs[3] == 0
+    pub fn is_zero(&self) -> bool {
+        self.v.simd_eq(u64x4::splat(0)).all()
     }
 
     /// Return the index of the lowest set bit, or 256 if none.
     #[inline(always)]
-    pub const fn lowest_set_bit(&self) -> u32 {
-        if self.limbs[0] != 0 {
-            return self.limbs[0].trailing_zeros();
-        }
-        if self.limbs[1] != 0 {
-            return 64 + self.limbs[1].trailing_zeros();
-        }
-        if self.limbs[2] != 0 {
-            return 128 + self.limbs[2].trailing_zeros();
-        }
-        if self.limbs[3] != 0 {
-            return 192 + self.limbs[3].trailing_zeros();
-        }
+    pub fn lowest_set_bit(&self) -> u32 {
+        let arr = self.v.to_array();
+        if arr[0] != 0 { return arr[0].trailing_zeros(); }
+        if arr[1] != 0 { return 64 + arr[1].trailing_zeros(); }
+        if arr[2] != 0 { return 128 + arr[2].trailing_zeros(); }
+        if arr[3] != 0 { return 192 + arr[3].trailing_zeros(); }
         256
     }
 
-    /// Count the number of set bits.
+    /// Count the number of set bits across all 256 bits.
+    /// Uses SIMD lane-wise popcount and horizontal reduction.
     #[inline(always)]
-    pub const fn count_ones(&self) -> u32 {
-        self.limbs[0].count_ones()
-            + self.limbs[1].count_ones()
-            + self.limbs[2].count_ones()
-            + self.limbs[3].count_ones()
+    pub fn count_ones(&self) -> u32 {
+        self.v.count_ones().reduce_sum() as u32
+    }
+
+    /// Const-compatible scalar count_ones.
+    #[inline(always)]
+    pub const fn count_ones_const(&self) -> u32 {
+        let arr = self.v.to_array();
+        arr[0].count_ones()
+            + arr[1].count_ones()
+            + arr[2].count_ones()
+            + arr[3].count_ones()
     }
 
     /// Shift left by `n` bits. Bits shifted beyond 256 are lost.
-    pub const fn shl(&self, n: u32) -> Self {
+    pub fn shl(&self, n: u32) -> Self {
         if n >= 256 {
             return Self::ZERO;
         }
         let limb_shift = (n / 64) as usize;
         let bit_shift = n % 64;
+        let arr = self.v.to_array();
 
         let mut result = [0u64; 4];
-        let mut i = 3;
-        while i < 4 {
-            if i >= limb_shift {
-                let src = i - limb_shift;
-                result[i] = self.limbs[src] << bit_shift;
-                if bit_shift > 0 && src > 0 {
-                    result[i] |= self.limbs[src - 1] >> (64 - bit_shift);
-                }
+        for i in limb_shift..4 {
+            let src = i - limb_shift;
+            result[i] = arr[src] << bit_shift;
+            if bit_shift > 0 && src > 0 {
+                result[i] |= arr[src - 1] >> (64 - bit_shift);
             }
-            if i == 0 {
-                break;
-            }
-            i = i.wrapping_sub(1);
         }
-        Self { limbs: result }
+        Self { v: u64x4::from_array(result) }
     }
 
     /// Shift right by `n` bits. Bits shifted below 0 are lost.
-    pub const fn shr(&self, n: u32) -> Self {
+    pub fn shr(&self, n: u32) -> Self {
         if n >= 256 {
             return Self::ZERO;
         }
         let limb_shift = (n / 64) as usize;
         let bit_shift = n % 64;
+        let arr = self.v.to_array();
 
         let mut result = [0u64; 4];
-        let mut i = 0;
-        while i < 4 {
+        for i in 0..4 {
             let src = i + limb_shift;
             if src < 4 {
-                result[i] = self.limbs[src] >> bit_shift;
+                result[i] = arr[src] >> bit_shift;
                 if bit_shift > 0 && src + 1 < 4 {
-                    result[i] |= self.limbs[src + 1] << (64 - bit_shift);
+                    result[i] |= arr[src + 1] << (64 - bit_shift);
                 }
             }
-            i += 1;
         }
-        Self { limbs: result }
+        Self { v: u64x4::from_array(result) }
     }
 
     /// Bitwise AND.
     #[inline(always)]
-    pub const fn and(&self, other: &Bitboard) -> Self {
-        Self {
-            limbs: [
-                self.limbs[0] & other.limbs[0],
-                self.limbs[1] & other.limbs[1],
-                self.limbs[2] & other.limbs[2],
-                self.limbs[3] & other.limbs[3],
-            ],
-        }
+    pub fn and(&self, other: &Bitboard) -> Self {
+        Self { v: self.v & other.v }
     }
 
     /// Bitwise OR.
     #[inline(always)]
-    pub const fn or(&self, other: &Bitboard) -> Self {
-        Self {
-            limbs: [
-                self.limbs[0] | other.limbs[0],
-                self.limbs[1] | other.limbs[1],
-                self.limbs[2] | other.limbs[2],
-                self.limbs[3] | other.limbs[3],
-            ],
-        }
+    pub fn or(&self, other: &Bitboard) -> Self {
+        Self { v: self.v | other.v }
     }
 
     /// Bitwise XOR.
     #[inline(always)]
-    pub const fn xor(&self, other: &Bitboard) -> Self {
-        Self {
-            limbs: [
-                self.limbs[0] ^ other.limbs[0],
-                self.limbs[1] ^ other.limbs[1],
-                self.limbs[2] ^ other.limbs[2],
-                self.limbs[3] ^ other.limbs[3],
-            ],
-        }
+    pub fn xor(&self, other: &Bitboard) -> Self {
+        Self { v: self.v ^ other.v }
     }
 
     /// Bitwise NOT (inverts all 256 bits).
     #[inline(always)]
-    pub const fn not(&self) -> Self {
-        Self {
-            limbs: [
-                !self.limbs[0],
-                !self.limbs[1],
-                !self.limbs[2],
-                !self.limbs[3],
-            ],
-        }
+    pub fn not(&self) -> Self {
+        Self { v: !self.v }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Operator trait impls — all delegate to SIMD vector ops
+// ---------------------------------------------------------------------------
 
 impl std::ops::BitAnd for Bitboard {
     type Output = Self;
     #[inline(always)]
     fn bitand(self, rhs: Self) -> Self {
-        self.and(&rhs)
+        Self { v: self.v & rhs.v }
     }
 }
 
@@ -187,7 +178,7 @@ impl std::ops::BitOr for Bitboard {
     type Output = Self;
     #[inline(always)]
     fn bitor(self, rhs: Self) -> Self {
-        self.or(&rhs)
+        Self { v: self.v | rhs.v }
     }
 }
 
@@ -195,7 +186,7 @@ impl std::ops::BitXor for Bitboard {
     type Output = Self;
     #[inline(always)]
     fn bitxor(self, rhs: Self) -> Self {
-        self.xor(&rhs)
+        Self { v: self.v ^ rhs.v }
     }
 }
 
@@ -203,7 +194,7 @@ impl std::ops::Not for Bitboard {
     type Output = Self;
     #[inline(always)]
     fn not(self) -> Self {
-        Bitboard::not(&self)
+        Self { v: !self.v }
     }
 }
 
@@ -226,30 +217,31 @@ impl std::ops::Shr<u32> for Bitboard {
 impl std::ops::BitAndAssign for Bitboard {
     #[inline(always)]
     fn bitand_assign(&mut self, rhs: Self) {
-        *self = *self & rhs;
+        self.v &= rhs.v;
     }
 }
 
 impl std::ops::BitOrAssign for Bitboard {
     #[inline(always)]
     fn bitor_assign(&mut self, rhs: Self) {
-        *self = *self | rhs;
+        self.v |= rhs.v;
     }
 }
 
 impl std::ops::BitXorAssign for Bitboard {
     #[inline(always)]
     fn bitxor_assign(&mut self, rhs: Self) {
-        *self = *self ^ rhs;
+        self.v ^= rhs.v;
     }
 }
 
 impl std::fmt::Debug for Bitboard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let arr = self.v.to_array();
         write!(
             f,
             "Bitboard([{:#018x}, {:#018x}, {:#018x}, {:#018x}])",
-            self.limbs[0], self.limbs[1], self.limbs[2], self.limbs[3]
+            arr[0], arr[1], arr[2], arr[3]
         )
     }
 }
@@ -274,15 +266,15 @@ mod tests {
 
         let b = Bitboard::from_bit(63);
         assert!(b.get_bit(63));
-        assert_eq!(b.limbs[0], 1u64 << 63);
+        assert_eq!(b.limbs()[0], 1u64 << 63);
 
         let b = Bitboard::from_bit(64);
         assert!(b.get_bit(64));
-        assert_eq!(b.limbs[1], 1);
+        assert_eq!(b.limbs()[1], 1);
 
         let b = Bitboard::from_bit(255);
         assert!(b.get_bit(255));
-        assert_eq!(b.limbs[3], 1u64 << 63);
+        assert_eq!(b.limbs()[3], 1u64 << 63);
     }
 
     #[test]
@@ -328,7 +320,7 @@ mod tests {
     fn test_not() {
         let a = Bitboard::ZERO;
         let b = !a;
-        assert_eq!(b.limbs, [u64::MAX; 4]);
+        assert_eq!(b.limbs(), [u64::MAX; 4]);
         let c = !b;
         assert!(c.is_zero());
     }
@@ -361,7 +353,6 @@ mod tests {
     fn test_shl_overflow() {
         let a = Bitboard::from_bit(200);
         let b = a << 100;
-        // 200 + 100 = 300 >= 256, should be lost
         assert!(b.is_zero());
     }
 
@@ -408,8 +399,8 @@ mod tests {
         let mut a = Bitboard::ZERO;
         a.set_bit(0);
         a.set_bit(1);
-        a.set_bit(15); // row stride
-        let b = a << 30; // shift by 2 rows
+        a.set_bit(15);
+        let b = a << 30;
         assert!(b.get_bit(30));
         assert!(b.get_bit(31));
         assert!(b.get_bit(45));
@@ -441,18 +432,16 @@ mod tests {
 
     #[test]
     fn test_board_index_convention() {
-        // Verify the 15-column stride: (row, col) -> row * 15 + col
         let row = 3;
         let col = 7;
         let index = row * 15 + col;
         let b = Bitboard::from_bit(index);
         assert!(b.get_bit(index));
-        assert_eq!(index, 52); // 3*15 + 7 = 52
+        assert_eq!(index, 52);
     }
 
     #[test]
     fn test_max_board_index() {
-        // 14x14 board: max cell is (13, 13) = 13*15 + 13 = 208
         let index = 13 * 15 + 13;
         assert_eq!(index, 208);
         let b = Bitboard::from_bit(index);
@@ -462,20 +451,19 @@ mod tests {
 
     #[test]
     fn test_shl_preserves_pattern() {
-        // Place a 2x2 block at (0,0) and shift to (2,3)
         let mut piece = Bitboard::ZERO;
-        piece.set_bit(0);      // (0,0)
-        piece.set_bit(1);      // (0,1)
-        piece.set_bit(15);     // (1,0)
-        piece.set_bit(16);     // (1,1)
+        piece.set_bit(0);
+        piece.set_bit(1);
+        piece.set_bit(15);
+        piece.set_bit(16);
 
-        let offset = 2 * 15 + 3; // shift to row 2, col 3
+        let offset = 2 * 15 + 3;
         let placed = piece << offset;
 
-        assert!(placed.get_bit(2 * 15 + 3)); // (2,3)
-        assert!(placed.get_bit(2 * 15 + 4)); // (2,4)
-        assert!(placed.get_bit(3 * 15 + 3)); // (3,3)
-        assert!(placed.get_bit(3 * 15 + 4)); // (3,4)
+        assert!(placed.get_bit(2 * 15 + 3));
+        assert!(placed.get_bit(2 * 15 + 4));
+        assert!(placed.get_bit(3 * 15 + 3));
+        assert!(placed.get_bit(3 * 15 + 4));
         assert_eq!(placed.count_ones(), 4);
     }
 }

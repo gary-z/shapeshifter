@@ -498,7 +498,7 @@ pub fn solve_with_config_and_mask(
             .cmp(&b_pl.len())
             .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
-            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+            .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
 
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
@@ -630,7 +630,7 @@ fn solve_with_config_parallel_and_mask(
             .cmp(&b_pl.len())
             .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
-            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+            .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
 
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
