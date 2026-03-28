@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 pub mod core;
 pub mod game;
 pub mod generate;

@@ -3,15 +3,10 @@ mod precompute;
 pub(crate) mod pruning;
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use rand::seq::SliceRandom;
-
 use crate::core::bitboard::Bitboard;
-use crate::core::board::Board;
-use crate::core::board::MAX_M;
 use crate::core::coverage::CoverageCounter;
 use crate::game::Game;
 
@@ -254,8 +249,6 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
 /// For M=2: find a pair of pieces that can simulate a 1x1 piece at every board cell.
 /// Replace them with a 1x1 piece, solve the reduced game, then reconstruct.
 fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
-    use std::collections::HashSet;
-
     let pieces = game.pieces();
     let h = game.board().height();
     let w = game.board().width();
@@ -452,220 +445,6 @@ fn try_cancellation_combo(
     SolveResult { solution: None, nodes_visited: result.nodes_visited }
 }
 
-/// Result of cancellation reduction: a smaller game plus mapping back to the original.
-struct CancellationReduction {
-    /// The reduced game with cancelled pieces removed.
-    game: Game,
-    /// `kept_indices[reduced_idx]` = original piece index.
-    kept_indices: Vec<usize>,
-    /// For each cancelled group: (shape, original indices) to fill with dummy placements.
-    cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)>,
-    /// Total number of pieces in the original game.
-    original_n: usize,
-}
-
-/// Try to reduce a game by cancelling groups of M identical pieces.
-/// Uses the most aggressive cancellation (remove as many as possible).
-/// Returns None if no cancellation is possible.
-fn reduce_by_cancellation(game: &Game) -> Option<CancellationReduction> {
-    let m = game.board().m() as usize;
-    let pieces = game.pieces();
-    let h = game.board().height();
-    let w = game.board().width();
-    let n = pieces.len();
-
-    // Count pieces per shape, preserving original indices.
-    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
-    for (i, piece) in pieces.iter().enumerate() {
-        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
-            group.1.push(i);
-        } else {
-            shape_groups.push((*piece, vec![i]));
-        }
-    }
-
-    let mut any_cancelled = false;
-    let mut kept_indices: Vec<usize> = Vec::new();
-    let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
-
-    for (shape, indices) in &shape_groups {
-        let max_cancel = (indices.len() / m) * m;
-        if max_cancel > 0 {
-            any_cancelled = true;
-            let keep = indices.len() - max_cancel;
-            for &idx in &indices[..keep] {
-                kept_indices.push(idx);
-            }
-            cancelled.push((*shape, indices[keep..].to_vec()));
-        } else {
-            for &idx in indices {
-                kept_indices.push(idx);
-            }
-        }
-    }
-
-    if !any_cancelled {
-        return None;
-    }
-
-    let reduced_pieces: Vec<crate::core::piece::Piece> =
-        kept_indices.iter().map(|&i| pieces[i]).collect();
-
-    if reduced_pieces.is_empty() {
-        // All pieces cancelled — only solvable if board is already solved.
-        // Return None and let caller handle it.
-        return None;
-    }
-
-    let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-
-    Some(CancellationReduction {
-        game: reduced_game,
-        kept_indices,
-        cancelled,
-        original_n: n,
-    })
-}
-
-/// Reconstruct a full solution from a reduced solution + cancellation info.
-fn reconstruct_cancelled_solution(
-    reduction: &CancellationReduction,
-    reduced_sol: &Solution,
-    h: u8,
-    w: u8,
-) -> Solution {
-    let mut full_sol = vec![(0usize, 0usize); reduction.original_n];
-    for (ri, &(row, col)) in reduced_sol.iter().enumerate() {
-        full_sol[reduction.kept_indices[ri]] = (row, col);
-    }
-    for (shape, indices) in &reduction.cancelled {
-        let placements = shape.placements(h, w);
-        if let Some(&(r, c, _)) = placements.first() {
-            for &idx in indices {
-                full_sol[idx] = (r, c);
-            }
-        }
-    }
-    full_sol
-}
-
-/// Build all cancellation reductions for a game, sorted most aggressive first,
-/// plus `None` for the original (uncancelled) game at the end.
-fn build_all_cancellation_reductions(game: &Game) -> Vec<Option<CancellationReduction>> {
-    let m = game.board().m() as usize;
-    let pieces = game.pieces();
-    let h = game.board().height();
-    let w = game.board().width();
-    let n = pieces.len();
-
-    // Group pieces by shape.
-    let mut shape_groups: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
-    for (i, piece) in pieces.iter().enumerate() {
-        if let Some(group) = shape_groups.iter_mut().find(|(s, _)| s == piece) {
-            group.1.push(i);
-        } else {
-            shape_groups.push((*piece, vec![i]));
-        }
-    }
-
-    // Find cancellable groups.
-    let mut cancellable_groups: Vec<(usize, usize)> = Vec::new(); // (group_idx, max_sets)
-    for (g, (_, indices)) in shape_groups.iter().enumerate() {
-        let max_sets = indices.len() / m;
-        if max_sets > 0 {
-            cancellable_groups.push((g, max_sets));
-        }
-    }
-
-    if cancellable_groups.is_empty() {
-        return vec![None]; // Only the original game.
-    }
-
-    // Enumerate all combos (excluding all-zeros which is the original game).
-    let num_cgroups = cancellable_groups.len();
-    let total_combos: usize = cancellable_groups.iter()
-        .map(|(_, max_sets)| max_sets + 1)
-        .product();
-
-    // Cap combo enumeration.
-    let combos = if total_combos > 200 {
-        // Just try max cancellation.
-        vec![cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>()]
-    } else {
-        let mut combos: Vec<Vec<usize>> = Vec::new();
-        let mut current = vec![0usize; num_cgroups];
-        loop {
-            if current.iter().any(|&c| c > 0) {
-                combos.push(current.clone());
-            }
-            let mut carry = true;
-            for i in 0..num_cgroups {
-                if carry {
-                    current[i] += 1;
-                    if current[i] > cancellable_groups[i].1 {
-                        current[i] = 0;
-                    } else {
-                        carry = false;
-                    }
-                }
-            }
-            if carry { break; }
-        }
-        // Sort: most pieces cancelled first.
-        combos.sort_unstable_by(|a, b| {
-            let ta: usize = a.iter().sum();
-            let tb: usize = b.iter().sum();
-            tb.cmp(&ta)
-        });
-        combos
-    };
-
-    let mut results: Vec<Option<CancellationReduction>> = Vec::new();
-
-    for combo in &combos {
-        let mut kept_indices: Vec<usize> = Vec::new();
-        let mut cancelled: Vec<(crate::core::piece::Piece, Vec<usize>)> = Vec::new();
-
-        for (g, (shape, indices)) in shape_groups.iter().enumerate() {
-            // Find cancel count for this group.
-            let cancel_sets = cancellable_groups.iter()
-                .find(|&&(gi, _)| gi == g)
-                .and_then(|&(ci_idx, _)| {
-                    // Find position of g in cancellable_groups to index into combo.
-                    cancellable_groups.iter().position(|&(gi, _)| gi == g)
-                        .map(|pos| combo[pos])
-                })
-                .unwrap_or(0);
-            let cancel_count = cancel_sets * m;
-            let keep = indices.len() - cancel_count;
-            for &idx in &indices[..keep] {
-                kept_indices.push(idx);
-            }
-            if cancel_count > 0 {
-                cancelled.push((*shape, indices[keep..].to_vec()));
-            }
-        }
-
-        if kept_indices.is_empty() {
-            continue; // Skip: all pieces cancelled.
-        }
-
-        let reduced_pieces: Vec<crate::core::piece::Piece> =
-            kept_indices.iter().map(|&i| pieces[i]).collect();
-        let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-
-        results.push(Some(CancellationReduction {
-            game: reduced_game,
-            kept_indices,
-            cancelled,
-            original_n: n,
-        }));
-    }
-
-    // Add the original game (no cancellation) at the end.
-    results.push(None);
-    results
-}
 
 /// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
 /// or `Some(vec of bools)` indexed by placement index.
@@ -719,7 +498,7 @@ pub fn solve_with_config_and_mask(
             .cmp(&b_pl.len())
             .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
-            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+            .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
 
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
@@ -814,47 +593,6 @@ pub fn solve_with_config_and_mask(
     }
 }
 
-/// Hash key for a board state: all plane limbs concatenated.
-/// Board doesn't implement Hash, so we build a key from the planes' limbs.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct BoardKey {
-    limbs: [u64; MAX_M * 4],
-}
-
-impl BoardKey {
-    fn from_board(board: &Board) -> Self {
-        let mut limbs = [0u64; MAX_M * 4];
-        for d in 0..board.m() as usize {
-            let plane = board.plane(d as u8);
-            for (k, &l) in plane.limbs.iter().enumerate() {
-                limbs[d * 4 + k] = l;
-            }
-        }
-        Self { limbs }
-    }
-}
-
-/// A single work item for the parallel solver.
-struct WorkItem {
-    board: Board,
-    /// Prefix of the solution (placements for pieces 0..depth in sorted order).
-    prefix: Vec<(usize, usize)>,
-    /// Depth at which to start the backtrack (piece index).
-    depth: usize,
-    /// min_placement for the piece at `depth` (for duplicate symmetry breaking).
-    min_placement_at_k: usize,
-    /// prev_dup_placement for the piece at `depth` (for skip table).
-    prev_dup_at_k: usize,
-}
-
-/// Parallel dedup solver for large puzzles.
-/// 1. Sorts pieces and precomputes solver data (shared across threads).
-/// 2. Enumerates all combos of the first K pieces with pruning, groups by board state.
-/// 3. Spawns worker threads to search from each unique state.
-fn solve_with_config_parallel(game: &Game, config: &PruningConfig, exhaustive: bool) -> SolveResult {
-    solve_with_config_parallel_and_mask(game, config, exhaustive, None)
-}
-
 fn solve_with_config_parallel_and_mask(
     game: &Game, config: &PruningConfig, exhaustive: bool, mask: Option<&PlacementMask>,
 ) -> SolveResult {
@@ -892,7 +630,7 @@ fn solve_with_config_parallel_and_mask(
             .cmp(&b_pl.len())
             .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
-            .then_with(|| pieces[*i].shape().limbs.cmp(&pieces[*j].shape().limbs))
+            .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
 
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
@@ -1052,89 +790,6 @@ fn solve_with_config_parallel_and_mask(
     SolveResult {
         solution,
         nodes_visited,
-    }
-}
-
-/// Recursively enumerate all valid combos of the first `k` pieces.
-/// Respects duplicate symmetry breaking and skip tables.
-/// At the base case (piece_idx == k), records the combo with boundary info
-/// needed to correctly start the backtrack at piece k.
-fn enumerate_combos_pruned(
-    board: &Board,
-    data: &SolverData,
-    k: usize,
-    piece_idx: usize,
-    min_placement: usize,
-    prev_dup_placement: usize,
-    prefix: &mut Vec<(usize, usize)>,
-    results: &mut Vec<WorkItem>,
-    config: &PruningConfig,
-) {
-    if piece_idx == k {
-        results.push(WorkItem {
-            board: board.clone(),
-            prefix: prefix.clone(),
-            depth: k,
-            min_placement_at_k: min_placement,
-            prev_dup_at_k: prev_dup_placement,
-        });
-        return;
-    }
-
-    // Apply the same pruning checks as the backtracker.
-    if !pruning::prune_node(board, data, piece_idx, config) { return; }
-
-    let placements = &data.all_placements[piece_idx];
-    let mut board = board.clone();
-
-    for pl_idx in 0..placements.len() {
-        // Duplicate symmetry breaking.
-        if config.duplicate_pruning && pl_idx < min_placement {
-            continue;
-        }
-
-        // Skip pair combos with same net effect as a previously tried combo.
-        if prev_dup_placement < usize::MAX {
-            if let Some(ref table) = data.skip_tables[piece_idx] {
-                let num_curr = placements.len();
-                if table[prev_dup_placement * num_curr + pl_idx] {
-                    continue;
-                }
-            }
-        }
-
-        let (row, col, mask) = placements[pl_idx];
-
-        board.apply_piece(mask);
-        prefix.push((row, col));
-
-        let is_next_dup = config.duplicate_pruning
-            && piece_idx + 1 < data.all_placements.len()
-            && data.is_dup_of_prev[piece_idx + 1];
-
-        let next_min = if is_next_dup { pl_idx } else { 0 };
-        let next_prev_dup = if piece_idx + 1 < data.all_placements.len()
-            && data.skip_tables[piece_idx + 1].is_some()
-        {
-            pl_idx
-        } else {
-            usize::MAX
-        };
-
-        enumerate_combos_pruned(
-            &board,
-            data,
-            k,
-            piece_idx + 1,
-            next_min,
-            next_prev_dup,
-            prefix,
-            results,
-            config,
-        );
-
-        prefix.pop();
-        board.undo_piece(mask);
     }
 }
 

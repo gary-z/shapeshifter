@@ -1,5 +1,5 @@
 use crate::core::bitboard::Bitboard;
-use crate::core::coverage::{precompute_suffix_coverage, CoverageCounter};
+use crate::core::coverage::precompute_suffix_coverage;
 use crate::core::piece::Piece;
 
 use super::pruning::*;
@@ -276,11 +276,33 @@ pub(crate) fn build_solver_data(
         }
     }
 
+    // Mod-3 diagonal partitions: (r+c)%3 groups. Captures diagonal mod-3 structure.
+    if bh >= 4 && bw >= 4 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|r, c| (r + c) % 3 == target_group,
+                3,
+                &|pr, pc, off| (pr + pc + off) % 3 == target_group,
+            ));
+        }
+    }
+
+    // Mod-3 anti-diagonal partitions: (r+2*c)%3 groups (independent from (r+c)%3).
+    if bh >= 4 && bw >= 4 {
+        for target_group in 0..3usize {
+            partitions.push(build_partition(
+                &|r, c| (r + 2 * c) % 3 == target_group,
+                3,
+                &|pr, pc, off| (pr + 2 * pc + off) % 3 == target_group,
+            ));
+        }
+    }
+
     // Precompute subset reachability for border regions.
     let max_subset_k: usize = match m {
         2 => 14,   // 16384 states — enables full row pairs on 7-wide boards
-        3 => 6,    // 729 states
-        4 => 5,    // 625 states (reduced from previous 4)
+        3 => 8,    // 6561 states — enables full row/column subsets on 8-wide boards
+        4 => 5,    // 1024 states (reduced from previous 4)
         _ => 4,    // 625 states for M=5
     };
     let subset_checks = {
@@ -353,7 +375,7 @@ pub(crate) fn build_solver_data(
         let mut subsets = Vec::new();
         let mut seen_cell_sets: Vec<Vec<u32>> = Vec::new();
 
-        let mut add_subset = |cells: Vec<u32>, subsets: &mut Vec<SubsetReachability>,
+        let add_subset = |cells: Vec<u32>, subsets: &mut Vec<SubsetReachability>,
                               seen: &mut Vec<Vec<u32>>| {
             if cells.len() < 3 || cells.len() > max_subset_k { return; }
             // Dedup: skip if we've already built this exact cell set.
@@ -780,8 +802,8 @@ pub(crate) fn build_solver_data(
 fn build_weight_tuple_checks(
     bh: usize, bw: usize, m: u8, n: usize,
     all_placements: &[Vec<(usize, usize, Bitboard)>],
-    order: &[usize],
-    pieces: &[crate::core::piece::Piece],
+    _order: &[usize],
+    _pieces: &[crate::core::piece::Piece],
 ) -> Vec<WeightTupleReachability> {
     let m_val = m as u32;
     let max_total_configs = 50_000; // budget: skip if state space too large
@@ -862,7 +884,6 @@ fn build_weight_tuple_checks(
                 let mut weights = [0u32; 8];
                 let mut tmp = config;
                 for g in 0..num_groups {
-                    let dim = max_weights[g] as usize + 1;
                     weights[g] = (tmp / strides[g]) as u32;
                     tmp %= strides[g];
                 }
@@ -953,7 +974,7 @@ fn build_weight_tuple_checks(
         }
 
         Some(WeightTupleReachability {
-            group_masks, group_widths, num_groups, max_weights, strides, num_configs, m,
+            group_masks, num_groups, strides, num_configs, m,
             reachable,
         })
     };
