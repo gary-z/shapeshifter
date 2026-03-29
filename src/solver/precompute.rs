@@ -372,18 +372,17 @@ pub(crate) fn build_solver_data(
             SubsetReachability { cells, m, num_configs, mask, reachable }
         };
 
-        let mut subsets = Vec::new();
+        let mut cell_sets: Vec<Vec<u32>> = Vec::new();
         let mut seen_cell_sets: Vec<Vec<u32>> = Vec::new();
 
-        let add_subset = |cells: Vec<u32>, subsets: &mut Vec<SubsetReachability>,
+        let add_subset = |cells: Vec<u32>, cell_sets: &mut Vec<Vec<u32>>,
                               seen: &mut Vec<Vec<u32>>| {
             if cells.len() < 3 || cells.len() > max_subset_k { return; }
-            // Dedup: skip if we've already built this exact cell set.
             let mut sorted = cells.clone();
             sorted.sort();
             if seen.contains(&sorted) { return; }
             seen.push(sorted);
-            subsets.push(build_subset(cells));
+            cell_sets.push(cells);
         };
 
         // Corner rectangles: try several sizes.
@@ -398,7 +397,7 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (0..sr)
                     .flat_map(|dr| (0..sc).map(move |dc| ((r0 + dr) * 15 + c0 + dc) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
@@ -409,28 +408,28 @@ pub(crate) fn build_solver_data(
             let cells: Vec<u32> = (start_c..start_c + seg_len.min(bw - start_c))
                 .map(|c| (0 * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
         // Bottom edge.
         for start_c in 0..=bw.saturating_sub(seg_len) {
             let cells: Vec<u32> = (start_c..start_c + seg_len.min(bw - start_c))
                 .map(|c| ((bh - 1) * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
         // Left edge: col 0, varying rows.
         for start_r in 0..=bh.saturating_sub(seg_len) {
             let cells: Vec<u32> = (start_r..start_r + seg_len.min(bh - start_r))
                 .map(|r| (r * 15 + 0) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
         // Right edge.
         for start_r in 0..=bh.saturating_sub(seg_len) {
             let cells: Vec<u32> = (start_r..start_r + seg_len.min(bh - start_r))
                 .map(|r| (r * 15 + (bw - 1)) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
 
         // L-shaped corner subsets: cells along both edges meeting at each corner.
@@ -457,7 +456,7 @@ pub(crate) fn build_solver_data(
                     cells.push((r * 15 + cc) as u32);
                 }
             }
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
 
         // Multi-corner subsets: combine cells from 2 opposite corners.
@@ -476,7 +475,7 @@ pub(crate) fn build_solver_data(
                         cells.push((r * 15 + c) as u32);
                     }
                 }
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
             // Top-right + bottom-left corners.
             {
@@ -491,7 +490,7 @@ pub(crate) fn build_solver_data(
                         cells.push((r * 15 + c) as u32);
                     }
                 }
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
@@ -510,7 +509,7 @@ pub(crate) fn build_solver_data(
                 r += dr;
                 c += dc;
             }
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
 
         // 2-wide border strips: sliding windows along each edge with depth 2.
@@ -522,7 +521,7 @@ pub(crate) fn build_solver_data(
                     .flat_map(|r| (start_c..start_c + strip_w.min(bw - start_c))
                         .map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
             // Bottom 2 rows.
             for start_c in 0..=bw.saturating_sub(strip_w) {
@@ -530,7 +529,7 @@ pub(crate) fn build_solver_data(
                     .flat_map(|r| (start_c..start_c + strip_w.min(bw - start_c))
                         .map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
             // Left 2 cols.
             let strip_h = max_subset_k / 2;
@@ -538,14 +537,14 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (start_r..start_r + strip_h.min(bh - start_r))
                     .flat_map(|r| (0..2usize).map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
             // Right 2 cols.
             for start_r in 0..=bh.saturating_sub(strip_h) {
                 let cells: Vec<u32> = (start_r..start_r + strip_h.min(bh - start_r))
                     .flat_map(|r| ((bw - 2)..bw).map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
@@ -562,28 +561,28 @@ pub(crate) fn build_solver_data(
                 .take(max_subset_k)
                 .map(|&(r, c)| (r * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
 
             // Phase 1: odd-indexed perimeter cells.
             let cells: Vec<u32> = border_cells.iter().skip(1).step_by(2)
                 .take(max_subset_k)
                 .map(|&(r, c)| (r * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
 
             // Wider spacing: every 3rd cell.
             let cells: Vec<u32> = border_cells.iter().step_by(3)
                 .take(max_subset_k)
                 .map(|&(r, c)| (r * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
 
             // Every 3rd, offset 1.
             let cells: Vec<u32> = border_cells.iter().skip(1).step_by(3)
                 .take(max_subset_k)
                 .map(|&(r, c)| (r * 15 + c) as u32)
                 .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
 
         // Cross/plus subsets at each corner: L + an interior diagonal cell.
@@ -610,7 +609,7 @@ pub(crate) fn build_solver_data(
                 if c2 < bw && cells.len() < max_subset_k {
                     cells.push((cr * 15 + c2) as u32);
                 }
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
@@ -624,23 +623,23 @@ pub(crate) fn build_solver_data(
                 .flat_map(|r| (mid_c..mid_c + seg.min(bw))
                     .map(move |c| (r * 15 + c) as u32))
                 .take(max_subset_k).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             // Bottom mid, 2 deep.
             let cells: Vec<u32> = (bh - 2..bh)
                 .flat_map(|r| (mid_c..mid_c + seg.min(bw))
                     .map(move |c| (r * 15 + c) as u32))
                 .take(max_subset_k).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             // Left mid, 2 deep.
             let cells: Vec<u32> = (mid_r..mid_r + seg.min(bh))
                 .flat_map(|r| (0..2usize).map(move |c| (r * 15 + c) as u32))
                 .take(max_subset_k).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             // Right mid, 2 deep.
             let cells: Vec<u32> = (mid_r..mid_r + seg.min(bh))
                 .flat_map(|r| ((bw - 2)..bw).map(move |c| (r * 15 + c) as u32))
                 .take(max_subset_k).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
         }
 
         // Center subsets: small rectangles and cross patterns near the board center.
@@ -658,7 +657,7 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (r0..r0 + sh)
                     .flat_map(|r| (c0..c0 + sw).map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
 
             // Center cross: center cell + 4 neighbors.
@@ -668,7 +667,7 @@ pub(crate) fn build_solver_data(
                 if cr + 1 < bh { cells.push(((cr + 1) * 15 + cc) as u32); }
                 if cc > 0 { cells.push((cr * 15 + cc - 1) as u32); }
                 if cc + 1 < bw { cells.push((cr * 15 + cc + 1) as u32); }
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
 
             // Horizontal and vertical center strips.
@@ -677,14 +676,14 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (c0..c0 + len)
                     .map(|c| (cr * 15 + c) as u32)
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
             for len in [3, 4, 5].iter().copied().filter(|&l| l <= max_subset_k && l <= bh) {
                 let r0 = cr.saturating_sub(len / 2);
                 let cells: Vec<u32> = (r0..r0 + len)
                     .map(|r| (r * 15 + cc) as u32)
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
 
             // Offset center rectangles: shifted by 1 in each direction.
@@ -697,46 +696,46 @@ pub(crate) fn build_solver_data(
                     let cells: Vec<u32> = (r0..r0 + 2)
                         .flat_map(|r| (c0..c0 + 2).map(move |c| (r * 15 + c) as u32))
                         .collect();
-                    add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                    add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
                 }
             }
         }
 
-        // Full columns and rows as subsets.
-        // For M=2 on 8×7: column = 8 cells (2^8 = 256 states), row = 7 cells (2^7 = 128).
-        // Big pieces must touch center columns from every placement — no zero effect,
-        // making the DP very constraining.
-        for c in 0..bw {
-            let cells: Vec<u32> = (0..bh).map(|r| (r * 15 + c) as u32).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
-        }
-        for r in 0..bh {
-            let cells: Vec<u32> = (0..bw).map(|c| (r * 15 + c) as u32).collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
-        }
+        // Full columns, rows, and diagonals as subsets.
+        // For M=2 these are cheap (2^k states, fast encode) and very effective.
+        // For M>=3 they produce 30-50 subsets of 7-8 cells each (3^7=2187 to
+        // 3^8=6561 configs), whose per-node encode cost dominates runtime while
+        // pruning <7% of nodes beyond what smaller subsets already catch.
+        // The line family DP (check_line_family) already covers full-line
+        // pruning for all M values.
+        if m == 2 {
+            for c in 0..bw {
+                let cells: Vec<u32> = (0..bh).map(|r| (r * 15 + c) as u32).collect();
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
+            }
+            for r in 0..bh {
+                let cells: Vec<u32> = (0..bw).map(|c| (r * 15 + c) as u32).collect();
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
+            }
 
-        // Full diagonals (r - c = constant) and anti-diagonals (r + c = constant).
-        // For 8×7 M=2: longest diagonal = 7 cells → 128 states.
-        // add_subset filters out diagonals shorter than 3 cells automatically.
-        for d in 0..(bh + bw - 1) {
-            // Main diagonal: r - c = d - (bw - 1). Cells where r - c = constant.
-            let diag_offset = d as i32 - (bw as i32 - 1);
-            let cells: Vec<u32> = (0..bh)
-                .filter_map(|r| {
-                    let c = r as i32 - diag_offset;
-                    if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
-                })
-                .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+            for d in 0..(bh + bw - 1) {
+                let diag_offset = d as i32 - (bw as i32 - 1);
+                let cells: Vec<u32> = (0..bh)
+                    .filter_map(|r| {
+                        let c = r as i32 - diag_offset;
+                        if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
+                    })
+                    .collect();
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
 
-            // Anti-diagonal: r + c = d.
-            let cells: Vec<u32> = (0..bh)
-                .filter_map(|r| {
-                    let c = d as i32 - r as i32;
-                    if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
-                })
-                .collect();
-            add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                let cells: Vec<u32> = (0..bh)
+                    .filter_map(|r| {
+                        let c = d as i32 - r as i32;
+                        if c >= 0 && (c as usize) < bw { Some((r * 15 + c as usize) as u32) } else { None }
+                    })
+                    .collect();
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
+            }
         }
 
         // Adjacent row pairs (M=2 only): 2 consecutive rows as one subset.
@@ -746,7 +745,7 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (r0..r0 + 2)
                     .flat_map(|r| (0..bw).map(move |c| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
@@ -757,11 +756,11 @@ pub(crate) fn build_solver_data(
                 let cells: Vec<u32> = (c0..c0 + 2)
                     .flat_map(|c| (0..bh).map(move |r| (r * 15 + c) as u32))
                     .collect();
-                add_subset(cells, &mut subsets, &mut seen_cell_sets);
+                add_subset(cells, &mut cell_sets, &mut seen_cell_sets);
             }
         }
 
-        subsets
+        cell_sets.into_iter().map(|cells| build_subset(cells)).collect()
     };
 
     let weight_tuple_checks = build_weight_tuple_checks(
