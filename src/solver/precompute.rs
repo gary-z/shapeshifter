@@ -365,11 +365,25 @@ pub(crate) fn build_solver_data(
                 }
             }
 
+            // Find earliest piece_idx where some config is unreachable.
+            // Reachability is monotonically non-increasing as piece_idx grows,
+            // so we scan forward and stop at the first layer with a gap.
+            let mut first_useful = n; // default: never useful
+            'outer: for i in 0..n {
+                let base = i * num_configs;
+                for config in 0..num_configs {
+                    if reachable[base + config] == 0 {
+                        first_useful = i;
+                        break 'outer;
+                    }
+                }
+            }
+
             let mut mask = Bitboard::ZERO;
             for &bit in &cells {
                 mask.set_bit(bit);
             }
-            SubsetReachability { cells, m, num_configs, mask, reachable }
+            SubsetReachability { cells, m, num_configs, mask, reachable, first_useful }
         };
 
         let mut cell_sets: Vec<Vec<u32>> = Vec::new();

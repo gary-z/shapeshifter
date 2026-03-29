@@ -163,6 +163,9 @@ pub(crate) struct SubsetReachability {
     /// [piece_idx..n] can transform the subset from `config` to all-zeros.
     /// Config is encoded as a base-M number: cell[0] + cell[1]*M + cell[2]*M^2 + ...
     pub(crate) reachable: Vec<u8>,
+    /// Earliest piece_idx where at least one config is unreachable.
+    /// For piece_idx < first_useful, all configs are reachable so check always passes.
+    pub(crate) first_useful: usize,
 }
 
 impl SubsetReachability {
@@ -188,6 +191,10 @@ impl SubsetReachability {
     /// Check if the current board configuration is reachable from piece_idx.
     #[inline(always)]
     pub(crate) fn check(&self, board: &Board, piece_idx: usize) -> bool {
+        // Skip check at shallow depths where all configs are reachable.
+        if piece_idx < self.first_useful {
+            return true;
+        }
         // Fast path: if all subset cells are 0, config=0 which is always reachable
         // (the zero-effect identity is always available for every piece).
         if (board.plane(0) & self.mask) == self.mask {
