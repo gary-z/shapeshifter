@@ -128,6 +128,15 @@ impl Board {
     /// Each plane rotates: cells at digit d move to digit (d+1) % M.
     #[inline(always)]
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
+        if self.m == 2 {
+            // M=2 fast path: flipping 0↔1 is just XOR on both planes.
+            self.planes[0] = self.planes[0] ^ piece_mask;
+            self.planes[1] = self.planes[1] ^ piece_mask;
+            // For M=2, min_flips = popcount(planes[1]).
+            self.min_flips = self.planes[1].count_ones();
+            return;
+        }
+
         let m = self.m as u32;
         // Incremental min_flips update:
         // Cells at 0 go to 1 (cost 0 → M-1), all others decrease by 1.
@@ -152,6 +161,11 @@ impl Board {
     /// Equivalent to applying the piece M-1 more times (since M increments wraps to identity).
     #[inline(always)]
     pub fn undo_piece(&mut self, piece_mask: Bitboard) {
+        if self.m == 2 {
+            // M=2: XOR is self-inverse, so undo = apply.
+            self.apply_piece(piece_mask);
+            return;
+        }
         for _ in 1..self.m {
             self.apply_piece(piece_mask);
         }
