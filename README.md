@@ -14,4 +14,4 @@ This project is a solver for Shapeshifter, a Neopets puzzle game.
 - The goal is to place all the pieces such that the entire board is filled with 0s.
 
 ## Levels
-Level specifications (shifts/M, rows, columns, number of shapes, preview availability) are defined in `data/levels.json`.
+Level specifications (shifts/M, rows, columns, number of shapes) are defined in `data/levels.json`.

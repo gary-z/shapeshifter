@@ -994,7 +994,6 @@ mod tests {
                     rows,
                     columns: cols,
                     shapes,
-                    preview: false,
                 };
                 seeds.par_iter().filter_map(move |&seed| {
                     let mut rng =
@@ -1051,7 +1050,7 @@ mod tests {
         let mut failures = 0usize;
         for &(m, rows, cols, shapes) in configs {
             let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
+                level: 0, shifts: m, rows, columns: cols, shapes,
             };
             for &seed in seeds {
                 let mut rng =
@@ -1355,7 +1354,7 @@ mod tests {
 
         for &(m, rows, cols, shapes) in &configs {
             let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes, preview: false,
+                level: 0, shifts: m, rows, columns: cols, shapes,
             };
             for &seed in &seeds {
                 let mut rng =
@@ -1446,7 +1445,7 @@ mod tests {
         for &(m, h, w, n) in &configs {
             for seed in 0..10u64 {
                 let spec = crate::level::LevelSpec {
-                    level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
+                    level: 99, shifts: m, rows: h, columns: w, shapes: n,
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
@@ -1486,7 +1485,7 @@ mod tests {
         for &(m, h, w, n) in &configs {
             for seed in 0..20u64 {
                 let spec = crate::level::LevelSpec {
-                    level: 99, shifts: m, rows: h, columns: w, shapes: n, preview: true,
+                    level: 99, shifts: m, rows: h, columns: w, shapes: n,
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);

@@ -10,7 +10,6 @@ pub struct LevelSpec {
     pub columns: u8,
     /// Number of pieces (called "shapes" in the game).
     pub shapes: u8,
-    pub preview: bool,
 }
 
 /// Load all level specs from the embedded JSON.
@@ -43,7 +42,6 @@ mod tests {
         assert_eq!(spec.rows, 3);
         assert_eq!(spec.columns, 3);
         assert_eq!(spec.shapes, 2);
-        assert!(spec.preview);
     }
 
     #[test]
@@ -53,16 +51,6 @@ mod tests {
         assert_eq!(spec.rows, 14);
         assert_eq!(spec.columns, 14);
         assert_eq!(spec.shapes, 36);
-        assert!(spec.preview);
-    }
-
-    #[test]
-    fn test_no_preview_levels() {
-        // Levels 71-80 have no preview
-        for l in 71..=80 {
-            let spec = get_level(l).unwrap();
-            assert!(!spec.preview, "level {l} should have no preview");
-        }
     }
 
     #[test]
