@@ -66,8 +66,7 @@ macro_rules! define_backtrack {
             board: &Board,
             data: &SolverData,
             piece_idx: usize,
-            min_placement: usize,
-            prev_dup_placement: usize,
+            prev_placement: usize,
             solution: &mut Vec<(usize, usize)>,
             nodes: &Cell<u64>,
             config: &PruningConfig,
@@ -160,10 +159,6 @@ macro_rules! define_backtrack {
             for oi in 0..pl_len {
                 let pl_idx = order[oi] as usize;
                 let (row, col, mask) = placements[pl_idx];
-                // Duplicate symmetry breaking.
-                if config.duplicate_pruning && pl_idx < min_placement {
-                    continue;
-                }
 
                 // Skip placements that touch locked cells.
                 if !(mask & locked_mask).is_zero() {
@@ -171,10 +166,10 @@ macro_rules! define_backtrack {
                 }
 
                 // Skip pair combos with same net effect as a previously tried combo.
-                if prev_dup_placement < usize::MAX {
+                if prev_placement < usize::MAX {
                     if let Some(ref table) = data.skip_tables[piece_idx] {
                         let num_curr = placements.len();
-                        if table[prev_dup_placement * num_curr + pl_idx] {
+                        if table[prev_placement * num_curr + pl_idx] {
                             continue;
                         }
                     }
@@ -184,13 +179,7 @@ macro_rules! define_backtrack {
                 board.apply_piece(mask);
                 solution.push((row, col));
 
-                let is_next_dup = config.duplicate_pruning
-                    && piece_idx + 1 < data.all_placements.len()
-                    && data.is_dup_of_prev[piece_idx + 1];
-
-                let next_min = if is_next_dup { pl_idx } else { 0 };
-                // Always pass placement for skip table lookup (works for any consecutive pair).
-                let next_prev_dup = if piece_idx + 1 < data.all_placements.len()
+                let next_prev = if piece_idx + 1 < data.all_placements.len()
                     && data.skip_tables[piece_idx + 1].is_some()
                 {
                     pl_idx
@@ -202,8 +191,7 @@ macro_rules! define_backtrack {
                     &board,
                     data,
                     piece_idx + 1,
-                    next_min,
-                    next_prev_dup,
+                    next_prev,
                     solution,
                     nodes,
                     config,
@@ -249,8 +237,7 @@ pub(crate) struct StealableTask {
     pub board: Board,
     pub prefix: Vec<(usize, usize)>,
     pub depth: usize,
-    pub min_placement: usize,
-    pub prev_dup: usize,
+    pub prev_placement: usize,
 }
 
 /// Shared work queue with condvar for idle thread notification.
@@ -309,8 +296,7 @@ fn build_search_frame(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
-    min_placement: usize,
-    prev_dup_placement: usize,
+    prev_placement: usize,
     config: &PruningConfig,
     rng: &Cell<u64>,
 ) -> SearchFrame {
@@ -363,16 +349,13 @@ fn build_search_frame(
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];
 
-        if config.duplicate_pruning && pl_idx < min_placement {
-            continue;
-        }
         if !(mask & locked_mask).is_zero() {
             continue;
         }
-        if prev_dup_placement < usize::MAX {
+        if prev_placement < usize::MAX {
             if let Some(ref table) = data.skip_tables[piece_idx] {
                 let num_curr = placements.len();
-                if table[prev_dup_placement * num_curr + pl_idx] {
+                if table[prev_placement * num_curr + pl_idx] {
                     continue;
                 }
             }
@@ -388,28 +371,20 @@ fn build_search_frame(
     }
 }
 
-/// Compute (next_min_placement, next_prev_dup) for the piece after `piece_idx`,
+/// Compute the prev_placement value for the piece after `piece_idx`,
 /// given that we chose `pl_idx` at `piece_idx`.
 #[inline]
-fn next_dup_state(
+fn next_prev_placement(
     data: &SolverData,
     piece_idx: usize,
     pl_idx: usize,
-    config: &PruningConfig,
-) -> (usize, usize) {
+) -> usize {
     let next = piece_idx + 1;
-    let is_next_dup = config.duplicate_pruning
-        && next < data.all_placements.len()
-        && data.is_dup_of_prev[next];
-    let next_min = if is_next_dup { pl_idx } else { 0 };
-    let next_prev = if next < data.all_placements.len()
-        && data.skip_tables[next].is_some()
-    {
+    if next < data.all_placements.len() && data.skip_tables[next].is_some() {
         pl_idx
     } else {
         usize::MAX
-    };
-    (next_min, next_prev)
+    }
 }
 
 /// Split work from the explicit stack and push to the shared steal queue.
@@ -419,7 +394,6 @@ fn split_work(
     solution_prefix: &[(usize, usize)],
     base_solution_len: usize,
     data: &SolverData,
-    config: &PruningConfig,
     wq: &WorkQueue,
 ) {
     // Find shallowest frame with remaining placements (largest subtrees).
@@ -439,11 +413,11 @@ fn split_work(
             let mut prefix = solution_prefix[..prefix_len].to_vec();
             prefix.push((row, col));
 
-            let (next_min, next_prev) = next_dup_state(data, frame.piece_idx, pl_idx, config);
+            let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
 
             tasks.push(StealableTask {
                 board, prefix, depth,
-                min_placement: next_min, prev_dup: next_prev,
+                prev_placement: next_prev,
             });
         }
         frame.cursor = frame.placements.len();
@@ -462,8 +436,7 @@ pub(crate) fn backtrack_stealing(
     initial_board: &Board,
     data: &SolverData,
     start_depth: usize,
-    initial_min: usize,
-    initial_prev_dup: usize,
+    initial_prev_placement: usize,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
     config: &PruningConfig,
@@ -492,7 +465,7 @@ pub(crate) fn backtrack_stealing(
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     stack.push(build_search_frame(
-        initial_board, data, start_depth, initial_min, initial_prev_dup, config, rng,
+        initial_board, data, start_depth, initial_prev_placement, config, rng,
     ));
 
     let mut budget = SPLIT_BUDGET;
@@ -570,14 +543,14 @@ pub(crate) fn backtrack_stealing(
         if budget == 0 {
             budget = SPLIT_BUDGET;
             if idle_count.load(Ordering::Relaxed) > 0 {
-                split_work(&mut stack, solution, base_solution_len, data, config, wq);
+                split_work(&mut stack, solution, base_solution_len, data, wq);
             }
         }
 
         // Push new frame for next depth.
-        let (next_min, next_prev) = next_dup_state(data, piece_idx, pl_idx, config);
+        let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         stack.push(build_search_frame(
-            &board, data, next_piece, next_min, next_prev, config, rng,
+            &board, data, next_piece, next_prev, config, rng,
         ));
     }
 

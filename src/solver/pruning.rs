@@ -395,7 +395,7 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
 ///
 /// Ablation results on historical puzzles (L43 M=2, L36/L46 M=3):
 /// - min_flips_global: CRITICAL (>10× node increase without it)
-/// - duplicate_pruning: CRITICAL (handled in placement filtering, not here)
+/// - pair skip tables: CRITICAL (handled in placement filtering, not here)
 /// - jaggedness: +83% nodes on M=2, marginal on M=3
 /// - min_flips_diagonal: +16% nodes on M=2, marginal on M=3
 /// - parity_partitions, subset_reachability, weight_tuples: part of min_flips_global gate
