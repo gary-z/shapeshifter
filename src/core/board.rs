@@ -3,6 +3,23 @@ use crate::core::bitboard::Bitboard;
 /// Maximum value of M (number of digit states per cell).
 pub const MAX_M: usize = 5;
 
+/// Result of split jaggedness computation.
+/// For M<=3: only circular_h/v are meaningful (= binary jaggedness).
+/// For M>=4: circular (symmetric) + directional (asymmetric) are both available.
+pub struct JaggednessResult {
+    /// Circular distance h/v: sum of min(|a-b|, M-|a-b|) over adjacent pairs.
+    pub circular_h: u32,
+    pub circular_v: u32,
+    /// Directional (forward) weight h/v: sum of (b-a) mod M over adjacent pairs.
+    /// Only meaningful for M>=4 (set to 0 for M<=3).
+    pub forward_h: u32,
+    pub forward_v: u32,
+    /// Directional (backward) weight h/v: sum of (a-b) mod M over adjacent pairs.
+    /// Only meaningful for M>=4 (set to 0 for M<=3).
+    pub backward_h: u32,
+    pub backward_v: u32,
+}
+
 /// The board state represented as M bitboards, one per digit value.
 /// `planes[d]` has bit (r, c) set iff cell (r, c) has value `d`.
 /// The planes are mutually exclusive — each cell appears in exactly one plane.
@@ -197,7 +214,7 @@ impl Board {
     /// is in exactly one plane), so we OR them and do one popcount per weight
     /// group — reducing popcounts from M*(M-1) to floor(M/2) per direction.
     #[inline(always)]
-    pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> (u32, u32) {
+    pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> JaggednessResult {
         let m = self.m as usize;
         if m <= 3 {
             // Fast path: for M<=3, all distinct-value pairs have circular distance 1.
@@ -208,30 +225,50 @@ impl Board {
                 h_matching += (p & (p >> 1) & h_mask).count_ones();
                 v_matching += (p & (p >> 15) & v_mask).count_ones();
             }
-            return (h_total - h_matching, v_total - v_matching);
+            return JaggednessResult {
+                circular_h: h_total - h_matching,
+                circular_v: v_total - v_matching,
+                forward_h: 0, forward_v: 0,
+                backward_h: 0, backward_v: 0,
+            };
         }
-        // Weighted path for M>=4: weight each edge by circular distance.
-        // Precompute shifted planes to avoid redundant shifts in the inner loop.
-        // Keep independent popcounts (not batched OR) for CPU pipelining.
+        // Weighted path for M>=4: circular + directional in one pass.
+        // Each popcount result feeds both circular and forward/backward accumulators.
         let mut sh = [Bitboard::ZERO; 5]; // M <= 5
         let mut sv = [Bitboard::ZERO; 5];
         for d in 0..m {
             sh[d] = self.planes[d] >> 1;
             sv[d] = self.planes[d] >> 15;
         }
-        let mut h_weighted = 0u32;
-        let mut v_weighted = 0u32;
+        let mut circ_h = 0u32;
+        let mut circ_v = 0u32;
+        let mut fwd_h = 0u32;
+        let mut fwd_v = 0u32;
+        let mut bwd_h = 0u32;
+        let mut bwd_v = 0u32;
         for d1 in 0..m {
             let p = self.planes[d1];
             for d2 in 0..m {
                 if d1 == d2 { continue; }
+                let h_count = (p & sh[d2] & h_mask).count_ones();
+                let v_count = (p & sv[d2] & v_mask).count_ones();
                 let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
-                let w = diff.min(m - diff) as u32;
-                h_weighted += w * (p & sh[d2] & h_mask).count_ones();
-                v_weighted += w * (p & sv[d2] & v_mask).count_ones();
+                let cw = diff.min(m - diff) as u32;
+                circ_h += cw * h_count;
+                circ_v += cw * v_count;
+                let fw = ((d2 + m - d1) % m) as u32; // (d2-d1) mod M
+                let bw = ((d1 + m - d2) % m) as u32; // (d1-d2) mod M
+                fwd_h += fw * h_count;
+                fwd_v += fw * v_count;
+                bwd_h += bw * h_count;
+                bwd_v += bw * v_count;
             }
         }
-        (h_weighted, v_weighted)
+        JaggednessResult {
+            circular_h: circ_h, circular_v: circ_v,
+            forward_h: fwd_h, forward_v: fwd_v,
+            backward_h: bwd_h, backward_v: bwd_v,
+        }
     }
 
     /// Weighted jaggedness: sum of circular distances for all adjacent pairs.
@@ -259,8 +296,8 @@ impl Board {
 
         let total_h = h_mask.count_ones();
         let total_v = v_mask.count_ones();
-        let (h_jagg, v_jagg) = self.split_jaggedness(h_mask, total_h, v_mask, total_v);
-        h_jagg + v_jagg
+        let result = self.split_jaggedness(h_mask, total_h, v_mask, total_v);
+        result.circular_h + result.circular_v
     }
 
     /// Bitboard mask of all valid cells on this board.

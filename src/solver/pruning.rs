@@ -268,7 +268,7 @@ pub(crate) fn check_components(
         let h_pairs = component & (component >> 1);
         let v_pairs = component & (component >> 15);
         let m = data.m as usize;
-        let (comp_h_jagg, comp_v_jagg) = if m <= 3 {
+        let (comp_h_jagg, comp_v_jagg, comp_fwd_h, comp_fwd_v, comp_bwd_h, comp_bwd_v) = if m <= 3 {
             let mut h_matching = 0u32;
             let mut v_matching = 0u32;
             for d in 0..m {
@@ -276,7 +276,7 @@ pub(crate) fn check_components(
                 h_matching += (p & (p >> 1) & h_pairs).count_ones();
                 v_matching += (p & (p >> 15) & v_pairs).count_ones();
             }
-            (h_pairs.count_ones() - h_matching, v_pairs.count_ones() - v_matching)
+            (h_pairs.count_ones() - h_matching, v_pairs.count_ones() - v_matching, 0, 0, 0, 0)
         } else {
             let mut sh = [Bitboard::ZERO; 5];
             let mut sv = [Bitboard::ZERO; 5];
@@ -285,19 +285,30 @@ pub(crate) fn check_components(
                 sh[d] = p >> 1;
                 sv[d] = p >> 15;
             }
-            let mut h_weighted = 0u32;
-            let mut v_weighted = 0u32;
+            let mut circ_h = 0u32;
+            let mut circ_v = 0u32;
+            let mut fwd_h = 0u32;
+            let mut fwd_v = 0u32;
+            let mut bwd_h = 0u32;
+            let mut bwd_v = 0u32;
             for d1 in 0..m {
                 let p = board.plane(d1 as u8) & component;
                 for d2 in 0..m {
                     if d1 == d2 { continue; }
+                    let h_count = (p & sh[d2] & h_pairs).count_ones();
+                    let v_count = (p & sv[d2] & v_pairs).count_ones();
                     let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
-                    let w = diff.min(m - diff) as u32;
-                    h_weighted += w * (p & sh[d2] & h_pairs).count_ones();
-                    v_weighted += w * (p & sv[d2] & v_pairs).count_ones();
+                    circ_h += diff.min(m - diff) as u32 * h_count;
+                    circ_v += diff.min(m - diff) as u32 * v_count;
+                    let fw = ((d2 + m - d1) % m) as u32;
+                    let bw = ((d1 + m - d2) % m) as u32;
+                    fwd_h += fw * h_count;
+                    fwd_v += fw * v_count;
+                    bwd_h += bw * h_count;
+                    bwd_v += bw * v_count;
                 }
             }
-            (h_weighted, v_weighted)
+            (circ_h, circ_v, fwd_h, fwd_v, bwd_h, bwd_v)
         };
 
         // Sum h/v perimeters and cell_counts of reachable pieces.
@@ -318,6 +329,15 @@ pub(crate) fn check_components(
         }
         if comp_v_jagg > reachable_v_perim {
             return false;
+        }
+        if m >= 4 {
+            let m32 = m as u32;
+            if comp_fwd_h * 2 > m32 * reachable_h_perim
+                || comp_bwd_h * 2 > m32 * reachable_h_perim
+                || comp_fwd_v * 2 > m32 * reachable_v_perim
+                || comp_bwd_v * 2 > m32 * reachable_v_perim {
+                return false;
+            }
         }
         if comp_min_flips > reachable_bits {
             return false;
@@ -346,10 +366,27 @@ pub(crate) fn prune_line_families_diagonal(board: &Board, data: &SolverData, pie
 
 #[inline(always)]
 pub(crate) fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    let (h_jagg, v_jagg) = board.split_jaggedness(
+    let j = board.split_jaggedness(
         data.jagg_h_mask, data.jagg_h_total, data.jagg_v_mask, data.jagg_v_total);
-    h_jagg <= data.remaining_h_perimeter[piece_idx]
-        && v_jagg <= data.remaining_v_perimeter[piece_idx]
+    let rem_h = data.remaining_h_perimeter[piece_idx];
+    let rem_v = data.remaining_v_perimeter[piece_idx];
+    // Circular (symmetric) bound: sum of min(|a-b|, M-|a-b|) <= perimeter.
+    if j.circular_h > rem_h || j.circular_v > rem_v {
+        return false;
+    }
+    // Directional (asymmetric) bound for M>=4:
+    // max(forward, backward) <= M/2 * perimeter, i.e., 2*max(fwd,bwd) <= M*perim.
+    // Strictly tighter than circular for pairs at distance d < M/2.
+    if data.m >= 4 {
+        let m = data.m as u32;
+        if j.forward_h * 2 > m * rem_h || j.backward_h * 2 > m * rem_h {
+            return false;
+        }
+        if j.forward_v * 2 > m * rem_v || j.backward_v * 2 > m * rem_v {
+            return false;
+        }
+    }
+    true
 }
 
 #[inline(always)]
