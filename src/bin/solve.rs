@@ -2,6 +2,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
+use shapeshifter::generate;
 use shapeshifter::puzzle::{self, PuzzleJson};
 use shapeshifter::solver;
 
@@ -61,6 +62,19 @@ fn main() {
         serde_json::from_str(&input).expect("failed to parse puzzle JSON from stdin")
     };
     let game = puz.to_game();
+
+    // Validate that all pieces are known game shapes.
+    for (i, piece) in game.pieces().iter().enumerate() {
+        if !generate::is_known_shape(piece) {
+            eprintln!(
+                "Warning: piece {} is not a known Shapeshifter shape ({}x{}, {} cells)",
+                i,
+                piece.height(),
+                piece.width(),
+                piece.cell_count(),
+            );
+        }
+    }
 
     let start = Instant::now();
     let result = solver::solve(&game, parallel, exhaustive);
