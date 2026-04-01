@@ -357,6 +357,14 @@ pub(crate) fn prune_min_flips_global(board: &Board, data: &SolverData, piece_idx
 }
 
 #[inline(always)]
+pub(crate) fn prune_line_families_rowcol(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    for f in &data.line_families[..2] {
+        if !check_line_family(board, f, piece_idx, data.m) { return false; }
+    }
+    true
+}
+
+#[inline(always)]
 pub(crate) fn prune_line_families_diagonal(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     for f in &data.line_families[2..] {
         if !check_line_family(board, f, piece_idx, data.m) { return false; }
@@ -474,6 +482,7 @@ pub(crate) fn prune_node(
     // 78/125 vs 79/125 solves — negligible impact, +14-27% throughput gain.
     if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
+    if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
     if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }

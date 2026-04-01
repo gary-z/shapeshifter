@@ -68,10 +68,13 @@ pub(crate) fn build_solver_data(
     assert!(n < MAX_PIECES, "too many pieces for LineFamily arrays");
 
     // --- Rows ---
-    // Per-line budget removed: subsumed by full-row subset reachability.
-    // Only the independent-set DP (global budget + gap spacing) is kept.
+    // Per-line budget: for M>=3 full-row subset reachability is disabled (too
+    // many configs), so per-line position-aware budgets are the only per-row
+    // pruning beyond the global independent-set DP. For M=2 the full-row
+    // subset reachability subsumes this, so we skip it.
     let mut rows_family = LineFamily::new();
     rows_family.num_lines = bh;
+    rows_family.has_per_line_budget = m >= 3;
     for r in 0..bh {
         for c in 0..bw {
             rows_family.masks[r].set_bit((r * 15 + c) as u32);
@@ -81,12 +84,34 @@ pub(crate) fn build_solver_data(
         let piece = &pieces[order[i]];
         rows_family.remaining_budget[i] = rows_family.remaining_budget[i + 1] + piece.max_row_thickness();
         rows_family.suffix_max_span[i] = rows_family.suffix_max_span[i + 1].max(piece.height());
+        // Per-row budget: for each board row, compute the max thickness this
+        // piece can contribute given valid placement offsets, then accumulate
+        // suffix sums.
+        if m >= 3 {
+            let ph = piece.height() as usize;
+            let pw = piece.width() as usize;
+            let mut row_thick = [0u32; 5];
+            for pr in 0..ph {
+                let row_bits = (piece.shape() >> (pr as u32 * 15)).limbs()[0] & ((1u64 << pw) - 1);
+                row_thick[pr] = row_bits.count_ones();
+            }
+            for r in 0..bh {
+                let p_min = if r + ph > bh { r + ph - bh } else { 0 };
+                let p_max = r.min(ph - 1);
+                let mut max_t = 0u32;
+                for p in p_min..=p_max {
+                    if row_thick[p] > max_t { max_t = row_thick[p]; }
+                }
+                rows_family.per_line_budget[i][r] = rows_family.per_line_budget[i + 1][r] + max_t;
+            }
+        }
     }
 
     // --- Cols ---
-    // Per-line budget removed: subsumed by full-column subset reachability.
+    // Per-line budget re-enabled for M>=3 (same rationale as rows above).
     let mut cols_family = LineFamily::new();
     cols_family.num_lines = bw;
+    cols_family.has_per_line_budget = m >= 3;
     for c in 0..bw {
         for r in 0..bh {
             cols_family.masks[c].set_bit((r * 15 + c) as u32);
@@ -96,6 +121,27 @@ pub(crate) fn build_solver_data(
         let piece = &pieces[order[i]];
         cols_family.remaining_budget[i] = cols_family.remaining_budget[i + 1] + piece.max_col_thickness();
         cols_family.suffix_max_span[i] = cols_family.suffix_max_span[i + 1].max(piece.width());
+        if m >= 3 {
+            let ph = piece.height() as usize;
+            let pw = piece.width() as usize;
+            let mut col_thick = [0u32; 5];
+            for pc in 0..pw {
+                for pr in 0..ph {
+                    if piece.shape().get_bit((pr * 15 + pc) as u32) {
+                        col_thick[pc] += 1;
+                    }
+                }
+            }
+            for c in 0..bw {
+                let q_min = if c + pw > bw { c + pw - bw } else { 0 };
+                let q_max = c.min(pw - 1);
+                let mut max_t = 0u32;
+                for q in q_min..=q_max {
+                    if col_thick[q] > max_t { max_t = col_thick[q]; }
+                }
+                cols_family.per_line_budget[i][c] = cols_family.per_line_budget[i + 1][c] + max_t;
+            }
+        }
     }
 
     // --- Diags (main diagonals: d = r - c) ---
