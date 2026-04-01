@@ -187,27 +187,51 @@ impl Board {
     /// Split jaggedness into (horizontal, vertical) components.
     /// Horizontal = mismatching (r,c)-(r,c+1) pairs. Vertical = (r,c)-(r+1,c) pairs.
     /// Takes precomputed masks to avoid rebuilding them per call.
+    ///
+    /// For M>=4, edges are weighted by circular distance min(|a-b|, M-|a-b|)
+    /// instead of binary differ/same. This gives a tighter bound since each
+    /// piece boundary edge can change the weighted distance by at most 1.
+    /// For M<=3 all distinct pairs have distance 1, so weighted = binary.
     #[inline(always)]
     pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> (u32, u32) {
-        let mut h_matching = 0u32;
-        let mut v_matching = 0u32;
-        for d in 0..self.m as usize {
-            let p = self.planes[d];
-            h_matching += (p & (p >> 1) & h_mask).count_ones();
-            v_matching += (p & (p >> 15) & v_mask).count_ones();
+        let m = self.m as usize;
+        if m <= 3 {
+            // Fast path: for M<=3, all distinct-value pairs have circular distance 1.
+            let mut h_matching = 0u32;
+            let mut v_matching = 0u32;
+            for d in 0..m {
+                let p = self.planes[d];
+                h_matching += (p & (p >> 1) & h_mask).count_ones();
+                v_matching += (p & (p >> 15) & v_mask).count_ones();
+            }
+            return (h_total - h_matching, v_total - v_matching);
         }
-        (h_total - h_matching, v_total - v_matching)
+        // Weighted path for M>=4: weight each edge by circular distance.
+        let mut h_weighted = 0u32;
+        let mut v_weighted = 0u32;
+        for d1 in 0..m {
+            for d2 in 0..m {
+                if d1 == d2 { continue; }
+                let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
+                let w = diff.min(m - diff) as u32;
+                let left = self.planes[d1];
+                let right = self.planes[d2];
+                h_weighted += w * (left & (right >> 1) & h_mask).count_ones();
+                v_weighted += w * (left & (right >> 15) & v_mask).count_ones();
+            }
+        }
+        (h_weighted, v_weighted)
     }
 
-    /// Count of adjacent cell pairs (horizontal + vertical) with different values.
+    /// Weighted jaggedness: sum of circular distances for all adjacent pairs.
+    /// For M<=3, equivalent to count of adjacent pairs with different values.
+    /// For M>=4, edges weighted by min(|a-b|, M-|a-b|).
     /// A solved board has jaggedness = 0.
     pub fn jaggedness(&self) -> u32 {
         let h = self.height as usize;
         let w = self.width as usize;
 
         // Build masks for valid horizontal and vertical pair origins.
-        // Horizontal: cell (r, c) paired with (r, c+1), so c < w-1.
-        // Vertical: cell (r, c) paired with (r+1, c), so r < h-1.
         let mut h_mask = Bitboard::ZERO;
         let mut v_mask = Bitboard::ZERO;
         for r in 0..h {
@@ -222,20 +246,10 @@ impl Board {
             }
         }
 
-        // Count matching pairs: adjacent cells in the same plane.
-        let mut matching = 0u32;
-        for d in 0..self.m as usize {
-            let p = self.planes[d];
-            // Horizontal: p & (p >> 1), masked to valid pair origins.
-            matching += (p & (p >> 1) & h_mask).count_ones();
-            // Vertical: p & (p >> 15), masked to valid pair origins.
-            matching += (p & (p >> 15) & v_mask).count_ones();
-        }
-
-        // Total valid pairs - matching = jaggedness.
         let total_h = h_mask.count_ones();
         let total_v = v_mask.count_ones();
-        (total_h + total_v) - matching
+        let (h_jagg, v_jagg) = self.split_jaggedness(h_mask, total_h, v_mask, total_v);
+        h_jagg + v_jagg
     }
 
     /// Bitboard mask of all valid cells on this board.
@@ -614,5 +628,47 @@ mod tests {
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 1]];
         let board = Board::from_grid(grid, 2);
         assert_eq!(board.jaggedness(), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_weighted() {
+        // 3x3, m=4. Values at circular distance 2 get weight 2.
+        // 0 2 0
+        // 0 0 0
+        // 0 0 0
+        // (0,0)=0 vs (0,1)=2: min(2, 4-2) = 2. (0,1)=2 vs (0,2)=0: min(2, 4-2) = 2.
+        // (0,0)=0 vs (1,0)=0: 0. (0,1)=2 vs (1,1)=0: 2. (0,2)=0 vs (1,2)=0: 0.
+        // Weighted jaggedness = 2 + 2 + 2 = 6.
+        let grid: &[&[u8]] = &[&[0, 2, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(board.jaggedness(), 6);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_distance_1() {
+        // 3x3, m=4. Adjacent values at distance 1.
+        // 0 1 0
+        // 0 0 0
+        // 0 0 0
+        // (0,0)-(0,1): min(1,3)=1. (0,1)-(0,2): min(1,3)=1.
+        // (0,0)-(1,0): 0. (0,1)-(1,1): min(1,3)=1. (0,2)-(1,2): 0.
+        // Weighted jaggedness = 3. Same as binary.
+        let grid: &[&[u8]] = &[&[0, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(board.jaggedness(), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_wrap_around() {
+        // 3x3, m=4. Value 3 is distance 1 from 0 (wraps around).
+        // 3 0 0
+        // 0 0 0
+        // 0 0 0
+        // (0,0)=3 vs (0,1)=0: min(3, 4-3) = 1.
+        // (0,0)=3 vs (1,0)=0: min(3, 4-3) = 1.
+        // Weighted jaggedness = 2. Same as binary.
+        let grid: &[&[u8]] = &[&[3, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(board.jaggedness(), 2);
     }
 }
