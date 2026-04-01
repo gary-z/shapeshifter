@@ -278,17 +278,23 @@ pub(crate) fn check_components(
             }
             (h_pairs.count_ones() - h_matching, v_pairs.count_ones() - v_matching)
         } else {
+            let mut sh = [Bitboard::ZERO; 5];
+            let mut sv = [Bitboard::ZERO; 5];
+            for d in 0..m {
+                let p = board.plane(d as u8) & component;
+                sh[d] = p >> 1;
+                sv[d] = p >> 15;
+            }
             let mut h_weighted = 0u32;
             let mut v_weighted = 0u32;
             for d1 in 0..m {
+                let p = board.plane(d1 as u8) & component;
                 for d2 in 0..m {
                     if d1 == d2 { continue; }
                     let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
                     let w = diff.min(m - diff) as u32;
-                    let p1 = board.plane(d1 as u8) & component;
-                    let p2 = board.plane(d2 as u8) & component;
-                    h_weighted += w * (p1 & (p2 >> 1) & h_pairs).count_ones();
-                    v_weighted += w * (p1 & (p2 >> 15) & v_pairs).count_ones();
+                    h_weighted += w * (p & sh[d2] & h_pairs).count_ones();
+                    v_weighted += w * (p & sv[d2] & v_pairs).count_ones();
                 }
             }
             (h_weighted, v_weighted)
