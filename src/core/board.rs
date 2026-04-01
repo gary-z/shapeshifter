@@ -192,6 +192,10 @@ impl Board {
     /// instead of binary differ/same. This gives a tighter bound since each
     /// piece boundary edge can change the weighted distance by at most 1.
     /// For M<=3 all distinct pairs have distance 1, so weighted = binary.
+    ///
+    /// Pairs at the same circular distance produce disjoint bitboards (each cell
+    /// is in exactly one plane), so we OR them and do one popcount per weight
+    /// group — reducing popcounts from M*(M-1) to floor(M/2) per direction.
     #[inline(always)]
     pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> (u32, u32) {
         let m = self.m as usize;
@@ -207,17 +211,24 @@ impl Board {
             return (h_total - h_matching, v_total - v_matching);
         }
         // Weighted path for M>=4: weight each edge by circular distance.
+        // Precompute shifted planes to avoid redundant shifts in the inner loop.
+        // Keep independent popcounts (not batched OR) for CPU pipelining.
+        let mut sh = [Bitboard::ZERO; 5]; // M <= 5
+        let mut sv = [Bitboard::ZERO; 5];
+        for d in 0..m {
+            sh[d] = self.planes[d] >> 1;
+            sv[d] = self.planes[d] >> 15;
+        }
         let mut h_weighted = 0u32;
         let mut v_weighted = 0u32;
         for d1 in 0..m {
+            let p = self.planes[d1];
             for d2 in 0..m {
                 if d1 == d2 { continue; }
                 let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
                 let w = diff.min(m - diff) as u32;
-                let left = self.planes[d1];
-                let right = self.planes[d2];
-                h_weighted += w * (left & (right >> 1) & h_mask).count_ones();
-                v_weighted += w * (left & (right >> 15) & v_mask).count_ones();
+                h_weighted += w * (p & sh[d2] & h_mask).count_ones();
+                v_weighted += w * (p & sv[d2] & v_mask).count_ones();
             }
         }
         (h_weighted, v_weighted)
