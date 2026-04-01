@@ -5,92 +5,127 @@ use crate::game::Game;
 use crate::level::LevelSpec;
 use crate::core::piece::Piece;
 
-/// Generate a random connected piece that fits within the given max dimensions.
-/// The piece will have between 1 and max_h * max_w filled cells.
+/// The 75 piece shapes used by the real Shapeshifter game, extracted from
+/// puzzle_history.jsonl. Each entry is (height, width, flat grid of bools).
+const SHAPE_CATALOG: [(u8, u8, &[bool]); 75] = [
+    // 1 cell
+    (1, 1, &[true]),
+    // 2 cells
+    (1, 2, &[true, true]),
+    (2, 1, &[true, true]),
+    // 3 cells
+    (1, 3, &[true, true, true]),
+    (2, 2, &[false, true, true, true]),
+    (2, 2, &[true, false, true, true]),
+    (2, 2, &[true, true, false, true]),
+    (2, 2, &[true, true, true, false]),
+    (3, 1, &[true, true, true]),
+    // 4 cells
+    (2, 2, &[true, true, true, true]),
+    (2, 3, &[false, true, false, true, true, true]),
+    (2, 3, &[true, true, false, false, true, true]),
+    (2, 3, &[true, true, true, false, true, false]),
+    (3, 2, &[false, true, true, true, false, true]),
+    (3, 2, &[true, false, true, true, false, true]),
+    (3, 2, &[true, false, true, true, true, false]),
+    (3, 2, &[true, true, true, false, true, false]),
+    // 5 cells
+    (2, 3, &[false, true, true, true, true, true]),
+    (2, 3, &[true, false, true, true, true, true]),
+    (2, 3, &[true, true, true, true, false, true]),
+    (3, 2, &[true, true, false, true, true, true]),
+    (3, 3, &[false, false, true, false, false, true, true, true, true]),
+    (3, 3, &[false, false, true, false, true, true, true, true, false]),
+    (3, 3, &[false, false, true, true, true, true, true, false, false]),
+    (3, 3, &[false, true, false, true, true, true, false, true, false]),
+    (3, 3, &[false, true, true, false, true, false, true, true, false]),
+    (3, 3, &[true, false, false, true, true, false, false, true, true]),
+    (3, 3, &[true, false, false, true, true, true, false, false, true]),
+    (3, 3, &[true, false, false, true, true, true, true, false, false]),
+    (3, 3, &[true, true, false, false, true, false, false, true, true]),
+    (3, 3, &[true, true, false, false, true, true, false, false, true]),
+    (3, 3, &[true, true, true, true, false, false, true, false, false]),
+    // 6 cells
+    (3, 2, &[true, true, true, true, true, true]),
+    (3, 3, &[false, false, true, false, true, true, true, true, true]),
+    (3, 3, &[false, true, false, true, true, true, true, false, true]),
+    (3, 3, &[false, true, true, false, true, false, true, true, true]),
+    (3, 3, &[false, true, true, false, true, true, true, true, false]),
+    (3, 3, &[true, false, true, true, true, true, false, true, false]),
+    (3, 3, &[true, true, false, false, true, true, true, true, false]),
+    (3, 3, &[true, true, false, true, true, false, false, true, true]),
+    (3, 4, &[true, true, true, true, true, false, false, false, true, false, false, false]),
+    (4, 3, &[false, true, false, true, true, false, false, true, true, false, true, false]),
+    // 7 cells
+    (3, 3, &[true, false, true, true, false, true, true, true, true]),
+    (3, 3, &[true, false, true, true, true, true, true, false, true]),
+    (3, 3, &[true, true, true, false, true, false, true, true, true]),
+    (3, 4, &[false, true, false, false, true, true, false, true, false, true, true, true]),
+    (3, 4, &[false, true, true, false, true, true, false, false, false, true, true, true]),
+    (3, 4, &[false, true, true, true, false, false, true, false, true, true, true, false]),
+    (3, 4, &[true, true, true, false, true, false, true, false, false, false, true, true]),
+    (4, 3, &[true, true, false, true, false, false, true, true, true, false, false, true]),
+    // 8 cells
+    (3, 3, &[true, true, true, true, false, true, true, true, true]),
+    (3, 4, &[true, true, true, false, true, false, true, true, true, true, false, false]),
+    (4, 3, &[false, true, false, true, true, true, true, false, true, true, false, true]),
+    (4, 3, &[false, true, true, true, true, false, false, true, true, false, true, true]),
+    (4, 4, &[false, true, false, true, true, true, true, true, false, false, true, false, false, false, true, false]),
+    // 9 cells
+    (3, 4, &[true, false, false, true, true, false, true, true, true, true, true, true]),
+    (3, 4, &[true, true, false, true, true, false, true, true, true, true, true, false]),
+    (3, 4, &[true, true, true, false, true, false, false, true, true, true, true, true]),
+    (4, 4, &[false, true, true, true, true, true, false, true, false, true, false, false, false, true, true, false]),
+    (4, 4, &[true, true, false, false, true, false, false, false, true, false, true, false, true, true, true, true]),
+    (4, 4, &[true, true, true, false, false, false, true, true, true, true, true, false, false, true, false, false]),
+    (4, 5, &[true, true, false, false, false, false, true, true, true, false, false, false, true, false, false, false, false, true, true, true]),
+    // 10 cells
+    (4, 4, &[false, true, false, true, true, true, false, true, false, true, true, true, true, true, false, false]),
+    (4, 4, &[true, false, false, true, true, false, true, true, true, false, true, false, true, true, true, false]),
+    (4, 4, &[true, true, false, true, true, false, false, true, true, true, true, true, false, false, true, false]),
+    (4, 5, &[false, true, false, true, false, true, true, true, true, true, false, false, true, false, true, false, false, true, false, false]),
+    (5, 4, &[false, true, false, false, false, true, true, true, false, false, true, false, true, true, true, false, true, false, true, false]),
+    // 11 cells
+    (4, 4, &[true, true, false, true, false, true, true, true, true, true, true, false, true, false, true, false]),
+    (4, 4, &[true, true, true, true, true, false, true, true, false, true, true, false, false, false, true, true]),
+    (4, 5, &[false, true, false, false, false, false, true, true, true, true, true, true, false, true, false, false, true, false, true, true]),
+    (5, 4, &[false, false, false, true, true, false, true, true, true, false, true, false, true, true, true, false, true, false, true, false]),
+    // 12 cells
+    (5, 4, &[false, true, true, true, true, true, true, true, false, false, true, false, false, true, true, false, false, false, true, true]),
+    // 13 cells
+    (4, 5, &[true, true, false, true, true, false, true, true, false, true, false, false, true, true, true, true, true, true, false, false]),
+    // 14 cells
+    (5, 5, &[true, true, false, false, false, false, true, false, false, true, false, true, false, true, true, true, true, true, false, true, false, false, true, true, true]),
+    (5, 5, &[true, true, false, false, false, false, true, true, false, true, false, false, true, false, true, true, false, true, true, true, true, true, true, false, false]),
+];
+
+/// Build a Piece from a catalog entry.
+fn piece_from_catalog(_h: u8, w: u8, flat: &[bool]) -> Piece {
+    let grid: Vec<Vec<bool>> = flat.chunks(w as usize).map(|row| row.to_vec()).collect();
+    let refs: Vec<&[bool]> = grid.iter().map(|r| r.as_slice()).collect();
+    Piece::from_grid(&refs)
+}
+
+/// Returns true if the given piece matches one of the 75 known game shapes.
+pub fn is_known_shape(piece: &Piece) -> bool {
+    SHAPE_CATALOG.iter().any(|&(h, w, flat)| {
+        *piece == piece_from_catalog(h, w, flat)
+    })
+}
+
+/// Pick a random piece from the shape catalog that fits on the given board.
 fn random_piece(rng: &mut impl Rng, max_h: u8, max_w: u8) -> Piece {
-    let max_h = max_h.min(5) as usize;
-    let max_w = max_w.min(5) as usize;
-    let max_area = max_h * max_w;
+    // Collect indices of shapes that fit within the board dimensions.
+    let candidates: Vec<usize> = SHAPE_CATALOG
+        .iter()
+        .enumerate()
+        .filter(|(_, (h, w, _))| *h <= max_h && *w <= max_w)
+        .map(|(i, _)| i)
+        .collect();
 
-    loop {
-        // Pick target size from a distribution that scales with board size.
-        // Real game data shows: avg piece size ≈ board_area / (3 to 4).
-        // Small boards (4x3): avg ~4, peak at 3-4.
-        // Large boards (6x6+): avg ~7, peak at 5-6, tail to 14.
-        // Weights: roughly match real game's overall distribution:
-        //   1:5%, 2:8%, 3:14%, 4:18%, 5:21%, 6:14%, 7:7%, 8:5%, 9+:8%
-        const WEIGHTS: [u32; 25] = [
-            5, 8, 14, 18, 21, 14, 7, 5, 4, 2,  // sizes 1-10
-            3, 1, 1, 1, 0, 0, 0, 0, 0, 0,       // sizes 11-20
-            0, 0, 0, 0, 0,                        // sizes 21-25
-        ];
-        let max_size = max_area.min(WEIGHTS.len());
-        let total_weight: u32 = WEIGHTS[..max_size].iter().sum();
-        let mut roll = rng.random_range(0..total_weight);
-        let mut target = 1;
-        for (i, &w) in WEIGHTS[..max_size].iter().enumerate() {
-            if roll < w {
-                target = i + 1;
-                break;
-            }
-            roll -= w;
-        }
-
-        // Use a 5x5 bounding box and grow to the target size.
-        let h = max_h;
-        let w = max_w;
-        let mut grid = vec![vec![false; w]; h];
-        let seed_r = rng.random_range(0..h);
-        let seed_c = rng.random_range(0..w);
-        grid[seed_r][seed_c] = true;
-        let mut filled = vec![(seed_r, seed_c)];
-
-        while filled.len() < target {
-            // Pick a random filled cell and try to expand from it.
-            let &(r, c) = &filled[rng.random_range(0..filled.len())];
-            let neighbors: Vec<(usize, usize)> = [(0isize, 1), (0, -1), (1, 0), (-1, 0)]
-                .iter()
-                .filter_map(|&(dr, dc)| {
-                    let nr = r as isize + dr;
-                    let nc = c as isize + dc;
-                    if nr >= 0 && nr < h as isize && nc >= 0 && nc < w as isize {
-                        let (nr, nc) = (nr as usize, nc as usize);
-                        if !grid[nr][nc] {
-                            return Some((nr, nc));
-                        }
-                    }
-                    None
-                })
-                .collect();
-
-            if let Some(_) = neighbors.first() {
-                // Pick a random unfilled neighbor.
-                let &(nr, nc) = &neighbors[rng.random_range(0..neighbors.len())];
-                grid[nr][nc] = true;
-                filled.push((nr, nc));
-            } else {
-                break; // No room to grow from this cell
-            }
-        }
-
-        // Trim empty border rows/cols to get a tight bounding box.
-        let min_r = grid.iter().position(|row| row.iter().any(|&v| v)).unwrap();
-        let max_r = grid.iter().rposition(|row| row.iter().any(|&v| v)).unwrap();
-        let min_c = (0..w)
-            .find(|&c| grid.iter().any(|row| row[c]))
-            .unwrap();
-        let max_c = (0..w)
-            .rfind(|&c| grid.iter().any(|row| row[c]))
-            .unwrap();
-
-        let trimmed: Vec<Vec<bool>> = grid[min_r..=max_r]
-            .iter()
-            .map(|row| row[min_c..=max_c].to_vec())
-            .collect();
-
-        let refs: Vec<&[bool]> = trimmed.iter().map(|r| r.as_slice()).collect();
-        return Piece::from_grid(&refs);
-    }
+    let idx = candidates[rng.random_range(0..candidates.len())];
+    let (h, w, flat) = SHAPE_CATALOG[idx];
+    piece_from_catalog(h, w, flat)
 }
 
 /// Generate a random game for the given level spec.
@@ -137,6 +172,24 @@ mod tests {
 
     fn seeded_rng() -> impl Rng {
         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42)
+    }
+
+    #[test]
+    fn test_shape_catalog_valid() {
+        // Every catalog entry should produce a valid piece.
+        for (i, (h, w, flat)) in SHAPE_CATALOG.iter().enumerate() {
+            assert_eq!(
+                flat.len(),
+                *h as usize * *w as usize,
+                "catalog[{i}]: grid size mismatch"
+            );
+            assert!(*h >= 1 && *h <= 5, "catalog[{i}]: bad height {h}");
+            assert!(*w >= 1 && *w <= 5, "catalog[{i}]: bad width {w}");
+            let grid: Vec<Vec<bool>> = flat.chunks(*w as usize).map(|r| r.to_vec()).collect();
+            let refs: Vec<&[bool]> = grid.iter().map(|r| r.as_slice()).collect();
+            let piece = Piece::from_grid(&refs);
+            assert!(piece.cell_count() >= 1, "catalog[{i}]: empty piece");
+        }
     }
 
     #[test]
@@ -188,14 +241,9 @@ mod tests {
 
     #[test]
     fn test_generated_game_has_solution() {
-        // Since we generate by undoing placements from a solved board,
-        // applying those same placements should solve it.
-        // We can't directly test this without the solver, but we can verify
-        // the board is not already solved (would be a degenerate case).
         let mut rng = seeded_rng();
         let spec = get_level(10).unwrap();
 
-        // Generate many games and check they aren't trivially solved.
         let mut nontrivial = 0;
         for _ in 0..20 {
             let game = generate_game(&spec, &mut rng);
@@ -203,7 +251,6 @@ mod tests {
                 nontrivial += 1;
             }
         }
-        // Most games should be nontrivial.
         assert!(nontrivial > 15, "too many trivially solved games");
     }
 
@@ -213,6 +260,23 @@ mod tests {
         for level in 1..=100 {
             let game = generate_for_level(level, &mut rng);
             assert!(game.is_some(), "failed to generate level {level}");
+        }
+    }
+
+    #[test]
+    fn test_small_board_filters_large_pieces() {
+        // A 3x3 board should never get pieces larger than 3x3.
+        let mut rng = seeded_rng();
+        for _ in 0..200 {
+            let piece = random_piece(&mut rng, 3, 3);
+            assert!(piece.height() <= 3);
+            assert!(piece.width() <= 3);
+        }
+        // A 2x2 board should only get pieces that fit in 2x2.
+        for _ in 0..200 {
+            let piece = random_piece(&mut rng, 2, 2);
+            assert!(piece.height() <= 2);
+            assert!(piece.width() <= 2);
         }
     }
 }
