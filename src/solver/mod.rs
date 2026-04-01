@@ -32,7 +32,6 @@ pub struct PruningConfig {
     pub jaggedness: bool,
     pub cell_locking: bool,
     pub component_checks: bool,
-    pub duplicate_pruning: bool,
     pub single_cell_endgame: bool,
 }
 
@@ -47,7 +46,6 @@ impl Default for PruningConfig {
             jaggedness: true,
             cell_locking: true,
             component_checks: true,
-            duplicate_pruning: true,
             single_cell_endgame: true,
         }
     }
@@ -65,7 +63,6 @@ impl PruningConfig {
             jaggedness: false,
             cell_locking: false,
             component_checks: false,
-            duplicate_pruning: false,
             single_cell_endgame: false,
         }
     }
@@ -97,7 +94,6 @@ pub(crate) struct SolverData {
     pub(crate) jagg_v_total: u32,
     pub(crate) line_families: [LineFamily; 6],
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
-    pub(crate) is_dup_of_prev: Vec<bool>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
     pub(crate) m: u8,
@@ -507,12 +503,12 @@ pub fn solve_with_config_and_mask(
 
     let n = pieces.len();
 
-    // Detect which pieces are duplicates of their predecessor (same shape).
-    let is_dup_of_prev: Vec<bool> = (0..n)
-        .map(|i| i > 0 && pieces[order[i]] == pieces[order[i - 1]])
-        .collect();
-
     // Precompute pair skip tables for ALL consecutive piece pairs.
+    // For each (prev_placement, curr_placement) pair, the key
+    // (mask_a & mask_b, mask_a ^ mask_b) fully determines the combined board
+    // effect.  If two combos share a key, the second is redundant and skipped.
+    // This subsumes duplicate-piece symmetry breaking: for identical pieces
+    // (a, b) and (b, a) always collide because & and ^ are commutative.
     let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
         if i == 0 {
             return None;
@@ -521,14 +517,12 @@ pub fn solve_with_config_and_mask(
         let curr_pl = &all_placements[i];
         let num_prev = prev_pl.len();
         let num_curr = curr_pl.len();
-        let is_dup = is_dup_of_prev[i];
         let mut table = vec![false; num_prev * num_curr];
         let mut seen = std::collections::HashSet::new();
         let mut any_skips = false;
         for a in 0..num_prev {
             let mask_a = prev_pl[a].2;
-            let b_start = if is_dup { a } else { 0 };
-            for b in b_start..num_curr {
+            for b in 0..num_curr {
                 let mask_b = curr_pl[b].2;
                 let key = (mask_a & mask_b, mask_a ^ mask_b);
                 if !seen.insert(key) {
@@ -552,7 +546,6 @@ pub fn solve_with_config_and_mask(
         pieces,
         &order,
         all_placements,
-        is_dup_of_prev,
         skip_tables,
         single_cell_start,
         h,
@@ -561,19 +554,16 @@ pub fn solve_with_config_and_mask(
     );
 
     let nodes = Cell::new(0u64);
-    let rng = Cell::new(0u64); // 0 = no shuffling (deterministic)
     let mut sorted_solution = Vec::with_capacity(n);
 
     let found = backtrack::backtrack(
         &board,
         &data,
         0,
-        0,
-        usize::MAX, // no prev dup placement
+        usize::MAX, // no prev placement at root
         &mut sorted_solution,
         &nodes,
         config,
-        &rng,
     );
 
     let solution = if found {
@@ -639,10 +629,6 @@ fn solve_with_config_parallel_and_mask(
 
     let n = pieces.len();
 
-    let is_dup_of_prev: Vec<bool> = (0..n)
-        .map(|i| i > 0 && pieces[order[i]] == pieces[order[i - 1]])
-        .collect();
-
     let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
         if i == 0 {
             return None;
@@ -651,14 +637,12 @@ fn solve_with_config_parallel_and_mask(
         let curr_pl = &all_placements[i];
         let num_prev = prev_pl.len();
         let num_curr = curr_pl.len();
-        let is_dup = is_dup_of_prev[i];
         let mut table = vec![false; num_prev * num_curr];
         let mut seen = std::collections::HashSet::new();
         let mut any_skips = false;
         for a in 0..num_prev {
             let mask_a = prev_pl[a].2;
-            let b_start = if is_dup { a } else { 0 };
-            for b in b_start..num_curr {
+            for b in 0..num_curr {
                 let mask_b = curr_pl[b].2;
                 let key = (mask_a & mask_b, mask_a ^ mask_b);
                 if !seen.insert(key) {
@@ -683,7 +667,6 @@ fn solve_with_config_parallel_and_mask(
         pieces,
         &order,
         all_placements,
-        is_dup_of_prev,
         skip_tables,
         single_cell_start,
         h,
@@ -699,8 +682,7 @@ fn solve_with_config_parallel_and_mask(
         board: board.clone(),
         prefix: Vec::new(),
         depth: 0,
-        min_placement: 0,
-        prev_dup: usize::MAX,
+        prev_placement: usize::MAX,
     });
 
     let abort = AtomicBool::new(false);
@@ -713,13 +695,9 @@ fn solve_with_config_parallel_and_mask(
         .map(|p| p.get())
         .unwrap_or(4);
 
-    let thread_seed_counter = std::sync::atomic::AtomicU64::new(1);
-
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(|| {
-                let seed = thread_seed_counter.fetch_add(1, Ordering::Relaxed);
-                let rng = Cell::new(seed);
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
 
@@ -747,12 +725,10 @@ fn solve_with_config_parallel_and_mask(
                         &task.board,
                         &data,
                         task.depth,
-                        task.min_placement,
-                        task.prev_dup,
+                        task.prev_placement,
                         &mut solution,
                         &nodes,
                         config,
-                        &rng,
                         &abort,
                         &wq,
                         &idle_count,
@@ -1257,21 +1233,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_duplicate_pruning() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.duplicate_pruning = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "duplicate_pruning caused failures");
-        assert!(nodes_with <= nodes_without,
-            "duplicate_pruning should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
     fn test_prune_single_cell_endgame() {
         let configs = small_configs();
         let seeds = test_seeds();
@@ -1337,9 +1298,6 @@ mod tests {
 
     #[test]
     fn test_pair_skip_tables_non_identical() {
-        use crate::generate::generate_game;
-        use crate::level::LevelSpec;
-
         let configs = vec![
             (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
             (2, 4, 3, 5), (2, 4, 3, 8),
@@ -1348,45 +1306,12 @@ mod tests {
         ];
         let seeds: Vec<u64> = (0..30).collect();
 
-        let mut total_with = 0u64;
-        let mut total_without = 0u64;
-        let mut failures = 0usize;
-
-        for &(m, rows, cols, shapes) in &configs {
-            let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes,
-            };
-            for &seed in &seeds {
-                let mut rng =
-                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = generate_game(&spec, &mut rng);
-
-                let result_with = solve(&game, false, false);
-                total_with += result_with.nodes_visited;
-
-                if let Some(ref sol) = result_with.solution {
-                    let mut board = game.board().clone();
-                    for (i, &(row, col)) in sol.iter().enumerate() {
-                        let mask = game.pieces()[i].placed_at(row, col);
-                        board.apply_piece(mask);
-                    }
-                    if !board.is_solved() {
-                        failures += 1;
-                    }
-                } else {
-                    failures += 1;
-                }
-            }
-        }
-
+        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(failures, 0, "pair skip tables caused {} failures", failures);
     }
 
     #[test]
     fn test_pair_skip_tables_soundness_stress() {
-        use crate::generate::generate_game;
-        use crate::level::LevelSpec;
-
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
             (3, 4, 4, 8), (3, 4, 4, 12),
