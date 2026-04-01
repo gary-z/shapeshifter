@@ -554,7 +554,6 @@ pub fn solve_with_config_and_mask(
     );
 
     let nodes = Cell::new(0u64);
-    let rng = Cell::new(0u64); // 0 = no shuffling (deterministic)
     let mut sorted_solution = Vec::with_capacity(n);
 
     let found = backtrack::backtrack(
@@ -565,7 +564,6 @@ pub fn solve_with_config_and_mask(
         &mut sorted_solution,
         &nodes,
         config,
-        &rng,
     );
 
     let solution = if found {
@@ -697,13 +695,9 @@ fn solve_with_config_parallel_and_mask(
         .map(|p| p.get())
         .unwrap_or(4);
 
-    let thread_seed_counter = std::sync::atomic::AtomicU64::new(1);
-
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(|| {
-                let seed = thread_seed_counter.fetch_add(1, Ordering::Relaxed);
-                let rng = Cell::new(seed);
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
 
@@ -735,7 +729,6 @@ fn solve_with_config_parallel_and_mask(
                         &mut solution,
                         &nodes,
                         config,
-                        &rng,
                         &abort,
                         &wq,
                         &idle_count,
