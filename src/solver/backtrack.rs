@@ -7,17 +7,6 @@ use crate::core::board::Board;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
-/// Inline xorshift64 step — very fast, good enough for tie-breaking shuffles.
-#[inline(always)]
-pub(crate) fn xorshift64(state: &Cell<u64>) -> u64 {
-    let mut s = state.get();
-    s ^= s << 13;
-    s ^= s >> 7;
-    s ^= s << 17;
-    state.set(s);
-    s
-}
-
 /// Try to solve remaining pieces when they're all 1x1.
 /// Each cell at value d needs (M-d)%M hits. Total hits must equal number of pieces.
 /// Returns true and fills solution if solvable.
@@ -70,7 +59,6 @@ macro_rules! define_backtrack {
             solution: &mut Vec<(usize, usize)>,
             nodes: &Cell<u64>,
             config: &PruningConfig,
-            rng: &Cell<u64>,
             $($abort_param: $abort_ty,)?
         ) -> bool {
             nodes.set(nodes.get() + 1);
@@ -129,28 +117,10 @@ macro_rules! define_backtrack {
             for i in 0..pl_len { counts[keys[i] as usize] += 1; }
             let mut offsets = [0u8; 26];
             for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
-            // Save bucket boundaries for tie-shuffling.
-            let bucket_starts = offsets;
             for i in 0..pl_len {
                 let k = keys[i] as usize;
                 order[offsets[k] as usize] = i as u8;
                 offsets[k] += 1;
-            }
-
-            // Shuffle within each bucket (Fisher-Yates) to diversify tie-breaking.
-            // rng state of 0 means no shuffling (deterministic baseline).
-            if rng.get() != 0 {
-                for bucket in 0..26 {
-                    let start = bucket_starts[bucket] as usize;
-                    let end = offsets[bucket] as usize;
-                    let len = end - start;
-                    if len > 1 {
-                        for i in (1..len).rev() {
-                            let j = xorshift64(rng) as usize % (i + 1);
-                            order.swap(start + i, start + j);
-                        }
-                    }
-                }
             }
 
             // Copy-make: snapshot the board once, copy+apply per sibling (no undo).
@@ -195,7 +165,6 @@ macro_rules! define_backtrack {
                     solution,
                     nodes,
                     config,
-                    rng,
                     $($abort_param,)?
                 ) {
                     return true;
@@ -298,7 +267,6 @@ fn build_search_frame(
     piece_idx: usize,
     prev_placement: usize,
     config: &PruningConfig,
-    rng: &Cell<u64>,
 ) -> SearchFrame {
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
@@ -321,26 +289,10 @@ fn build_search_frame(
     for i in 0..pl_len { counts[keys[i] as usize] += 1; }
     let mut offsets = [0u8; 26];
     for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
-    let bucket_starts = offsets;
     for i in 0..pl_len {
         let k = keys[i] as usize;
         order[offsets[k] as usize] = i as u8;
         offsets[k] += 1;
-    }
-
-    // Shuffle within buckets for tie diversity.
-    if rng.get() != 0 {
-        for bucket in 0..26 {
-            let start = bucket_starts[bucket] as usize;
-            let end = offsets[bucket] as usize;
-            let len = end - start;
-            if len > 1 {
-                for i in (1..len).rev() {
-                    let j = xorshift64(rng) as usize % (i + 1);
-                    order.swap(start + i, start + j);
-                }
-            }
-        }
     }
 
     // Filter and collect valid placements.
@@ -440,7 +392,6 @@ pub(crate) fn backtrack_stealing(
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
     config: &PruningConfig,
-    rng: &Cell<u64>,
     abort: &AtomicBool,
     wq: &WorkQueue,
     idle_count: &AtomicUsize,
@@ -465,7 +416,7 @@ pub(crate) fn backtrack_stealing(
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     stack.push(build_search_frame(
-        initial_board, data, start_depth, initial_prev_placement, config, rng,
+        initial_board, data, start_depth, initial_prev_placement, config,
     ));
 
     let mut budget = SPLIT_BUDGET;
@@ -550,7 +501,7 @@ pub(crate) fn backtrack_stealing(
         // Push new frame for next depth.
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         stack.push(build_search_frame(
-            &board, data, next_piece, next_prev, config, rng,
+            &board, data, next_piece, next_prev, config,
         ));
     }
 
