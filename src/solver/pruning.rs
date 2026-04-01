@@ -264,17 +264,35 @@ pub(crate) fn check_components(
         }
 
         // Component jaggedness -- split into h/v.
+        // For M>=4, use weighted circular distance; for M<=3, binary (equivalent).
         let h_pairs = component & (component >> 1);
         let v_pairs = component & (component >> 15);
-        let mut h_matching = 0u32;
-        let mut v_matching = 0u32;
-        for d in 0..data.m {
-            let p = board.plane(d) & component;
-            h_matching += (p & (p >> 1) & h_pairs).count_ones();
-            v_matching += (p & (p >> 15) & v_pairs).count_ones();
-        }
-        let comp_h_jagg = h_pairs.count_ones() - h_matching;
-        let comp_v_jagg = v_pairs.count_ones() - v_matching;
+        let m = data.m as usize;
+        let (comp_h_jagg, comp_v_jagg) = if m <= 3 {
+            let mut h_matching = 0u32;
+            let mut v_matching = 0u32;
+            for d in 0..m {
+                let p = board.plane(d as u8) & component;
+                h_matching += (p & (p >> 1) & h_pairs).count_ones();
+                v_matching += (p & (p >> 15) & v_pairs).count_ones();
+            }
+            (h_pairs.count_ones() - h_matching, v_pairs.count_ones() - v_matching)
+        } else {
+            let mut h_weighted = 0u32;
+            let mut v_weighted = 0u32;
+            for d1 in 0..m {
+                for d2 in 0..m {
+                    if d1 == d2 { continue; }
+                    let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
+                    let w = diff.min(m - diff) as u32;
+                    let p1 = board.plane(d1 as u8) & component;
+                    let p2 = board.plane(d2 as u8) & component;
+                    h_weighted += w * (p1 & (p2 >> 1) & h_pairs).count_ones();
+                    v_weighted += w * (p1 & (p2 >> 15) & v_pairs).count_ones();
+                }
+            }
+            (h_weighted, v_weighted)
+        };
 
         // Sum h/v perimeters and cell_counts of reachable pieces.
         let mut reachable_h_perim = 0u32;
