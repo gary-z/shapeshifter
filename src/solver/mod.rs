@@ -47,7 +47,6 @@ pub struct PruningConfig {
     pub coverage: bool,
     pub jaggedness: bool,
     pub cell_locking: bool,
-    pub component_checks: bool,
     pub single_cell_endgame: bool,
 }
 
@@ -61,7 +60,6 @@ impl Default for PruningConfig {
             coverage: true,
             jaggedness: true,
             cell_locking: true,
-            component_checks: true,
             single_cell_endgame: true,
         }
     }
@@ -78,7 +76,6 @@ impl PruningConfig {
             coverage: false,
             jaggedness: false,
             cell_locking: false,
-            component_checks: false,
             single_cell_endgame: false,
         }
     }
@@ -92,16 +89,9 @@ impl PruningConfig {
 
 /// All precomputed data needed by the backtracking solver.
 /// Bundled into a single struct to keep the backtrack signature small.
-#[allow(dead_code)]
 pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
-    pub(crate) reaches: Vec<Bitboard>,
-    pub(crate) perimeters: Vec<u32>,
-    pub(crate) h_perimeters: Vec<u32>,
-    pub(crate) v_perimeters: Vec<u32>,
-    pub(crate) cell_counts: Vec<u32>,
     pub(crate) remaining_bits: Vec<u32>,
-    pub(crate) remaining_perimeter: Vec<u32>,
     pub(crate) remaining_h_perimeter: Vec<u32>,
     pub(crate) remaining_v_perimeter: Vec<u32>,
     pub(crate) jagg_h_mask: Bitboard,
@@ -118,7 +108,6 @@ pub(crate) struct SolverData {
     pub(crate) parity_partitions: Vec<ParityPartition>,
     pub(crate) subset_checks: Vec<SubsetReachability>,
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
-    pub(crate) board_mask: Bitboard,
     /// Progress weight for each depth: fraction of total naive search space
     /// represented by one placement at that depth.
     /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
@@ -1280,21 +1269,6 @@ mod tests {
         assert_eq!(fail_with, 0, "cell_locking prune caused failures");
         assert!(nodes_with <= nodes_without,
             "cell_locking should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_prune_component_checks() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.component_checks = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "component_checks prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "component_checks should reduce nodes: {} vs {}", nodes_with, nodes_without);
     }
 
     #[test]
