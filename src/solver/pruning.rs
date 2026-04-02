@@ -228,8 +228,7 @@ pub(crate) fn prune_line_families_diagonal(board: &Board, data: &SolverData, pie
 
 #[inline(always)]
 pub(crate) fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    let j = board.split_jaggedness(
-        data.jagg_h_mask, data.jagg_h_total, data.jagg_v_mask, data.jagg_v_total);
+    let j = board.split_jaggedness(data.jagg_h_mask, data.jagg_v_mask);
     let rem_h = data.remaining_h_perimeter[piece_idx];
     let rem_v = data.remaining_v_perimeter[piece_idx];
     // Circular (symmetric) bound: sum of min(|a-b|, M-|a-b|) <= perimeter.
