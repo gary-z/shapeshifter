@@ -89,18 +89,6 @@ macro_rules! define_backtrack {
                 Bitboard::ZERO
             };
 
-            // Prune: per-component checks (jaggedness, min_flips).
-            // Run when branching factor justifies flood-fill cost.
-            // Component checks (flood-fill + per-component jaggedness/min_flips) disabled:
-            // profiling shows 12% of instructions but <0.1% node reduction on real puzzles.
-            // The per-component bounds are too loose with large pieces on medium boards.
-            // Keeping the code for potential future use on larger boards.
-            if false && config.component_checks {
-                if !check_components(board, locked_mask, data, piece_idx) {
-                    return false;
-                }
-            }
-
             let placements = &data.all_placements[piece_idx];
 
             // Order placements by zeros hit ascending using counting sort.

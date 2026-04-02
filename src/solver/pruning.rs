@@ -205,152 +205,6 @@ impl SubsetReachability {
     }
 }
 
-/// Flood-fill one connected component from a seed bit within `region`.
-/// Returns the component mask. Uses bitboard-parallel expansion.
-pub(crate) fn flood_fill(seed_bit: u32, region: Bitboard) -> Bitboard {
-    let mut component = Bitboard::from_bit(seed_bit);
-    loop {
-        // Expand in 4 cardinal directions, masked to valid region.
-        let expanded = component
-            | (component << 1)
-            | (component >> 1)
-            | (component << 15)
-            | (component >> 15);
-        let expanded = expanded & region;
-        if expanded == component {
-            break;
-        }
-        component = expanded;
-    }
-    component
-}
-
-/// Check connected components of the non-zero region (using locked cells as walls).
-/// For each component, verify:
-/// - Reachable pieces have enough cell_counts to cover min_flips
-/// - Reachable pieces have enough perimeter to cover jaggedness
-/// Also computes sum of active_planes across components (returned for caller to check).
-pub(crate) fn check_components(
-    board: &Board,
-    locked_mask: Bitboard,
-    data: &SolverData,
-    piece_idx: usize,
-) -> bool {
-
-    // Non-zero region, excluding locked cells (which are walls).
-    let mut nz = Bitboard::ZERO;
-    for d in 1..data.m {
-        nz |= board.plane(d);
-    }
-    let region = nz & !locked_mask;
-
-    if region.is_zero() {
-        return true;
-    }
-
-    let mut remaining_nz = region;
-    let mut component_count = 0u32;
-
-    while !remaining_nz.is_zero() {
-        let seed = remaining_nz.lowest_set_bit();
-        let component = flood_fill(seed, remaining_nz);
-        remaining_nz = remaining_nz & !component;
-        component_count += 1;
-
-        // Compute component's min_flips.
-        let mut comp_min_flips = 0u32;
-        for d in 1..data.m {
-            comp_min_flips += (data.m - d) as u32 * (board.plane(d) & component).count_ones();
-        }
-
-        // Component jaggedness -- split into h/v.
-        // For M>=4, use weighted circular distance; for M<=3, binary (equivalent).
-        let h_pairs = component & (component >> 1);
-        let v_pairs = component & (component >> 15);
-        let m = data.m as usize;
-        let (comp_h_jagg, comp_v_jagg, comp_fwd_h, comp_fwd_v, comp_bwd_h, comp_bwd_v) = if m <= 3 {
-            let mut h_matching = 0u32;
-            let mut v_matching = 0u32;
-            for d in 0..m {
-                let p = board.plane(d as u8) & component;
-                h_matching += (p & (p >> 1) & h_pairs).count_ones();
-                v_matching += (p & (p >> 15) & v_pairs).count_ones();
-            }
-            (h_pairs.count_ones() - h_matching, v_pairs.count_ones() - v_matching, 0, 0, 0, 0)
-        } else {
-            let mut sh = [Bitboard::ZERO; 5];
-            let mut sv = [Bitboard::ZERO; 5];
-            for d in 0..m {
-                let p = board.plane(d as u8) & component;
-                sh[d] = p >> 1;
-                sv[d] = p >> 15;
-            }
-            let mut circ_h = 0u32;
-            let mut circ_v = 0u32;
-            let mut fwd_h = 0u32;
-            let mut fwd_v = 0u32;
-            let mut bwd_h = 0u32;
-            let mut bwd_v = 0u32;
-            for d1 in 0..m {
-                let p = board.plane(d1 as u8) & component;
-                for d2 in 0..m {
-                    if d1 == d2 { continue; }
-                    let h_count = (p & sh[d2] & h_pairs).count_ones();
-                    let v_count = (p & sv[d2] & v_pairs).count_ones();
-                    let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
-                    circ_h += diff.min(m - diff) as u32 * h_count;
-                    circ_v += diff.min(m - diff) as u32 * v_count;
-                    let fw = ((d2 + m - d1) % m) as u32;
-                    let bw = ((d1 + m - d2) % m) as u32;
-                    fwd_h += fw * h_count;
-                    fwd_v += fw * v_count;
-                    bwd_h += bw * h_count;
-                    bwd_v += bw * v_count;
-                }
-            }
-            (circ_h, circ_v, fwd_h, fwd_v, bwd_h, bwd_v)
-        };
-
-        // Sum h/v perimeters and cell_counts of reachable pieces.
-        let mut reachable_h_perim = 0u32;
-        let mut reachable_v_perim = 0u32;
-        let mut reachable_bits = 0u32;
-        for pi in piece_idx..data.reaches.len() {
-            if !(data.reaches[pi] & component).is_zero() {
-                reachable_h_perim += data.h_perimeters[pi];
-                reachable_v_perim += data.v_perimeters[pi];
-                reachable_bits += data.cell_counts[pi];
-            }
-        }
-
-        // Per-component pruning checks.
-        if comp_h_jagg > reachable_h_perim {
-            return false;
-        }
-        if comp_v_jagg > reachable_v_perim {
-            return false;
-        }
-        if m >= 4 {
-            let m32 = m as u32;
-            if comp_fwd_h * 2 > m32 * reachable_h_perim
-                || comp_bwd_h * 2 > m32 * reachable_h_perim
-                || comp_fwd_v * 2 > m32 * reachable_v_perim
-                || comp_bwd_v * 2 > m32 * reachable_v_perim {
-                return false;
-            }
-        }
-        if comp_min_flips > reachable_bits {
-            return false;
-        }
-
-        if component_count >= 16 {
-            break;
-        }
-    }
-
-    true
-}
-
 #[inline(always)]
 pub(crate) fn prune_min_flips_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     data.remaining_bits[piece_idx] >= board.min_flips_needed()
@@ -468,7 +322,7 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
 /// - jaggedness: +83% nodes on M=2, marginal on M=3
 /// - min_flips_diagonal: +16% nodes on M=2, marginal on M=3
 /// - parity_partitions, subset_reachability, weight_tuples: part of min_flips_global gate
-/// - active_planes, coverage, cell_locking, min_flips_rowcol, component_checks: 0-1% node
+/// - active_planes, coverage, cell_locking, min_flips_rowcol: 0-1% node
 ///   reduction but 6-16% time cost — removed from hot path.
 pub(crate) fn prune_node(
     board: &Board,
@@ -478,7 +332,7 @@ pub(crate) fn prune_node(
 ) -> bool {
     // Ordered by cost-effectiveness. Checks that prune 0-1% of nodes but cost
     // 6-16% of time (active_planes, coverage, cell_locking, min_flips_rowcol,
-    // subgrid, component_checks) are omitted. Validated on simulated L36-60:
+    // subgrid) are omitted. Validated on simulated L36-60:
     // 78/125 vs 79/125 solves — negligible impact, +14-27% throughput gain.
     if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
