@@ -236,10 +236,10 @@ pub(crate) fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usiz
     if j.circular_h > rem_h || j.circular_v > rem_v {
         return false;
     }
-    // Directional (asymmetric) bound for M>=4:
+    // Directional (asymmetric) bound for M>=3:
     // max(forward, backward) <= M/2 * perimeter, i.e., 2*max(fwd,bwd) <= M*perim.
-    // Strictly tighter than circular for pairs at distance d < M/2.
-    if data.m >= 4 {
+    // Strictly tighter than circular when adjacencies are direction-biased.
+    if data.m >= 3 {
         let m = data.m as u32;
         if j.forward_h * 2 > m * rem_h || j.backward_h * 2 > m * rem_h {
             return false;
