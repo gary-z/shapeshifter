@@ -116,7 +116,7 @@ pub(crate) struct SolverData {
 
 /// Main entry point: cancellation/pair-merge pipeline.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
-    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, None);
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive);
     SolveResult {
         solution: full.solution,
         nodes_visited: full.nodes_visited,
@@ -124,12 +124,12 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     }
 }
 
-/// Dispatch to parallel or serial based on flag, with optional placement mask.
-fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
+/// Dispatch to parallel or serial based on flag.
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     if parallel {
-        solve_with_config_parallel_and_mask(game, config, exhaustive, mask)
+        solve_with_config_parallel(game, config, exhaustive)
     } else {
-        solve_with_config_and_mask(game, config, mask)
+        solve_with_config(game, config)
     }
 }
 
@@ -138,7 +138,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -165,7 +165,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     if cancellable_groups.is_empty() {
-        return solve_dispatch(game, config, parallel, exhaustive, mask);
+        return solve_dispatch(game, config, parallel, exhaustive);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -181,11 +181,11 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
         // Too many combos -- fall back to just trying max and full.
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
-            m, h, w, mask);
+            m, h, w);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_dispatch(game, config, parallel, exhaustive, mask);
+        let mut full = solve_dispatch(game, config, parallel, exhaustive);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -224,7 +224,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
 
     for combo in &combos {
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
-            combo, m, h, w, mask);
+            combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
             return SolveResult {
@@ -249,7 +249,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config, parallel, exhaustive, mask);
+    let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
     full_result.nodes_visited += total_nodes;
     full_result
 }
@@ -340,7 +340,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive, None);
+    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -376,7 +376,6 @@ fn try_cancellation_combo(
     m: usize,
     h: u8,
     w: u8,
-    mask: Option<&PlacementMask>,
 ) -> SolveResult {
     let pieces = game.pieces();
 
@@ -424,11 +423,7 @@ fn try_cancellation_combo(
     let reduced_pieces: Vec<crate::core::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    // Remap placement mask: reduced piece i corresponds to original piece kept_indices[i].
-    let reduced_mask: Option<PlacementMask> = mask.map(|m| {
-        kept_indices.iter().map(|&orig_idx| m[orig_idx].clone()).collect()
-    });
-    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive, reduced_mask.as_ref());
+    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -456,24 +451,8 @@ fn try_cancellation_combo(
 }
 
 
-/// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
-/// or `Some(vec of bools)` indexed by placement index.
-pub type PlacementMask = Vec<Option<Vec<bool>>>;
-
 /// Backtracking solver with configurable pruning (serial).
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
-    solve_with_config_and_mask(game, config, None)
-}
-
-
-/// Backtracking solver with configurable pruning and optional placement mask.
-/// When a placement mask is provided, only placements where
-/// `mask[piece][pl] == true` are considered.
-pub fn solve_with_config_and_mask(
-    game: &Game,
-    config: &PruningConfig,
-    mask: Option<&PlacementMask>,
-) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -481,27 +460,10 @@ pub fn solve_with_config_and_mask(
 
     // Build (original_index, placements) and sort: fewer placements first.
     // Secondary sort by shape to group duplicates together.
-    // Apply placement mask: filter out excluded placements.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let all_pl = p.placements(h, w);
-            let filtered = if let Some(m) = mask {
-                if let Some(ref piece_mask) = m[i] {
-                    all_pl.into_iter()
-                        .enumerate()
-                        .filter(|(j, _)| piece_mask[*j])
-                        .map(|(_, pl)| pl)
-                        .collect()
-                } else {
-                    all_pl
-                }
-            } else {
-                all_pl
-            };
-            (i, filtered)
-        })
+        .map(|(i, p)| (i, p.placements(h, w)))
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -598,8 +560,8 @@ pub fn solve_with_config_and_mask(
     }
 }
 
-fn solve_with_config_parallel_and_mask(
-    game: &Game, config: &PruningConfig, exhaustive: bool, mask: Option<&PlacementMask>,
+fn solve_with_config_parallel(
+    game: &Game, config: &PruningConfig, exhaustive: bool,
 ) -> SolveResult {
     eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
@@ -608,27 +570,10 @@ fn solve_with_config_parallel_and_mask(
     let w = board.width();
 
     // Build (original_index, placements) and sort: fewer placements first.
-    // Apply placement mask if provided.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let all_pl = p.placements(h, w);
-            let filtered = if let Some(m) = mask {
-                if let Some(ref piece_mask) = m[i] {
-                    all_pl.into_iter()
-                        .enumerate()
-                        .filter(|(j, _)| piece_mask[*j])
-                        .map(|(_, pl)| pl)
-                        .collect()
-                } else {
-                    all_pl
-                }
-            } else {
-                all_pl
-            };
-            (i, filtered)
-        })
+        .map(|(i, p)| (i, p.placements(h, w)))
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
