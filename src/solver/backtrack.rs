@@ -381,6 +381,18 @@ fn split_work(
 /// Node budget before checking whether to split.
 const SPLIT_BUDGET: u64 = 4096;
 
+/// Atomically add an f64 value to an AtomicU64 storing f64 bits via CAS loop.
+fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
+    let mut old = atomic.load(Ordering::Relaxed);
+    loop {
+        let new_val = f64::from_bits(old) + val;
+        match atomic.compare_exchange_weak(old, new_val.to_bits(), Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(x) => old = x,
+        }
+    }
+}
+
 /// Iterative backtracker with budget-based work stealing.
 /// Runs DFS with an explicit stack. Every SPLIT_BUDGET nodes, if idle threads
 /// exist, donates remaining work at the shallowest stack level.
@@ -396,6 +408,7 @@ pub(crate) fn backtrack_stealing(
     wq: &WorkQueue,
     idle_count: &AtomicUsize,
     exhaustive: bool,
+    progress: &std::sync::atomic::AtomicU64,
 ) -> bool {
     let n = data.all_placements.len();
     let base_solution_len = solution.len();
@@ -415,9 +428,15 @@ pub(crate) fn backtrack_stealing(
     }
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
-    stack.push(build_search_frame(
+    let first_frame = build_search_frame(
         initial_board, data, start_depth, initial_prev_placement, config,
-    ));
+    );
+    // Track progress: local accumulator flushed at budget boundaries.
+    let mut progress_local: f64 = 0.0;
+    // Account for placements filtered out when building the first frame.
+    let filtered_out = data.all_placements[start_depth].len() - first_frame.placements.len();
+    progress_local += filtered_out as f64 * data.progress_weights[start_depth];
+    stack.push(first_frame);
 
     let mut budget = SPLIT_BUDGET;
     let mut found = false;
@@ -461,9 +480,11 @@ pub(crate) fn backtrack_stealing(
 
         // Terminal: placed all pieces.
         if next_piece == n {
+            progress_local += data.progress_weights[piece_idx];
             if board.is_solved() {
                 found = true;
                 if !exhaustive {
+                    atomic_add_f64(progress, progress_local);
                     return true;
                 }
             }
@@ -472,11 +493,13 @@ pub(crate) fn backtrack_stealing(
 
         // Single-cell endgame.
         if config.single_cell_endgame && next_piece >= data.single_cell_start {
+            progress_local += data.progress_weights[piece_idx];
             let num_remaining = n - next_piece;
             let saved_len = solution.len();
             if solve_single_cells(&board, data.m, data.h, data.w, num_remaining, solution) {
                 found = true;
                 if !exhaustive {
+                    atomic_add_f64(progress, progress_local);
                     return true;
                 }
                 solution.truncate(saved_len);
@@ -486,13 +509,19 @@ pub(crate) fn backtrack_stealing(
 
         // Pruning.
         if !prune_node(&board, data, next_piece, config) {
+            progress_local += data.progress_weights[piece_idx];
             continue;
         }
 
-        // Budget check: should we split?
+        // Budget check: should we split? Also flush progress.
         budget = budget.saturating_sub(1);
         if budget == 0 {
             budget = SPLIT_BUDGET;
+            // Flush local progress to shared counter.
+            if progress_local > 0.0 {
+                atomic_add_f64(progress, progress_local);
+                progress_local = 0.0;
+            }
             if idle_count.load(Ordering::Relaxed) > 0 {
                 split_work(&mut stack, solution, base_solution_len, data, wq);
             }
@@ -500,9 +529,18 @@ pub(crate) fn backtrack_stealing(
 
         // Push new frame for next depth.
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
-        stack.push(build_search_frame(
+        let new_frame = build_search_frame(
             &board, data, next_piece, next_prev, config,
-        ));
+        );
+        // Account for placements filtered out when building this frame.
+        let filtered_out = data.all_placements[next_piece].len() - new_frame.placements.len();
+        progress_local += filtered_out as f64 * data.progress_weights[next_piece];
+        stack.push(new_frame);
+    }
+
+    // Flush remaining local progress.
+    if progress_local > 0.0 {
+        atomic_add_f64(progress, progress_local);
     }
 
     found

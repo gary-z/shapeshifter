@@ -826,6 +826,16 @@ pub(crate) fn build_solver_data(
         bh, bw, m, n, &all_placements, order, pieces,
     );
 
+    // Compute progress weights: fraction of naive search space per placement at each depth.
+    let mut suffix_products = vec![1.0f64; n + 1];
+    for d in (0..n).rev() {
+        suffix_products[d] = suffix_products[d + 1] * all_placements[d].len() as f64;
+    }
+    let total_space = suffix_products[0];
+    let progress_weights: Vec<f64> = (0..n)
+        .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
+        .collect();
+
     SolverData {
         all_placements,
         reaches,
@@ -852,6 +862,7 @@ pub(crate) fn build_solver_data(
         subset_checks,
         weight_tuple_checks,
         board_mask,
+        progress_weights,
     }
 }
 
