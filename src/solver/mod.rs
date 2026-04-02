@@ -12,6 +12,19 @@ use crate::game::Game;
 
 use pruning::*;
 
+/// Format a count with SI suffix (e.g. 1234567 → "1.2M nodes").
+fn format_count(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B nodes", n as f64 / 1e9)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M nodes", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.1}K nodes", n as f64 / 1e3)
+    } else {
+        format!("{} nodes", n)
+    }
+}
+
 /// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
 
@@ -103,6 +116,10 @@ pub(crate) struct SolverData {
     pub(crate) subset_checks: Vec<SubsetReachability>,
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
     pub(crate) board_mask: Bitboard,
+    /// Progress weight for each depth: fraction of total naive search space
+    /// represented by one placement at that depth.
+    /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
+    pub(crate) progress_weights: Vec<f64>,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.
@@ -685,17 +702,49 @@ fn solve_with_config_parallel_and_mask(
         prev_placement: usize::MAX,
     });
 
+    let num_threads = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
     let active_count = std::sync::atomic::AtomicUsize::new(0);
     let idle_count = std::sync::atomic::AtomicUsize::new(0);
+    let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
+    let workers_alive = std::sync::atomic::AtomicUsize::new(num_threads);
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
+    // Compute total naive search space for display.
+    let total_space: f64 = data.all_placements.iter()
+        .map(|p| p.len() as f64)
+        .product();
+    eprintln!("search space: {:.3e}", total_space);
+
+    let solve_start = std::time::Instant::now();
 
     std::thread::scope(|s| {
+        // Spawn progress reporter thread.
+        s.spawn(|| {
+            let bar_width = 30;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if abort.load(Ordering::Relaxed)
+                    || workers_alive.load(Ordering::Relaxed) == 0 { break; }
+
+                let p = f64::from_bits(progress.load(Ordering::Relaxed)).min(1.0);
+                let pct = p * 100.0;
+                let nodes_so_far = total_nodes.load(Ordering::Relaxed);
+                let elapsed = solve_start.elapsed().as_secs_f64();
+
+                let filled = (p * bar_width as f64) as usize;
+                let bar: String = (0..bar_width).map(|i| if i < filled { '#' } else { ' ' }).collect();
+
+                let nodes_str = format_count(nodes_so_far);
+                eprint!("\r\x1b[K[{}] {:.1}%  {}  {:.1}s", bar, pct, nodes_str, elapsed);
+            }
+            eprint!("\r\x1b[K"); // clear progress line
+        });
+
         for _ in 0..num_threads {
             s.spawn(|| {
                 let nodes = Cell::new(0u64);
@@ -733,6 +782,7 @@ fn solve_with_config_parallel_and_mask(
                         &wq,
                         &idle_count,
                         exhaustive,
+                        &progress,
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);
@@ -748,6 +798,7 @@ fn solve_with_config_parallel_and_mask(
                         }
                     }
                 }
+                workers_alive.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });
