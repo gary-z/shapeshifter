@@ -204,9 +204,6 @@ pub(crate) fn build_solver_data(
             if r + 1 < bh { jagg_v_mask.set_bit(bit); }
         }
     }
-    let jagg_h_total = jagg_h_mask.count_ones();
-    let jagg_v_total = jagg_v_mask.count_ones();
-
     // Precompute parity partition checks.
     let build_partition = |group_fn: &dyn Fn(usize, usize) -> bool,
                            num_offsets: usize,
@@ -826,9 +823,7 @@ pub(crate) fn build_solver_data(
         remaining_h_perimeter,
         remaining_v_perimeter,
         jagg_h_mask,
-        jagg_h_total,
         jagg_v_mask,
-        jagg_v_total,
         line_families,
         suffix_coverage,
         skip_tables,
