@@ -12,6 +12,19 @@ use crate::game::Game;
 
 use pruning::*;
 
+/// Format a count with SI suffix (e.g. 1234567 → "1.2M nodes").
+fn format_count(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B nodes", n as f64 / 1e9)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M nodes", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.1}K nodes", n as f64 / 1e3)
+    } else {
+        format!("{} nodes", n)
+    }
+}
+
 /// A solution is a list of (row, col) placements, one per piece in original order.
 pub type Solution = Vec<(usize, usize)>;
 
@@ -19,6 +32,9 @@ pub type Solution = Vec<(usize, usize)>;
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
+    /// Final progress fraction (0.0–1.0) of naive search space explored.
+    /// Only meaningful for parallel solves; 0.0 for serial.
+    pub progress: f64,
 }
 
 /// Configuration controlling which pruning techniques are enabled.
@@ -31,7 +47,6 @@ pub struct PruningConfig {
     pub coverage: bool,
     pub jaggedness: bool,
     pub cell_locking: bool,
-    pub component_checks: bool,
     pub single_cell_endgame: bool,
 }
 
@@ -45,7 +60,6 @@ impl Default for PruningConfig {
             coverage: true,
             jaggedness: true,
             cell_locking: true,
-            component_checks: true,
             single_cell_endgame: true,
         }
     }
@@ -62,7 +76,6 @@ impl PruningConfig {
             coverage: false,
             jaggedness: false,
             cell_locking: false,
-            component_checks: false,
             single_cell_endgame: false,
         }
     }
@@ -76,16 +89,9 @@ impl PruningConfig {
 
 /// All precomputed data needed by the backtracking solver.
 /// Bundled into a single struct to keep the backtrack signature small.
-#[allow(dead_code)]
 pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
-    pub(crate) reaches: Vec<Bitboard>,
-    pub(crate) perimeters: Vec<u32>,
-    pub(crate) h_perimeters: Vec<u32>,
-    pub(crate) v_perimeters: Vec<u32>,
-    pub(crate) cell_counts: Vec<u32>,
     pub(crate) remaining_bits: Vec<u32>,
-    pub(crate) remaining_perimeter: Vec<u32>,
     pub(crate) remaining_h_perimeter: Vec<u32>,
     pub(crate) remaining_v_perimeter: Vec<u32>,
     pub(crate) jagg_h_mask: Bitboard,
@@ -102,24 +108,28 @@ pub(crate) struct SolverData {
     pub(crate) parity_partitions: Vec<ParityPartition>,
     pub(crate) subset_checks: Vec<SubsetReachability>,
     pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
-    pub(crate) board_mask: Bitboard,
+    /// Progress weight for each depth: fraction of total naive search space
+    /// represented by one placement at that depth.
+    /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
+    pub(crate) progress_weights: Vec<f64>,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
-    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive, None);
+    let full = solve_with_cancellation(game, &PruningConfig::default(), parallel, exhaustive);
     SolveResult {
         solution: full.solution,
         nodes_visited: full.nodes_visited,
+        progress: full.progress,
     }
 }
 
-/// Dispatch to parallel or serial based on flag, with optional placement mask.
-fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
+/// Dispatch to parallel or serial based on flag.
+fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     if parallel {
-        solve_with_config_parallel_and_mask(game, config, exhaustive, mask)
+        solve_with_config_parallel(game, config, exhaustive)
     } else {
-        solve_with_config_and_mask(game, config, mask)
+        solve_with_config(game, config)
     }
 }
 
@@ -128,7 +138,7 @@ fn solve_dispatch(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
 /// aggressive to least. Each group of K identical pieces can cancel 0, M, 2M, ...,
 /// floor(K/M)*M pieces. The product space is typically small (<50 combos).
 /// Falls back to the full puzzle if no reduction works.
-fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool, mask: Option<&PlacementMask>) -> SolveResult {
+fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, exhaustive: bool) -> SolveResult {
     let m = game.board().m() as usize;
     let pieces = game.pieces();
     let h = game.board().height();
@@ -155,7 +165,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     }
 
     if cancellable_groups.is_empty() {
-        return solve_dispatch(game, config, parallel, exhaustive, mask);
+        return solve_dispatch(game, config, parallel, exhaustive);
     }
 
     // Enumerate all combinations of cancellation levels.
@@ -171,11 +181,11 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
         // Too many combos -- fall back to just trying max and full.
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             &cancellable_groups.iter().map(|(_, ms)| *ms).collect::<Vec<_>>(),
-            m, h, w, mask);
+            m, h, w);
         if result.solution.is_some() {
             return result;
         }
-        let mut full = solve_dispatch(game, config, parallel, exhaustive, mask);
+        let mut full = solve_dispatch(game, config, parallel, exhaustive);
         full.nodes_visited += result.nodes_visited;
         return full;
     }
@@ -214,12 +224,13 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
 
     for combo in &combos {
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
-            combo, m, h, w, mask);
+            combo, m, h, w);
         total_nodes += result.nodes_visited;
         if result.solution.is_some() {
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes,
+                progress: result.progress,
             };
         }
     }
@@ -231,13 +242,14 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes + result.nodes_visited,
+                progress: result.progress,
             };
         }
         total_nodes += result.nodes_visited;
     }
 
     // No reduction worked -- solve the full puzzle.
-    let mut full_result = solve_dispatch(game, config, parallel, exhaustive, mask);
+    let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
     full_result.nodes_visited += total_nodes;
     full_result
 }
@@ -306,7 +318,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         Some((i, j, ref w)) if w.iter().all(|x| x.is_some()) => {
             (i, j, w.clone())
         }
-        _ => return SolveResult { solution: None, nodes_visited: 0 },
+        _ => return SolveResult { solution: None, nodes_visited: 0, progress: 0.0 },
     };
 
     // Build reduced game: replace pieces[pi] and pieces[pj] with a 1x1 piece.
@@ -328,7 +340,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
     }
 
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive, None);
+    let result = solve_with_cancellation(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_sol = vec![(0, 0); n];
@@ -345,10 +357,11 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         return SolveResult {
             solution: Some(full_sol),
             nodes_visited: result.nodes_visited,
+            progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
 }
 
 /// Try a specific cancellation combo. Returns SolveResult.
@@ -363,7 +376,6 @@ fn try_cancellation_combo(
     m: usize,
     h: u8,
     w: u8,
-    mask: Option<&PlacementMask>,
 ) -> SolveResult {
     let pieces = game.pieces();
 
@@ -403,19 +415,15 @@ fn try_cancellation_combo(
                     }
                 }
             }
-            return SolveResult { solution: Some(solution), nodes_visited: 1 };
+            return SolveResult { solution: Some(solution), nodes_visited: 1, progress: 0.0 };
         }
-        return SolveResult { solution: None, nodes_visited: 1 };
+        return SolveResult { solution: None, nodes_visited: 1, progress: 0.0 };
     }
 
     let reduced_pieces: Vec<crate::core::piece::Piece> =
         kept_indices.iter().map(|&i| pieces[i]).collect();
     let reduced_game = Game::new(game.board().clone(), reduced_pieces);
-    // Remap placement mask: reduced piece i corresponds to original piece kept_indices[i].
-    let reduced_mask: Option<PlacementMask> = mask.map(|m| {
-        kept_indices.iter().map(|&orig_idx| m[orig_idx].clone()).collect()
-    });
-    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive, reduced_mask.as_ref());
+    let result = solve_dispatch(&reduced_game, config, parallel, exhaustive);
 
     if let Some(ref reduced_sol) = result.solution {
         let mut full_solution = vec![(0usize, 0usize); pieces.len()];
@@ -435,31 +443,16 @@ fn try_cancellation_combo(
         return SolveResult {
             solution: Some(full_solution),
             nodes_visited: result.nodes_visited,
+            progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
 }
 
-
-/// Per-piece placement mask: `mask[original_piece_idx]` is `None` (all valid)
-/// or `Some(vec of bools)` indexed by placement index.
-pub type PlacementMask = Vec<Option<Vec<bool>>>;
 
 /// Backtracking solver with configurable pruning (serial).
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
-    solve_with_config_and_mask(game, config, None)
-}
-
-
-/// Backtracking solver with configurable pruning and optional placement mask.
-/// When a placement mask is provided, only placements where
-/// `mask[piece][pl] == true` are considered.
-pub fn solve_with_config_and_mask(
-    game: &Game,
-    config: &PruningConfig,
-    mask: Option<&PlacementMask>,
-) -> SolveResult {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
@@ -467,27 +460,10 @@ pub fn solve_with_config_and_mask(
 
     // Build (original_index, placements) and sort: fewer placements first.
     // Secondary sort by shape to group duplicates together.
-    // Apply placement mask: filter out excluded placements.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let all_pl = p.placements(h, w);
-            let filtered = if let Some(m) = mask {
-                if let Some(ref piece_mask) = m[i] {
-                    all_pl.into_iter()
-                        .enumerate()
-                        .filter(|(j, _)| piece_mask[*j])
-                        .map(|(_, pl)| pl)
-                        .collect()
-                } else {
-                    all_pl
-                }
-            } else {
-                all_pl
-            };
-            (i, filtered)
-        })
+        .map(|(i, p)| (i, p.placements(h, w)))
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -580,11 +556,12 @@ pub fn solve_with_config_and_mask(
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
+        progress: 0.0,
     }
 }
 
-fn solve_with_config_parallel_and_mask(
-    game: &Game, config: &PruningConfig, exhaustive: bool, mask: Option<&PlacementMask>,
+fn solve_with_config_parallel(
+    game: &Game, config: &PruningConfig, exhaustive: bool,
 ) -> SolveResult {
     eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
     let board = game.board().clone();
@@ -593,27 +570,10 @@ fn solve_with_config_parallel_and_mask(
     let w = board.width();
 
     // Build (original_index, placements) and sort: fewer placements first.
-    // Apply placement mask if provided.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let all_pl = p.placements(h, w);
-            let filtered = if let Some(m) = mask {
-                if let Some(ref piece_mask) = m[i] {
-                    all_pl.into_iter()
-                        .enumerate()
-                        .filter(|(j, _)| piece_mask[*j])
-                        .map(|(_, pl)| pl)
-                        .collect()
-                } else {
-                    all_pl
-                }
-            } else {
-                all_pl
-            };
-            (i, filtered)
-        })
+        .map(|(i, p)| (i, p.placements(h, w)))
         .collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
@@ -685,17 +645,49 @@ fn solve_with_config_parallel_and_mask(
         prev_placement: usize::MAX,
     });
 
+    let num_threads = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
     let active_count = std::sync::atomic::AtomicUsize::new(0);
     let idle_count = std::sync::atomic::AtomicUsize::new(0);
+    let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
+    let workers_alive = std::sync::atomic::AtomicUsize::new(num_threads);
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
+    // Compute total naive search space for display.
+    let total_space: f64 = data.all_placements.iter()
+        .map(|p| p.len() as f64)
+        .product();
+    eprintln!("search space: {:.3e}", total_space);
+
+    let solve_start = std::time::Instant::now();
 
     std::thread::scope(|s| {
+        // Spawn progress reporter thread.
+        s.spawn(|| {
+            let bar_width = 30;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if abort.load(Ordering::Relaxed)
+                    || workers_alive.load(Ordering::Relaxed) == 0 { break; }
+
+                let p = f64::from_bits(progress.load(Ordering::Relaxed)).min(1.0);
+                let pct = p * 100.0;
+                let nodes_so_far = total_nodes.load(Ordering::Relaxed);
+                let elapsed = solve_start.elapsed().as_secs_f64();
+
+                let filled = (p * bar_width as f64) as usize;
+                let bar: String = (0..bar_width).map(|i| if i < filled { '#' } else { ' ' }).collect();
+
+                let nodes_str = format_count(nodes_so_far);
+                eprint!("\r\x1b[K[{}] {:.1}%  {}  {:.1}s", bar, pct, nodes_str, elapsed);
+            }
+            eprint!("\r\x1b[K"); // clear progress line
+        });
+
         for _ in 0..num_threads {
             s.spawn(|| {
                 let nodes = Cell::new(0u64);
@@ -733,6 +725,7 @@ fn solve_with_config_parallel_and_mask(
                         &wq,
                         &idle_count,
                         exhaustive,
+                        &progress,
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);
@@ -748,6 +741,7 @@ fn solve_with_config_parallel_and_mask(
                         }
                     }
                 }
+                workers_alive.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });
@@ -763,9 +757,12 @@ fn solve_with_config_parallel_and_mask(
         solution
     });
 
+    let final_progress = f64::from_bits(progress.load(Ordering::Relaxed));
+
     SolveResult {
         solution,
         nodes_visited,
+        progress: final_progress,
     }
 }
 
@@ -1220,21 +1217,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_component_checks() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.component_checks = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "component_checks prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "component_checks should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
     fn test_prune_single_cell_endgame() {
         let configs = small_configs();
         let seeds = test_seeds();
@@ -1434,5 +1416,116 @@ mod tests {
         let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
         verify_solution(&game, result.solution.as_ref().unwrap());
+    }
+
+    // --- Progress indicator tests ---
+    // In exhaustive mode, the parallel solver must explore the entire naive
+    // search space, so progress should sum to exactly 1.0.
+
+    fn assert_progress_complete(result: &SolveResult, label: &str) {
+        let p = result.progress;
+        assert!(
+            (p - 1.0).abs() < 1e-9,
+            "{}: expected progress ≈ 1.0, got {:.15} (diff={:.2e})",
+            label, p, (p - 1.0).abs()
+        );
+    }
+
+    #[test]
+    fn test_progress_exhaustive_trivial_1_piece() {
+        // 3x3, M=2, one 1x1 piece on a board with cell (0,0)=1.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "trivial_1_piece");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_two_pieces() {
+        // 3x3, M=2, two 1x1 pieces.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece, piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "two_pieces");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_no_solution() {
+        // No solution: 3x3, M=3, one 1x1 piece but two cells need hits.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_none());
+        assert_progress_complete(&result, "no_solution");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_multi_cell_pieces() {
+        // 3x3, M=2, mix of multi-cell pieces.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let big = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let small = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![big, small]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "multi_cell_pieces");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_m3() {
+        // 3x3, M=3, three 1x1 pieces: cell (0,0)=1 needs 2 hits, (0,1)=2 needs 1 hit.
+        let grid: &[&[u8]] = &[&[1, 2, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 3);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 3]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "m3");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_generated_levels() {
+        // Test on several generated puzzles to cover diverse piece shapes.
+        use crate::generate::generate_for_level;
+        for (level, seed) in [(1, 42u64), (2, 99), (3, 7), (5, 123)] {
+            let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+            let game = generate_for_level(level, &mut rng).unwrap();
+            let result = solve(&game, true, true);
+            assert!(result.solution.is_some(), "level {} seed {} unsolved", level, seed);
+            assert_progress_complete(&result, &format!("generated_level_{}_seed_{}", level, seed));
+        }
+    }
+
+    #[test]
+    fn test_progress_exhaustive_all_single_cells() {
+        // 3x3, M=2, nine 1x1 pieces on all-1s board (single-cell endgame path).
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 9]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "all_single_cells");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_duplicate_pieces() {
+        // Duplicate pieces trigger skip tables; verify progress still sums to 1.0.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 1, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true, true]]);
+        let game = Game::new(board, vec![piece, piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "duplicate_pieces");
     }
 }

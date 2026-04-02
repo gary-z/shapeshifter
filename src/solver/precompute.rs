@@ -23,22 +23,12 @@ pub(crate) fn build_solver_data(
     let bh = h as usize;
     let bw = w as usize;
 
-    // Precompute board mask (all valid cells).
-    let mut board_mask = Bitboard::ZERO;
-    for r in 0..bh {
-        for c in 0..bw {
-            board_mask.set_bit((r * 15 + c) as u32);
-        }
-    }
-
     // Precompute suffix sums/maxes of piece properties.
     let mut remaining_bits = vec![0u32; n + 1];
-    let mut remaining_perimeter = vec![0u32; n + 1];
     let mut remaining_h_perimeter = vec![0u32; n + 1];
     let mut remaining_v_perimeter = vec![0u32; n + 1];
     for i in (0..n).rev() {
         remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
-        remaining_perimeter[i] = remaining_perimeter[i + 1] + pieces[order[i]].perimeter();
         remaining_h_perimeter[i] = remaining_h_perimeter[i + 1] + pieces[order[i]].h_perimeter();
         remaining_v_perimeter[i] = remaining_v_perimeter[i + 1] + pieces[order[i]].v_perimeter();
     }
@@ -57,12 +47,6 @@ pub(crate) fn build_solver_data(
 
     // Precompute suffix coverage in binary bitboard layers.
     let suffix_coverage = precompute_suffix_coverage(&reaches);
-
-    // Precompute sorted-order perimeters and cell counts for component checks.
-    let sorted_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].perimeter()).collect();
-    let sorted_h_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].h_perimeter()).collect();
-    let sorted_v_perimeters: Vec<u32> = (0..n).map(|i| pieces[order[i]].v_perimeter()).collect();
-    let sorted_cell_counts: Vec<u32> = (0..n).map(|i| pieces[order[i]].cell_count()).collect();
 
     // Build 6 line families: rows, cols, diags, antidiags, zigzag_r, zigzag_l.
     assert!(n < MAX_PIECES, "too many pieces for LineFamily arrays");
@@ -826,15 +810,19 @@ pub(crate) fn build_solver_data(
         bh, bw, m, n, &all_placements, order, pieces,
     );
 
+    // Compute progress weights: fraction of naive search space per placement at each depth.
+    let mut suffix_products = vec![1.0f64; n + 1];
+    for d in (0..n).rev() {
+        suffix_products[d] = suffix_products[d + 1] * all_placements[d].len() as f64;
+    }
+    let total_space = suffix_products[0];
+    let progress_weights: Vec<f64> = (0..n)
+        .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
+        .collect();
+
     SolverData {
         all_placements,
-        reaches,
-        perimeters: sorted_perimeters,
-        h_perimeters: sorted_h_perimeters,
-        v_perimeters: sorted_v_perimeters,
-        cell_counts: sorted_cell_counts,
         remaining_bits,
-        remaining_perimeter,
         remaining_h_perimeter,
         remaining_v_perimeter,
         jagg_h_mask,
@@ -851,7 +839,7 @@ pub(crate) fn build_solver_data(
         parity_partitions: partitions,
         subset_checks,
         weight_tuple_checks,
-        board_mask,
+        progress_weights,
     }
 }
 
