@@ -413,17 +413,27 @@ pub(crate) fn backtrack_stealing(
     let n = data.all_placements.len();
     let base_solution_len = solution.len();
 
+    // Weight of this task's entire subtree in the naive search space.
+    let task_weight = if start_depth < n {
+        data.all_placements[start_depth].len() as f64 * data.progress_weights[start_depth]
+    } else {
+        0.0
+    };
+
     // Check terminal / single-cell endgame before building first frame.
     if start_depth == n {
         return initial_board.is_solved();
     }
     if config.single_cell_endgame && start_depth >= data.single_cell_start {
         let num_remaining = n - start_depth;
-        return solve_single_cells(initial_board, data.m, data.h, data.w, num_remaining, solution);
+        let result = solve_single_cells(initial_board, data.m, data.h, data.w, num_remaining, solution);
+        atomic_add_f64(progress, task_weight);
+        return result;
     }
 
     // Pruning at root.
     if !prune_node(initial_board, data, start_depth, config) {
+        atomic_add_f64(progress, task_weight);
         return false;
     }
 

@@ -32,6 +32,9 @@ pub type Solution = Vec<(usize, usize)>;
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
+    /// Final progress fraction (0.0–1.0) of naive search space explored.
+    /// Only meaningful for parallel solves; 0.0 for serial.
+    pub progress: f64,
 }
 
 /// Configuration controlling which pruning techniques are enabled.
@@ -128,6 +131,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     SolveResult {
         solution: full.solution,
         nodes_visited: full.nodes_visited,
+        progress: full.progress,
     }
 }
 
@@ -237,6 +241,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes,
+                progress: result.progress,
             };
         }
     }
@@ -248,6 +253,7 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes + result.nodes_visited,
+                progress: result.progress,
             };
         }
         total_nodes += result.nodes_visited;
@@ -323,7 +329,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         Some((i, j, ref w)) if w.iter().all(|x| x.is_some()) => {
             (i, j, w.clone())
         }
-        _ => return SolveResult { solution: None, nodes_visited: 0 },
+        _ => return SolveResult { solution: None, nodes_visited: 0, progress: 0.0 },
     };
 
     // Build reduced game: replace pieces[pi] and pieces[pj] with a 1x1 piece.
@@ -362,10 +368,11 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         return SolveResult {
             solution: Some(full_sol),
             nodes_visited: result.nodes_visited,
+            progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
 }
 
 /// Try a specific cancellation combo. Returns SolveResult.
@@ -420,9 +427,9 @@ fn try_cancellation_combo(
                     }
                 }
             }
-            return SolveResult { solution: Some(solution), nodes_visited: 1 };
+            return SolveResult { solution: Some(solution), nodes_visited: 1, progress: 0.0 };
         }
-        return SolveResult { solution: None, nodes_visited: 1 };
+        return SolveResult { solution: None, nodes_visited: 1, progress: 0.0 };
     }
 
     let reduced_pieces: Vec<crate::core::piece::Piece> =
@@ -452,10 +459,11 @@ fn try_cancellation_combo(
         return SolveResult {
             solution: Some(full_solution),
             nodes_visited: result.nodes_visited,
+            progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
 }
 
 
@@ -597,6 +605,7 @@ pub fn solve_with_config_and_mask(
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
+        progress: 0.0,
     }
 }
 
@@ -814,9 +823,12 @@ fn solve_with_config_parallel_and_mask(
         solution
     });
 
+    let final_progress = f64::from_bits(progress.load(Ordering::Relaxed));
+
     SolveResult {
         solution,
         nodes_visited,
+        progress: final_progress,
     }
 }
 
@@ -1485,5 +1497,116 @@ mod tests {
         let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
         verify_solution(&game, result.solution.as_ref().unwrap());
+    }
+
+    // --- Progress indicator tests ---
+    // In exhaustive mode, the parallel solver must explore the entire naive
+    // search space, so progress should sum to exactly 1.0.
+
+    fn assert_progress_complete(result: &SolveResult, label: &str) {
+        let p = result.progress;
+        assert!(
+            (p - 1.0).abs() < 1e-9,
+            "{}: expected progress ≈ 1.0, got {:.15} (diff={:.2e})",
+            label, p, (p - 1.0).abs()
+        );
+    }
+
+    #[test]
+    fn test_progress_exhaustive_trivial_1_piece() {
+        // 3x3, M=2, one 1x1 piece on a board with cell (0,0)=1.
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "trivial_1_piece");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_two_pieces() {
+        // 3x3, M=2, two 1x1 pieces.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece, piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "two_pieces");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_no_solution() {
+        // No solution: 3x3, M=3, one 1x1 piece but two cells need hits.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_none());
+        assert_progress_complete(&result, "no_solution");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_multi_cell_pieces() {
+        // 3x3, M=2, mix of multi-cell pieces.
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let big = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let small = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![big, small]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "multi_cell_pieces");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_m3() {
+        // 3x3, M=3, three 1x1 pieces: cell (0,0)=1 needs 2 hits, (0,1)=2 needs 1 hit.
+        let grid: &[&[u8]] = &[&[1, 2, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 3);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 3]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "m3");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_generated_levels() {
+        // Test on several generated puzzles to cover diverse piece shapes.
+        use crate::generate::generate_for_level;
+        for (level, seed) in [(1, 42u64), (2, 99), (3, 7), (5, 123)] {
+            let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+            let game = generate_for_level(level, &mut rng).unwrap();
+            let result = solve(&game, true, true);
+            assert!(result.solution.is_some(), "level {} seed {} unsolved", level, seed);
+            assert_progress_complete(&result, &format!("generated_level_{}_seed_{}", level, seed));
+        }
+    }
+
+    #[test]
+    fn test_progress_exhaustive_all_single_cells() {
+        // 3x3, M=2, nine 1x1 pieces on all-1s board (single-cell endgame path).
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 9]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "all_single_cells");
+    }
+
+    #[test]
+    fn test_progress_exhaustive_duplicate_pieces() {
+        // Duplicate pieces trigger skip tables; verify progress still sums to 1.0.
+        let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 1, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        let piece = Piece::from_grid(&[&[true, true]]);
+        let game = Game::new(board, vec![piece, piece]);
+        let result = solve(&game, true, true);
+        assert!(result.solution.is_some());
+        assert_progress_complete(&result, "duplicate_pieces");
     }
 }
