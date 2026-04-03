@@ -6,3 +6,4 @@ data/ShapeShifter_files/
 data/puzzle.json
 data/solution.html
 solution.html
+__pycache__/
