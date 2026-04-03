@@ -4,18 +4,14 @@ use crate::core::bitboard::Bitboard;
 pub const MAX_M: usize = 5;
 
 /// Result of split jaggedness computation.
-/// For M<=3: only circular_h/v are meaningful (= binary jaggedness).
-/// For M>=4: circular (symmetric) + directional (asymmetric) are both available.
 pub struct JaggednessResult {
     /// Circular distance h/v: sum of min(|a-b|, M-|a-b|) over adjacent pairs.
     pub circular_h: u32,
     pub circular_v: u32,
     /// Directional (forward) weight h/v: sum of (b-a) mod M over adjacent pairs.
-    /// Only meaningful for M>=4 (set to 0 for M<=3).
     pub forward_h: u32,
     pub forward_v: u32,
     /// Directional (backward) weight h/v: sum of (a-b) mod M over adjacent pairs.
-    /// Only meaningful for M>=4 (set to 0 for M<=3).
     pub backward_h: u32,
     pub backward_v: u32,
 }
@@ -205,35 +201,15 @@ impl Board {
     /// Horizontal = mismatching (r,c)-(r,c+1) pairs. Vertical = (r,c)-(r+1,c) pairs.
     /// Takes precomputed masks to avoid rebuilding them per call.
     ///
-    /// For M>=4, edges are weighted by circular distance min(|a-b|, M-|a-b|)
-    /// instead of binary differ/same. This gives a tighter bound since each
-    /// piece boundary edge can change the weighted distance by at most 1.
-    /// For M<=3 all distinct pairs have distance 1, so weighted = binary.
+    /// Edges are weighted by circular distance min(|a-b|, M-|a-b|).
+    /// For M<=3 all distinct pairs have distance 1, so this equals binary.
     ///
-    /// Pairs at the same circular distance produce disjoint bitboards (each cell
-    /// is in exactly one plane), so we OR them and do one popcount per weight
-    /// group — reducing popcounts from M*(M-1) to floor(M/2) per direction.
+    /// Directional (forward/backward) distances are also computed.
+    /// Forward = (b-a) mod M per pair. The bound 2*forward <= M*perimeter is
+    /// strictly tighter than circular when adjacencies are direction-biased.
     #[inline(always)]
-    pub fn split_jaggedness(&self, h_mask: Bitboard, h_total: u32, v_mask: Bitboard, v_total: u32) -> JaggednessResult {
+    pub fn split_jaggedness(&self, h_mask: Bitboard, v_mask: Bitboard) -> JaggednessResult {
         let m = self.m as usize;
-        if m <= 3 {
-            // Fast path: for M<=3, all distinct-value pairs have circular distance 1.
-            let mut h_matching = 0u32;
-            let mut v_matching = 0u32;
-            for d in 0..m {
-                let p = self.planes[d];
-                h_matching += (p & (p >> 1) & h_mask).count_ones();
-                v_matching += (p & (p >> 15) & v_mask).count_ones();
-            }
-            return JaggednessResult {
-                circular_h: h_total - h_matching,
-                circular_v: v_total - v_matching,
-                forward_h: 0, forward_v: 0,
-                backward_h: 0, backward_v: 0,
-            };
-        }
-        // Weighted path for M>=4: circular + directional in one pass.
-        // Each popcount result feeds both circular and forward/backward accumulators.
         let mut sh = [Bitboard::ZERO; 5]; // M <= 5
         let mut sv = [Bitboard::ZERO; 5];
         for d in 0..m {
@@ -294,9 +270,7 @@ impl Board {
             }
         }
 
-        let total_h = h_mask.count_ones();
-        let total_v = v_mask.count_ones();
-        let result = self.split_jaggedness(h_mask, total_h, v_mask, total_v);
+        let result = self.split_jaggedness(h_mask, v_mask);
         result.circular_h + result.circular_v
     }
 
