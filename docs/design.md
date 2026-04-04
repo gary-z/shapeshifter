@@ -21,7 +21,7 @@ Maximum bit index: 13×15 + 13 = 208, well within 256 bits.
 The full board state is represented as `M` bitboards (one per digit value, max 5). For digit `d`, the bitboard has bit `(r,c)` set iff `board[r][c] == d`. These are mutually exclusive — each cell appears in exactly one plane.
 
 The board caches two derived values, maintained incrementally during apply/undo:
-- **min_flips**: minimum total cell-increments needed to solve = `sum_{d=1}^{M-1} (M-d) * popcount(planes[d])`
+- **total_deficit**: sum of per-cell hits still needed to solve = `sum_{d=1}^{M-1} (M-d) * popcount(planes[d])`
 - **active_planes**: count of non-zero planes with any bits set
 
 ### Piece Representation
@@ -37,12 +37,12 @@ Pieces are sorted by: fewest placements → highest perimeter → largest area �
 ### 2. Duplicate piece symmetry breaking
 When consecutive pieces in the sorted order have the same shape, we enforce that each duplicate's placement index is ≥ the previous duplicate's. This eliminates redundant permutations. With ~22 out of 36 pieces being duplicates at level 100 (in ~6 groups of up to 12), this prunes enormous amounts of the search tree.
 
-### 3. Min-flips pruning
-At each node, if the total popcount of remaining pieces is less than `min_flips`, prune. The board's `min_flips` is maintained incrementally in O(1):
-- **apply**: `delta = M * popcount(plane[0] & mask) - popcount(mask)`
+### 3. Total-deficit pruning
+At each node, if the total popcount of remaining pieces is less than `total_deficit`, prune. The board's `total_deficit` is maintained incrementally in O(1):
+- **apply**: `delta = M * popcount(plane[0] & mask) - popcount(mask)` (hitting deficit-0 cells incurs M-1 penalty each; all others reduce deficit by 1)
 - **undo**: `delta = popcount(mask) - M * popcount(plane[1] & mask)`
 
-Note: `(remaining_bits - min_flips) % M` is an invariant (changes by `-M * zeros_hit` per placement, which is 0 mod M). So the modular check only needs to be done once at the root to validate input, not per-node.
+Note: `(remaining_bits - total_deficit) % M` is an invariant (changes by `-M * zeros_hit` per placement, which is 0 mod M). So the modular check only needs to be done once at the root to validate input, not per-node.
 
 ### 4. Active planes pruning
 Each piece placement can reduce the number of active (non-zero) planes by at most 1. If `active_planes > remaining_pieces`, prune.
@@ -50,7 +50,7 @@ Each piece placement can reduce the number of active (non-zero) planes by at mos
 ### 5. Per-cell coverage pruning
 For each piece, precompute its "reach" — the union of all cells it can cover across all valid placements. Suffix coverage counts are stored as 6-layer binary bitboard counters (`CoverageCounter`), enabling O(1) parallel threshold checks across all cells.
 
-At each node, for each non-zero plane d, check that every cell in that plane has coverage ≥ `(M-d)` among remaining pieces. A single bitwise operation per threshold: `(plane[d] & !coverage_ge(M-d)).is_zero()`.
+At each node, for each non-zero plane d, check that every cell in that plane has coverage ≥ `d` (its deficit) among remaining pieces. A single bitwise operation per threshold: `(plane[d] & !coverage_ge(M-d)).is_zero()`.
 
 This subsumes unreachable-cell detection (coverage < 1).
 
@@ -62,10 +62,10 @@ Therefore: `jaggedness(board) <= sum(perimeter(remaining_pieces))`. If violated,
 Computed efficiently with bitboards: matching pairs = `sum_d popcount(plane[d] & (plane[d] >> 1))` for horizontal + `>> 15` for vertical. Piece perimeters use the same trick: `cells*4 - 2 * (popcount(shape & (shape >> 1)) + popcount(shape & (shape >> 15)))`.
 
 ### 7. Cell locking
-Cells at 0 where `coverage < M` among remaining pieces can never wrap back to 0 if touched. All placements overlapping these cells are filtered out. Computed as `board.plane(0) & !coverage_ge(M)` — a single bitwise operation.
+Cells at deficit 0 where `coverage < M` among remaining pieces can't absorb overshoot if touched (deficit 0 → M-1 requires M-1 more hits). All placements overlapping these cells are filtered out. Computed as `board.plane(0) & !coverage_ge(M)` — a single bitwise operation.
 
 ### 8. 1x1 endgame
-When all remaining pieces are single-cell (sorted last due to having the most placements), solve directly: each non-zero cell at value d gets `(M-d)` pieces assigned. O(cells), no search. Eliminates ~3–6 trailing levels of backtracking per search path.
+When all remaining pieces are single-cell (sorted last due to having the most placements), solve directly: each non-zero cell at deficit d gets `d` pieces assigned. O(cells), no search. Eliminates ~3–6 trailing levels of backtracking per search path.
 
 ## Performance
 
@@ -91,7 +91,7 @@ Higher M paradoxically helps: more digit states mean more constraints and tighte
 ### Dynamic piece reordering
 At each node, pick the piece with fewest surviving placements (after lock filtering). Requires remaining-set bitmask instead of fixed order. **Rejected:** loses duplicate symmetry breaking, which is far more valuable (~22/36 pieces are duplicates at level 100). Net negative.
 
-### Move ordering by min_flips delta
+### Move ordering by deficit delta
 Sort placements within each piece by `popcount(plane[0] & mask)` (fewest zero-cells touched first). **Rejected:** greedy heuristic helped some seeds but hurt others. Sorting overhead per node added up. Net neutral to slightly negative.
 
 ### Lock propagation to fixed point

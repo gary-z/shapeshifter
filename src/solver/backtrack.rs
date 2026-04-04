@@ -8,7 +8,7 @@ use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
 /// Try to solve remaining pieces when they're all 1x1.
-/// Each cell at value d needs (M-d)%M hits. Total hits must equal number of pieces.
+/// Each cell at deficit d needs d more hits to reach 0. Total hits must equal number of pieces.
 /// Returns true and fills solution if solvable.
 pub(crate) fn solve_single_cells(
     board: &Board,
@@ -18,7 +18,7 @@ pub(crate) fn solve_single_cells(
     num_pieces: usize,
     solution: &mut Vec<(usize, usize)>,
 ) -> bool {
-    // Count total hits needed and verify it matches available pieces.
+    // Count total deficit remaining and verify it matches available pieces.
     let mut needed = 0u32;
     for d in 1..m {
         needed += (m - d) as u32 * board.plane(d).count_ones();
@@ -27,15 +27,15 @@ pub(crate) fn solve_single_cells(
         return false;
     }
 
-    // Assign pieces to cells: for each non-zero cell, emit (M-d) placements.
+    // Assign pieces to cells: for each non-zero cell, emit (deficit) placements.
     // Process cells in row-major order.
     let base_len = solution.len();
     for r in 0..h as usize {
         for c in 0..w as usize {
             let val = board.get(r, c);
             if val != 0 {
-                let hits = (m - val) as usize;
-                for _ in 0..hits {
+                let deficit = (m - val) as usize;
+                for _ in 0..deficit {
                     solution.push((r, c));
                 }
             }
@@ -82,7 +82,7 @@ macro_rules! define_backtrack {
 
             if !prune_node(board, data, piece_idx, config) { return false; }
 
-            // Compute locked mask: cells at 0 where remaining coverage < M.
+            // Compute locked mask: cells at deficit 0 where remaining coverage < M (can't absorb overshoot).
             let locked_mask = if config.cell_locking {
                 board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
             } else {
@@ -91,7 +91,7 @@ macro_rules! define_backtrack {
 
             let placements = &data.all_placements[piece_idx];
 
-            // Order placements by zeros hit ascending using counting sort.
+            // Order placements by zero-deficit cells hit ascending using counting sort.
             // Keys are small (0..=max_piece_area), so O(n) bucket sort beats O(n^2) insertion sort.
             let zero_plane = board.plane(0);
             let pl_len = placements.len();

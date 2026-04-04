@@ -57,8 +57,8 @@ impl Game {
         self.all_placed() && self.board.is_solved()
     }
 
-    /// Place the next piece at the given position. Advances the piece pointer.
-    /// Panics if all pieces have already been placed.
+    /// Place the next piece at the given position, decrementing covered cells' deficits.
+    /// Advances the piece pointer. Panics if all pieces have already been placed.
     pub fn place_next(&mut self, row: usize, col: usize) {
         let piece = self.pieces[self.next];
         let mask = piece.placed_at(row, col);
@@ -66,7 +66,7 @@ impl Game {
         self.next += 1;
     }
 
-    /// Undo the last placed piece at the given position. Rewinds the piece pointer.
+    /// Undo the last placed piece, restoring covered cells' deficits. Rewinds the piece pointer.
     /// Panics if no pieces have been placed.
     pub fn undo_last(&mut self, row: usize, col: usize) {
         assert!(self.next > 0, "no pieces to undo");
