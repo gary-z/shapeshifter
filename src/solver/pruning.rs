@@ -96,7 +96,7 @@ pub(crate) struct ParityPartition {
 
 
 /// Weight-tuple reachability for a set of disjoint cell groups.
-/// Each group's "weight" = Σ (M-d) for non-zero cells. The DP tracks which
+/// Each group's "weight" = Σ d for non-zero cells. The DP tracks which
 /// weight-tuples are achievable by remaining pieces. Transitions are
 /// over-approximated: for each placement, we allow all weight changes
 /// consistent with the group's current weight (since we don't know which

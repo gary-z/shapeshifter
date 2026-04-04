@@ -45,8 +45,8 @@ def parse_shapeshifter_html(html: str) -> dict:
     # Parse the icon cycle from around the GOAL marker.
     # The display shows: icon_1 -> GOAL_icon -> icon_3 -> ...
     # The GOAL icon = deficit 0 (already solved). Each placement advances a cell
-    # one step in the cycle, but in deficit terms this means the icon at offset k
-    # from GOAL needs (M - k) % M hits to return to GOAL, so deficit = (M - k) % M.
+    # one step in the cycle. The icon at offset k from GOAL in the cycle needs
+    # (M - k) % M hits to return to GOAL, so its deficit = (M - k) % M.
     # The icons around GOAL: [..., deficit=1, GOAL=0, deficit=M-1, ...]
     # Find the goal cycle table: it contains the GOAL text and arrow icons.
     # Search backwards from GOAL to find the enclosing table.

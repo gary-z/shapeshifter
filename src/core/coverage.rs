@@ -125,7 +125,7 @@ pub fn has_sufficient_coverage(
         if plane.is_zero() {
             continue;
         }
-        let needed = m - d as u8;
+        let needed = d as u8;
         let ge = coverage.coverage_ge(needed);
         // Any cell in this plane NOT covered enough times?
         if !(plane & !ge).is_zero() {
