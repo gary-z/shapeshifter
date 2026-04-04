@@ -7,7 +7,7 @@ use crate::core::piece::Piece;
 
 /// The 75 piece shapes used by the real Shapeshifter game, extracted from
 /// puzzle_history.jsonl. Each entry is (height, width, flat grid of bools).
-const SHAPE_CATALOG: [(u8, u8, &[bool]); 75] = [
+pub const SHAPE_CATALOG: [(u8, u8, &[bool]); 75] = [
     // 1 cell
     (1, 1, &[true]),
     // 2 cells

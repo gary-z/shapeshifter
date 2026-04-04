@@ -6,3 +6,4 @@ pub mod generate;
 pub mod level;
 pub mod puzzle;
 pub mod solver;
+pub mod subgame;
