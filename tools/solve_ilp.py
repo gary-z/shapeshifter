@@ -2,7 +2,9 @@
 """Solve a Shapeshifter puzzle using Integer Linear Programming (PuLP).
 
 Based on the approach by juvian: formulate piece placement as an ILP where
-each cell's total (initial value + piece hits) must be 0 mod M.
+each cell's deficit is reduced to zero. A cell with value v has deficit
+(M - v) % M; each piece hit decrements the deficit by 1. Equivalently,
+(initial value + total hits) must be 0 mod M.
 
 Usage: python3 tools/solve_ilp.py data/puzzle.json
 """
@@ -47,7 +49,7 @@ def solve_ilp(puzzle_path):
             for j in range(len(placements[i]))]
            for i in range(len(pieces))]
 
-    # board_val[r][c] = total value at cell (initial + piece hits).
+    # board_val[r][c] = initial value + piece hits (must be 0 mod M to zero the deficit).
     board_val = [[LpVariable(f"bv_{r}_{c}", 0, len(pieces) + modulo, cat="Integer")
                   for c in range(cols)]
                  for r in range(rows)]
@@ -61,10 +63,12 @@ def solve_ilp(puzzle_path):
     prob += 0  # No objective — just satisfying constraints.
 
     # Build per-cell contribution lists.
+    # Each cell starts at its initial value; piece hits add to it.
+    # The cell is solved (deficit = 0) when the total is 0 mod M.
     cell_terms = [[[] for _ in range(cols)] for _ in range(rows)]
     for r in range(rows):
         for c in range(cols):
-            cell_terms[r][c].append(board[r][c])  # Initial value.
+            cell_terms[r][c].append(board[r][c])
 
     for i, piece in enumerate(pieces):
         ph = len(piece)
@@ -84,7 +88,7 @@ def solve_ilp(puzzle_path):
             prob += board_val[r][c] == mult[r][c] * modulo
 
     # --- Parity partition cuts ---
-    # For each parity group, total hits on that group must be ≡ target (mod M).
+    # For each parity group, total hits must reduce the group's total deficit to 0 mod M.
     # These are cheap (2-6 constraints) and cut fractional LP solutions.
     partitions = [
         ("checker", lambda r, c: (r + c) % 2 == 0),
@@ -92,7 +96,7 @@ def solve_ilp(puzzle_path):
         ("even_col", lambda r, c: c % 2 == 0),
     ]
     for pname, pfunc in partitions:
-        # Target: sum of (M - board[r][c]) % M for cells in this group.
+        # Target: total deficit for cells in this group = sum of (M - board[r][c]) % M.
         group_target = sum((modulo - board[r][c]) % modulo
                           for r in range(rows) for c in range(cols) if pfunc(r, c))
         # Hits on this group from each placement.
