@@ -1,6 +1,8 @@
 use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
 use crate::core::coverage::precompute_suffix_coverage;
 use crate::core::piece::Piece;
+use crate::subgame::data::SubgameData;
 
 use super::pruning::*;
 use super::SolverData;
@@ -8,8 +10,9 @@ use super::SolverData;
 /// Build all precomputed data needed by the backtracking solver.
 ///
 /// This includes: suffix sums, line family construction, jaggedness masks,
-/// parity partitions, subset reachability.
+/// parity partitions, subset reachability, and subgame data.
 pub(crate) fn build_solver_data(
+    board: &Board,
     pieces: &[Piece],
     order: &[usize],
     all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
@@ -817,6 +820,9 @@ pub(crate) fn build_solver_data(
         .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
         .collect();
 
+    // Build subgame data: row/col profiles and shifted lookup tables.
+    let subgame_data = SubgameData::build(board, pieces, order);
+
     SolverData {
         all_placements,
         remaining_bits,
@@ -835,6 +841,7 @@ pub(crate) fn build_solver_data(
         subset_checks,
         weight_tuple_checks,
         progress_weights,
+        subgame_data,
     }
 }
 

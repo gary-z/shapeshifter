@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use crate::core::bitboard::Bitboard;
 use crate::core::coverage::CoverageCounter;
 use crate::game::Game;
+use crate::subgame::data::SubgameData;
 
 use pruning::*;
 
@@ -110,6 +111,9 @@ pub(crate) struct SolverData {
     /// represented by one placement at that depth.
     /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
     pub(crate) progress_weights: Vec<f64>,
+    /// Precomputed subgame data: row/col profiles, shifted profiles, initial
+    /// subgame boards. Ready for subgame pruning integration.
+    pub(crate) subgame_data: SubgameData,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.
@@ -517,6 +521,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let m = board.m();
 
     let data = precompute::build_solver_data(
+        &board,
         pieces,
         &order,
         all_placements,
@@ -622,6 +627,7 @@ fn solve_with_config_parallel(
     // Build solver data first -- we need it for pruning during combo enumeration.
     let t0 = std::time::Instant::now();
     let data = precompute::build_solver_data(
+        &board,
         pieces,
         &order,
         all_placements,
