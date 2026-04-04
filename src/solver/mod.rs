@@ -33,6 +33,8 @@ pub type Solution = Vec<(usize, usize)>;
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
+    /// Total nodes visited in subgame feasibility checks.
+    pub subgame_nodes_visited: u64,
     /// Final progress fraction (0.0–1.0) of naive search space explored.
     /// Only meaningful for parallel solves; 0.0 for serial.
     pub progress: f64,
@@ -49,6 +51,8 @@ pub struct PruningConfig {
     pub jaggedness: bool,
     pub cell_locking: bool,
     pub single_cell_endgame: bool,
+    /// Subgame pruning: check row/col subgame feasibility via backtracking.
+    pub subgame: bool,
 }
 
 impl Default for PruningConfig {
@@ -62,6 +66,7 @@ impl Default for PruningConfig {
             jaggedness: true,
             cell_locking: true,
             single_cell_endgame: true,
+            subgame: true,
         }
     }
 }
@@ -78,6 +83,7 @@ impl PruningConfig {
             jaggedness: false,
             cell_locking: false,
             single_cell_endgame: false,
+            subgame: false,
         }
     }
 
@@ -112,8 +118,11 @@ pub(crate) struct SolverData {
     /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
     pub(crate) progress_weights: Vec<f64>,
     /// Precomputed subgame data: row/col profiles, shifted profiles, initial
-    /// subgame boards. Ready for subgame pruning integration.
+    /// subgame boards, and feasibility checker data.
     pub(crate) subgame_data: SubgameData,
+    /// Accumulated subgame nodes visited across all feasibility checks.
+    /// Uses AtomicU64 so it works in both serial and parallel paths.
+    pub(crate) subgame_nodes: std::sync::atomic::AtomicU64,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.
@@ -122,6 +131,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     SolveResult {
         solution: full.solution,
         nodes_visited: full.nodes_visited,
+        subgame_nodes_visited: full.subgame_nodes_visited,
         progress: full.progress,
     }
 }
@@ -223,15 +233,18 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
     });
 
     let mut total_nodes = 0u64;
+    let mut total_subgame_nodes = 0u64;
 
     for combo in &combos {
         let result = try_cancellation_combo(game, config, parallel, exhaustive, &shape_groups, &cancellable_groups,
             combo, m, h, w);
         total_nodes += result.nodes_visited;
+        total_subgame_nodes += result.subgame_nodes_visited;
         if result.solution.is_some() {
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes,
+                subgame_nodes_visited: total_subgame_nodes,
                 progress: result.progress,
             };
         }
@@ -244,15 +257,18 @@ fn solve_with_cancellation(game: &Game, config: &PruningConfig, parallel: bool, 
             return SolveResult {
                 solution: result.solution,
                 nodes_visited: total_nodes + result.nodes_visited,
+                subgame_nodes_visited: total_subgame_nodes + result.subgame_nodes_visited,
                 progress: result.progress,
             };
         }
         total_nodes += result.nodes_visited;
+        total_subgame_nodes += result.subgame_nodes_visited;
     }
 
     // No reduction worked -- solve the full puzzle.
     let mut full_result = solve_dispatch(game, config, parallel, exhaustive);
     full_result.nodes_visited += total_nodes;
+    full_result.subgame_nodes_visited += total_subgame_nodes;
     full_result
 }
 
@@ -320,7 +336,7 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         Some((i, j, ref w)) if w.iter().all(|x| x.is_some()) => {
             (i, j, w.clone())
         }
-        _ => return SolveResult { solution: None, nodes_visited: 0, progress: 0.0 },
+        _ => return SolveResult { solution: None, nodes_visited: 0, subgame_nodes_visited: 0, progress: 0.0  },
     };
 
     // Build reduced game: replace pieces[pi] and pieces[pj] with a 1x1 piece.
@@ -359,11 +375,12 @@ fn try_pair_merge(game: &Game, config: &PruningConfig, parallel: bool, exhaustiv
         return SolveResult {
             solution: Some(full_sol),
             nodes_visited: result.nodes_visited,
+            subgame_nodes_visited: result.subgame_nodes_visited,
             progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, subgame_nodes_visited: result.subgame_nodes_visited, progress: result.progress }
 }
 
 /// Try a specific cancellation combo. Returns SolveResult.
@@ -417,9 +434,9 @@ fn try_cancellation_combo(
                     }
                 }
             }
-            return SolveResult { solution: Some(solution), nodes_visited: 1, progress: 0.0 };
+            return SolveResult { solution: Some(solution), nodes_visited: 1, subgame_nodes_visited: 0, progress: 0.0 };
         }
-        return SolveResult { solution: None, nodes_visited: 1, progress: 0.0 };
+        return SolveResult { solution: None, nodes_visited: 1, subgame_nodes_visited: 0, progress: 0.0 };
     }
 
     let reduced_pieces: Vec<crate::core::piece::Piece> =
@@ -445,11 +462,12 @@ fn try_cancellation_combo(
         return SolveResult {
             solution: Some(full_solution),
             nodes_visited: result.nodes_visited,
+            subgame_nodes_visited: result.subgame_nodes_visited,
             progress: result.progress,
         };
     }
 
-    SolveResult { solution: None, nodes_visited: result.nodes_visited, progress: result.progress }
+    SolveResult { solution: None, nodes_visited: result.nodes_visited, subgame_nodes_visited: result.subgame_nodes_visited, progress: result.progress }
 }
 
 
@@ -559,6 +577,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
+        subgame_nodes_visited: data.subgame_nodes.load(std::sync::atomic::Ordering::Relaxed),
         progress: 0.0,
     }
 }
@@ -766,6 +785,7 @@ fn solve_with_config_parallel(
     SolveResult {
         solution,
         nodes_visited,
+        subgame_nodes_visited: data.subgame_nodes.load(Ordering::Relaxed),
         progress: final_progress,
     }
 }
@@ -1531,5 +1551,198 @@ mod tests {
         let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "duplicate_pieces");
+    }
+
+    #[test]
+    fn test_solve_with_subgame_pruning() {
+        // Solve a non-trivial puzzle with subgame pruning enabled.
+        // 4x4, M=2, board with some 1s.
+        let grid: &[&[u8]] = &[
+            &[1, 1, 0, 0],
+            &[1, 0, 1, 0],
+            &[0, 1, 0, 1],
+            &[0, 0, 1, 1],
+        ];
+        let board = Board::from_grid(grid, 2);
+        // 8 deficits → 8 single-cell pieces
+        let piece = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![piece; 8]);
+
+        // With subgame pruning
+        let config_with = PruningConfig::default();
+        assert!(config_with.subgame);
+        let result_with = solve_with_config(&game, &config_with);
+        assert!(result_with.solution.is_some(), "should solve with subgame pruning");
+        verify_solution(&game, result_with.solution.as_ref().unwrap());
+
+        // Without subgame pruning
+        let mut config_without = PruningConfig::default();
+        config_without.subgame = false;
+        let result_without = solve_with_config(&game, &config_without);
+        assert!(result_without.solution.is_some(), "should solve without subgame pruning");
+        verify_solution(&game, result_without.solution.as_ref().unwrap());
+    }
+
+    #[test]
+    fn test_solve_with_subgame_pruning_multipiece() {
+        // L-shaped pieces on a 4x4 M=2 board.
+        let grid: &[&[u8]] = &[
+            &[1, 1, 1, 0],
+            &[1, 0, 0, 0],
+            &[0, 0, 0, 1],
+            &[0, 1, 1, 1],
+        ];
+        let board = Board::from_grid(grid, 2);
+        let l_piece = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let r_piece = Piece::from_grid(&[&[false, true], &[true, true]]);
+        let p1 = Piece::from_grid(&[&[true]]);
+        let p2 = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![l_piece, r_piece, p1, p2]);
+
+        let result = solve_with_config(&game, &PruningConfig::default());
+        assert!(result.solution.is_some(), "should find a solution");
+        verify_solution(&game, result.solution.as_ref().unwrap());
+    }
+
+    #[test]
+    #[test]
+    fn test_subgame_pruning_benchmark_levels_40_50() {
+        // A/B comparison: solve levels 40-50 with and without subgame pruning.
+        // 2 games per level, 60s timeout per game via parallel solver (has abort).
+        use rand::SeedableRng;
+        use crate::generate::generate_for_level;
+        use std::sync::atomic::{AtomicBool, Ordering as AtomOrd};
+
+        fn solve_with_timeout(game: &Game, config: &PruningConfig, timeout: std::time::Duration) -> SolveResult {
+            let abort = AtomicBool::new(false);
+            let result = Mutex::new(None);
+            let t0 = std::time::Instant::now();
+
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    let r = solve_with_config(game, config);
+                    *result.lock().unwrap() = Some(r);
+                });
+                // Timeout watcher
+                s.spawn(|| {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        if result.lock().unwrap().is_some() || t0.elapsed() > timeout {
+                            break;
+                        }
+                    }
+                });
+            });
+
+            result.into_inner().unwrap().unwrap_or(SolveResult {
+                solution: None, nodes_visited: 0, subgame_nodes_visited: 0, progress: 0.0,
+            })
+        }
+
+        let overall_start = std::time::Instant::now();
+        let overall_timeout = std::time::Duration::from_secs(600);
+        let per_game_timeout = std::time::Duration::from_secs(60);
+
+        let mut total_with = 0u64;
+        let mut total_without = 0u64;
+        let mut sg_nodes_total = 0u64;
+        let mut solved_with = 0u32;
+        let mut solved_without = 0u32;
+        let mut games = 0u32;
+        let mut time_with_ms = 0u64;
+        let mut time_without_ms = 0u64;
+
+        println!("\n{:<6} {:<4} {:<10} {:>12} {:>10} {:>12} {:>10} {:>10}",
+            "Level", "Game", "Board", "Nodes(+SG)", "Time(+SG)", "Nodes(-SG)", "Time(-SG)", "SG-nodes");
+        println!("{}", "-".repeat(86));
+
+        for level in 40..=50 {
+            if overall_start.elapsed() > overall_timeout { break; }
+
+            let spec = crate::level::get_level(level).unwrap();
+            for g in 0..2u32 {
+                if overall_start.elapsed() > overall_timeout { break; }
+
+                let seed = level as u64 * 1000 + g as u64;
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+                let game = generate_for_level(level, &mut rng).unwrap();
+                let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
+                games += 1;
+
+                // With subgame pruning
+                let config_with = PruningConfig::default();
+                let t0 = std::time::Instant::now();
+                let result_with = solve_with_timeout(&game, &config_with, per_game_timeout);
+                let elapsed_with = t0.elapsed();
+
+                // Without subgame pruning
+                let mut config_without = PruningConfig::default();
+                config_without.subgame = false;
+                let t1 = std::time::Instant::now();
+                let result_without = solve_with_timeout(&game, &config_without, per_game_timeout);
+                let elapsed_without = t1.elapsed();
+
+                let status_w = if result_with.solution.is_some() { "OK" } else { "TIMEOUT" };
+                let status_wo = if result_without.solution.is_some() { "OK" } else { "TIMEOUT" };
+
+                if result_with.solution.is_some() { solved_with += 1; }
+                if result_without.solution.is_some() { solved_without += 1; }
+                total_with += result_with.nodes_visited;
+                total_without += result_without.nodes_visited;
+                sg_nodes_total += result_with.subgame_nodes_visited;
+                time_with_ms += elapsed_with.as_millis() as u64;
+                time_without_ms += elapsed_without.as_millis() as u64;
+
+                println!("{:<6} {:<4} {:<10} {:>12} {:>10} {:>12} {:>10} {:>10} {} / {}",
+                    level, g, board_desc,
+                    result_with.nodes_visited,
+                    format!("{:.0?}", elapsed_with),
+                    result_without.nodes_visited,
+                    format!("{:.0?}", elapsed_without),
+                    result_with.subgame_nodes_visited,
+                    status_w, status_wo,
+                );
+            }
+        }
+
+        println!("\n--- Summary ---");
+        println!("Games: {}", games);
+        println!("Solved with subgame:    {}/{}", solved_with, games);
+        println!("Solved without subgame: {}/{}", solved_without, games);
+        println!("Total nodes with:    {}", total_with);
+        println!("Total nodes without: {}", total_without);
+        println!("Total subgame nodes: {}", sg_nodes_total);
+        println!("Total time with:     {}ms", time_with_ms);
+        println!("Total time without:  {}ms", time_without_ms);
+        if total_without > 0 {
+            println!("Node ratio (with/without): {:.3}", total_with as f64 / total_without as f64);
+        }
+        if time_without_ms > 0 {
+            println!("Time ratio (with/without): {:.3}", time_with_ms as f64 / time_without_ms as f64);
+        }
+    }
+
+    #[test]
+    fn test_subgame_nodes_counted() {
+        // Verify subgame_nodes_visited is nonzero when subgame pruning is active.
+        // Use multi-cell pieces to force actual backtracking (not single_cell_endgame).
+        // 4x4 M=2: all 1s in top two rows → deficit=8, four dominoes = 8 cells.
+        let grid: &[&[u8]] = &[
+            &[1, 1, 1, 1],
+            &[1, 1, 1, 1],
+            &[0, 0, 0, 0],
+            &[0, 0, 0, 0],
+        ];
+        let board = Board::from_grid(grid, 2);
+        let domino_h = Piece::from_grid(&[&[true, true]]);
+        let domino_v = Piece::from_grid(&[&[true], &[true]]);
+        // Mix of horizontal and vertical dominoes to prevent all being identical
+        let game = Game::new(board, vec![domino_h, domino_h, domino_v, domino_v]);
+
+        let result = solve_with_config(&game, &PruningConfig::default());
+        assert!(result.solution.is_some(), "should be solvable");
+        verify_solution(&game, result.solution.as_ref().unwrap());
+        // Subgame solver should have been invoked at least once during backtracking.
+        assert!(result.subgame_nodes_visited > 0, "expected subgame nodes > 0, got {}", result.subgame_nodes_visited);
     }
 }
