@@ -21,7 +21,7 @@ Maximum bit index: 13×15 + 13 = 208, well within 256 bits.
 The full board state is represented as `M` bitboards (one per digit value, max 5). For digit `d`, the bitboard has bit `(r,c)` set iff `board[r][c] == d`. These are mutually exclusive — each cell appears in exactly one plane.
 
 The board caches two derived values, maintained incrementally during apply/undo:
-- **total_deficit**: sum of per-cell hits still needed to solve = `sum_{d=1}^{M-1} (M-d) * popcount(planes[d])`
+- **total_deficit**: sum of per-cell hits still needed to solve = `sum_{d=1}^{M-1} d * popcount(planes[d])`
 - **active_planes**: count of non-zero planes with any bits set
 
 ### Piece Representation
@@ -40,7 +40,7 @@ When consecutive pieces in the sorted order have the same shape, we enforce that
 ### 3. Total-deficit pruning
 At each node, if the total popcount of remaining pieces is less than `total_deficit`, prune. The board's `total_deficit` is maintained incrementally in O(1):
 - **apply**: `delta = M * popcount(plane[0] & mask) - popcount(mask)` (hitting deficit-0 cells incurs M-1 penalty each; all others reduce deficit by 1)
-- **undo**: `delta = popcount(mask) - M * popcount(plane[1] & mask)`
+- **undo**: `delta = popcount(mask) - M * popcount(plane[M-1] & mask)`
 
 Note: `(remaining_bits - total_deficit) % M` is an invariant (changes by `-M * zeros_hit` per placement, which is 0 mod M). So the modular check only needs to be done once at the root to validate input, not per-node.
 
@@ -50,7 +50,7 @@ Each piece placement can reduce the number of active (non-zero) planes by at mos
 ### 5. Per-cell coverage pruning
 For each piece, precompute its "reach" — the union of all cells it can cover across all valid placements. Suffix coverage counts are stored as 6-layer binary bitboard counters (`CoverageCounter`), enabling O(1) parallel threshold checks across all cells.
 
-At each node, for each non-zero plane d, check that every cell in that plane has coverage ≥ `d` (its deficit) among remaining pieces. A single bitwise operation per threshold: `(plane[d] & !coverage_ge(M-d)).is_zero()`.
+At each node, for each non-zero plane d, check that every cell in that plane has coverage ≥ `d` (its deficit) among remaining pieces. A single bitwise operation per threshold: `(plane[d] & !coverage_ge(d)).is_zero()`.
 
 This subsumes unreachable-cell detection (coverage < 1).
 

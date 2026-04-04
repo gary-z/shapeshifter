@@ -44,9 +44,10 @@ def parse_shapeshifter_html(html: str) -> dict:
 
     # Parse the icon cycle from around the GOAL marker.
     # The display shows: icon_1 -> GOAL_icon -> icon_3 -> ...
-    # The GOAL icon = value 0 (deficit 0, already solved). Each placement decrements
-    # a cell's deficit by 1 mod M, cycling it to the next icon in the chain.
-    # The icons around GOAL: [..., val=M-1, GOAL=0, val=1, ...]
+    # The GOAL icon = deficit 0 (already solved). Each placement advances a cell
+    # one step in the cycle, but in deficit terms this means the icon at offset k
+    # from GOAL needs (M - k) % M hits to return to GOAL, so deficit = (M - k) % M.
+    # The icons around GOAL: [..., deficit=1, GOAL=0, deficit=M-1, ...]
     # Find the goal cycle table: it contains the GOAL text and arrow icons.
     # Search backwards from GOAL to find the enclosing table.
     goal_pos = html.find('GOAL')
@@ -79,12 +80,12 @@ def parse_shapeshifter_html(html: str) -> dict:
         m = len(cycle_icons)
         # Find goal_icon position in cycle
         goal_pos = cycle_icons.index(goal_icon)
-        # Build mapping: starting from GOAL position, assign values 0, 1, 2, ...
+        # Build mapping: GOAL = deficit 0; icon at offset k from GOAL = deficit (M-k)%M
         icon_to_val = {}
         for offset in range(m):
             idx = (goal_pos + offset) % m
             icon = cycle_icons[idx]
-            icon_to_val[icon] = offset
+            icon_to_val[icon] = (m - offset) % m
     else:
         sorted_icons = sorted(icons)
         m = len(sorted_icons)
@@ -155,7 +156,7 @@ def parse_shapeshifter_html(html: str) -> dict:
         next_shapes = parse_shape_tables(next_section)
         pieces.extend(next_shapes)
 
-    # Build icon list ordered by value: icons[0] = goal icon, icons[1] = next, etc.
+    # Build icon list ordered by deficit: icons[0] = goal icon, icons[d] = icon at deficit d.
     icon_list = [""] * m
     for icon, val in icon_to_val.items():
         icon_list[val] = icon

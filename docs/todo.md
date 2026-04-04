@@ -7,7 +7,7 @@ If any cell has value d > 0 but no remaining piece placement can cover it, prune
 Subsumed by #2.
 
 ### 2. Insufficient coverage pruning [done]
-Cell at value d has deficit `(M-d) % M` (hits still needed). If at most K remaining
+Cell at deficit d needs d more hits to solve. If at most K remaining
 pieces can cover this cell and `K < deficit`, prune. Implemented via per-piece coverage bitmaps and
 a remaining-coverage count board.
 

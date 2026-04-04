@@ -2,9 +2,9 @@
 """Solve a Shapeshifter puzzle using Integer Linear Programming (PuLP).
 
 Based on the approach by juvian: formulate piece placement as an ILP where
-each cell's deficit is reduced to zero. A cell with value v has deficit
-(M - v) % M; each piece hit decrements the deficit by 1. Equivalently,
-(initial value + total hits) must be 0 mod M.
+each cell's deficit is reduced to zero. Board values are deficits directly:
+a cell at value d needs d hits. Equivalently,
+(deficit - total hits) must be 0 mod M.
 
 Usage: python3 tools/solve_ilp.py data/puzzle.json
 """
@@ -49,13 +49,13 @@ def solve_ilp(puzzle_path):
             for j in range(len(placements[i]))]
            for i in range(len(pieces))]
 
-    # board_val[r][c] = initial value + piece hits (must be 0 mod M to zero the deficit).
-    board_val = [[LpVariable(f"bv_{r}_{c}", 0, len(pieces) + modulo, cat="Integer")
+    # board_val[r][c] = piece hits - deficit (must be 0 mod M to zero the deficit).
+    board_val = [[LpVariable(f"bv_{r}_{c}", 0, len(pieces), cat="Integer")
                   for c in range(cols)]
                  for r in range(rows)]
 
     # mult[r][c] = integer multiplier so that board_val == mult * modulo.
-    mult = [[LpVariable(f"mult_{r}_{c}", 0, (len(pieces) + modulo) // modulo + 1, cat="Integer")
+    mult = [[LpVariable(f"mult_{r}_{c}", 0, len(pieces) // modulo + 1, cat="Integer")
              for c in range(cols)]
             for r in range(rows)]
 
@@ -63,12 +63,11 @@ def solve_ilp(puzzle_path):
     prob += 0  # No objective — just satisfying constraints.
 
     # Build per-cell contribution lists.
-    # Each cell starts at its initial value; piece hits add to it.
-    # The cell is solved (deficit = 0) when the total is 0 mod M.
+    # Board values are deficits. hits ≡ deficit (mod M), so (hits - deficit) = k*M.
     cell_terms = [[[] for _ in range(cols)] for _ in range(rows)]
     for r in range(rows):
         for c in range(cols):
-            cell_terms[r][c].append(board[r][c])
+            cell_terms[r][c].append(-board[r][c])
 
     for i, piece in enumerate(pieces):
         ph = len(piece)
@@ -96,8 +95,8 @@ def solve_ilp(puzzle_path):
         ("even_col", lambda r, c: c % 2 == 0),
     ]
     for pname, pfunc in partitions:
-        # Target: total deficit for cells in this group = sum of (M - board[r][c]) % M.
-        group_target = sum((modulo - board[r][c]) % modulo
+        # Target: total deficit for cells in this group = sum of board[r][c].
+        group_target = sum(board[r][c]
                           for r in range(rows) for c in range(cols) if pfunc(r, c))
         # Hits on this group from each placement.
         group_hits = []

@@ -55,7 +55,7 @@ pub(crate) fn check_line_family(
     let mut weights = [0u32; MAX_LINES];
     for i in 0..n {
         for d in 1..m {
-            weights[i] += (m - d) as u32 * (board.plane(d) & family.masks[i]).count_ones();
+            weights[i] += d as u32 * (board.plane(d) & family.masks[i]).count_ones();
         }
         // Per-line position-aware check.
         if family.has_per_line_budget && family.per_line_budget[piece_idx][i] < weights[i] {
@@ -133,7 +133,7 @@ impl WeightTupleReachability {
         let mask = self.group_masks[group_idx];
         let mut w = 0u32;
         for d in 1..self.m {
-            w += (self.m - d) as u32 * (board.plane(d) & mask).count_ones();
+            w += d as u32 * (board.plane(d) & mask).count_ones();
         }
         w
     }
@@ -280,7 +280,7 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
         // Compute group-0 deficit using the precomputed mask.
         let mut g0_deficit = 0u32;
         for d in 1..data.m {
-            g0_deficit += (data.m - d) as u32 * (board.plane(d) & partition.mask).count_ones();
+            g0_deficit += d as u32 * (board.plane(d) & partition.mask).count_ones();
         }
 
         // Simple bounds check.

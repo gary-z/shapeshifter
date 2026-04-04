@@ -21,20 +21,19 @@ pub(crate) fn solve_single_cells(
     // Count total deficit remaining and verify it matches available pieces.
     let mut needed = 0u32;
     for d in 1..m {
-        needed += (m - d) as u32 * board.plane(d).count_ones();
+        needed += d as u32 * board.plane(d).count_ones();
     }
     if needed as usize != num_pieces {
         return false;
     }
 
     // Assign pieces to cells: for each non-zero cell, emit (deficit) placements.
-    // Process cells in row-major order.
+    // Process cells in row-major order. Board values are deficits directly.
     let base_len = solution.len();
     for r in 0..h as usize {
         for c in 0..w as usize {
-            let val = board.get(r, c);
-            if val != 0 {
-                let deficit = (m - val) as usize;
+            let deficit = board.get(r, c) as usize;
+            if deficit != 0 {
                 for _ in 0..deficit {
                     solution.push((r, c));
                 }

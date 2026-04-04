@@ -30,7 +30,7 @@ pub struct Board {
     /// Board width.
     width: u8,
     /// Total deficit: sum of per-cell decrements still needed to solve.
-    /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
+    /// = sum_{d=1}^{M-1} d * popcount(planes[d])
     total_deficit: u32,
     /// Number of non-zero planes (planes[d] for d>0 that have any bits set).
     active_planes: u8,
@@ -60,7 +60,7 @@ impl Board {
         let mut active_planes = 0u8;
         for d in 1..m as usize {
             let cnt = planes[d].count_ones();
-            total_deficit += (m as u32 - d as u32) * cnt;
+            total_deficit += d as u32 * cnt;
             if cnt > 0 {
                 active_planes += 1;
             }
@@ -139,7 +139,7 @@ impl Board {
 
     /// Apply a piece placement: decrement the deficit of each covered cell by 1 (mod M).
     /// A cell at deficit 0 wraps to M-1 (overshoot penalty).
-    /// Each plane rotates: cells at digit d move to digit (d+1) % M.
+    /// Each plane rotates: cells at deficit d move to deficit (d-1) mod M.
     #[inline(always)]
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
         if self.m == 2 {
@@ -161,14 +161,15 @@ impl Board {
         let m = m as usize;
         // Hoist the NOT outside the loop: compute the keep-mask once.
         let keep_mask = !piece_mask;
-        let top = self.planes[m - 1] & piece_mask;
-        let mut i = m - 1;
-        while i > 0 {
-            let moving = self.planes[i - 1] & piece_mask;
+        // Rotate down: deficit d → deficit d-1, with deficit 0 wrapping to M-1.
+        let bottom = self.planes[0] & piece_mask;
+        let mut i = 0;
+        while i < m - 1 {
+            let moving = self.planes[i + 1] & piece_mask;
             self.planes[i] = (self.planes[i] & keep_mask) | moving;
-            i -= 1;
+            i += 1;
         }
-        self.planes[0] = (self.planes[0] & keep_mask) | top;
+        self.planes[m - 1] = (self.planes[m - 1] & keep_mask) | bottom;
     }
 
     /// Undo a piece placement: restore the deficit of each covered cell (reverse of apply_piece).
@@ -192,7 +193,7 @@ impl Board {
     }
 
     /// Total deficit: sum of per-cell hits still needed to reach all-zero (cached, O(1)).
-    /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
+    /// = sum_{d=1}^{M-1} d * popcount(planes[d])
     #[inline(always)]
     pub fn total_deficit(&self) -> u32 {
         self.total_deficit
@@ -355,20 +356,20 @@ mod tests {
 
     #[test]
     fn test_apply_piece_single_cell() {
-        // 3x3, m=3, all zeros
+        // 3x3, m=3, all zeros. Apply decrements: 0 wraps to M-1=2, then 2→1, then 1→0.
         let mut board = Board::new_solved(3, 3, 3);
         // Piece covering only (0,0)
         let piece = Bitboard::from_bit(0);
 
         board.apply_piece(piece);
-        assert_eq!(board.get(0, 0), 1);
+        assert_eq!(board.get(0, 0), 2); // 0 wraps to M-1
         assert_eq!(board.get(0, 1), 0); // untouched
 
         board.apply_piece(piece);
-        assert_eq!(board.get(0, 0), 2);
+        assert_eq!(board.get(0, 0), 1); // 2 → 1
 
         board.apply_piece(piece);
-        assert_eq!(board.get(0, 0), 0); // deficit cycles back to 0
+        assert_eq!(board.get(0, 0), 0); // 1 → 0, deficit cycles back to 0
     }
 
     #[test]
@@ -392,7 +393,7 @@ mod tests {
         let piece = Bitboard::from_bit(0);
 
         board.apply_piece(piece);
-        assert_eq!(board.get(0, 0), 1);
+        assert_eq!(board.get(0, 0), 2); // 0 wraps to M-1
 
         board.undo_piece(piece);
         assert_eq!(board.get(0, 0), 0);
@@ -400,12 +401,12 @@ mod tests {
 
     #[test]
     fn test_undo_piece_restores_deficit() {
-        // m=3, cell at deficit 0 -> undo -> deficit becomes 2
+        // m=3, cell at deficit 0, undo = apply M-1=2 times: 0→2→1
         let mut board = Board::new_solved(3, 3, 3);
         let piece = Bitboard::from_bit(0);
 
         board.undo_piece(piece);
-        assert_eq!(board.get(0, 0), 2);
+        assert_eq!(board.get(0, 0), 1); // undo increments deficit by 1
 
         board.apply_piece(piece);
         assert_eq!(board.get(0, 0), 0);
@@ -463,7 +464,7 @@ mod tests {
         let mut b = board;
         let piece = Bitboard::from_bit(1 * 15 + 1); // (1,1)
         b.apply_piece(piece);
-        assert_eq!(b.get(1, 1), 0); // 4 + 1 = 5 -> 0 mod 5
+        assert_eq!(b.get(1, 1), 3); // 4 - 1 = 3 (decrement)
     }
 
     #[test]
