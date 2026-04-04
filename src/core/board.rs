@@ -29,9 +29,9 @@ pub struct Board {
     height: u8,
     /// Board width.
     width: u8,
-    /// Cached minimum total cell-increments needed to solve.
+    /// Total deficit: sum of per-cell decrements still needed to solve.
     /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
-    min_flips: u32,
+    total_deficit: u32,
     /// Number of non-zero planes (planes[d] for d>0 that have any bits set).
     active_planes: u8,
 }
@@ -56,11 +56,11 @@ impl Board {
             }
         }
 
-        let mut min_flips = 0u32;
+        let mut total_deficit = 0u32;
         let mut active_planes = 0u8;
         for d in 1..m as usize {
             let cnt = planes[d].count_ones();
-            min_flips += (m as u32 - d as u32) * cnt;
+            total_deficit += (m as u32 - d as u32) * cnt;
             if cnt > 0 {
                 active_planes += 1;
             }
@@ -71,7 +71,7 @@ impl Board {
             m,
             height: height as u8,
             width: width as u8,
-            min_flips,
+            total_deficit,
             active_planes,
         }
     }
@@ -97,7 +97,7 @@ impl Board {
             m,
             height,
             width,
-            min_flips: 0,
+            total_deficit: 0,
             active_planes: 0,
         }
     }
@@ -134,28 +134,29 @@ impl Board {
     /// Returns true if every cell is 0 (the board is solved).
     #[inline(always)]
     pub fn is_solved(&self) -> bool {
-        self.min_flips == 0
+        self.total_deficit == 0
     }
 
-    /// Apply a piece placement: increment all cells under `piece_mask` by 1 (mod M).
+    /// Apply a piece placement: decrement the deficit of each covered cell by 1 (mod M).
+    /// A cell at deficit 0 wraps to M-1 (overshoot penalty).
     /// Each plane rotates: cells at digit d move to digit (d+1) % M.
     #[inline(always)]
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
         if self.m == 2 {
-            // M=2 fast path: flipping 0↔1 is just XOR on both planes.
+            // M=2 fast path: toggling deficit 0↔1 is just XOR on both planes.
             self.planes[0] = self.planes[0] ^ piece_mask;
             self.planes[1] = self.planes[1] ^ piece_mask;
-            // For M=2, min_flips = popcount(planes[1]).
-            self.min_flips = self.planes[1].count_ones();
+            // For M=2, total_deficit = popcount(planes[1]).
+            self.total_deficit = self.planes[1].count_ones();
             return;
         }
 
         let m = self.m as u32;
-        // Incremental min_flips update:
-        // Cells at 0 go to 1 (cost 0 → M-1), all others decrease by 1.
+        // Incremental total_deficit update:
+        // Cells at deficit 0 wrap to M-1 (penalty M-1); all others decrease deficit by 1.
         // delta = M * popcount(plane[0] & mask) - popcount(mask)
         let zeros_hit = (self.planes[0] & piece_mask).count_ones();
-        self.min_flips = self.min_flips + m * zeros_hit - piece_mask.count_ones();
+        self.total_deficit = self.total_deficit + m * zeros_hit - piece_mask.count_ones();
 
         let m = m as usize;
         // Hoist the NOT outside the loop: compute the keep-mask once.
@@ -170,8 +171,8 @@ impl Board {
         self.planes[0] = (self.planes[0] & keep_mask) | top;
     }
 
-    /// Undo a piece placement: decrement all cells under `piece_mask` by 1 (mod M).
-    /// Equivalent to applying the piece M-1 more times (since M increments wraps to identity).
+    /// Undo a piece placement: restore the deficit of each covered cell (reverse of apply_piece).
+    /// Equivalent to applying the piece M-1 more times (since M applications is the identity).
     #[inline(always)]
     pub fn undo_piece(&mut self, piece_mask: Bitboard) {
         if self.m == 2 {
@@ -190,11 +191,11 @@ impl Board {
         self.active_planes
     }
 
-    /// Minimum total cell-increments needed to solve (cached, O(1)).
+    /// Total deficit: sum of per-cell hits still needed to reach all-zero (cached, O(1)).
     /// = sum_{d=1}^{M-1} (M - d) * popcount(planes[d])
     #[inline(always)]
-    pub fn min_flips_needed(&self) -> u32 {
-        self.min_flips
+    pub fn total_deficit(&self) -> u32 {
+        self.total_deficit
     }
 
     /// Split jaggedness into (horizontal, vertical) components.
@@ -367,7 +368,7 @@ mod tests {
         assert_eq!(board.get(0, 0), 2);
 
         board.apply_piece(piece);
-        assert_eq!(board.get(0, 0), 0); // wrapped around
+        assert_eq!(board.get(0, 0), 0); // deficit cycles back to 0
     }
 
     #[test]
@@ -398,8 +399,8 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_piece_wraps() {
-        // m=3, cell at 0 -> undo -> should become 2
+    fn test_undo_piece_restores_deficit() {
+        // m=3, cell at deficit 0 -> undo -> deficit becomes 2
         let mut board = Board::new_solved(3, 3, 3);
         let piece = Bitboard::from_bit(0);
 
