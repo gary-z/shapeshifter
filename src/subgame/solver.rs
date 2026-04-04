@@ -1,3 +1,5 @@
+use std::simd::{u16x16, cmp::SimdOrd, num::SimdUint};
+
 use super::game::SubgameGame;
 
 /// Result of a subgame solve attempt.
@@ -18,19 +20,52 @@ pub struct SolverStats {
     pub underflow_rejections: u64,
     /// Number of branches pruned by total deficit check.
     pub deficit_prunes: u64,
+    /// Number of branches pruned by per-cell count satisfiability check.
+    pub count_sat_prunes: u64,
 }
 
-/// Naive brute-force subgame solver with backtracking.
+/// Configuration for subgame solver pruning techniques.
+#[derive(Debug, Clone, Copy)]
+pub struct SubgamePruningConfig {
+    /// Total deficit check: remaining piece cells must equal remaining deficit.
+    pub total_deficit: bool,
+    /// Per-cell count satisfiability: max contribution from remaining pieces
+    /// must cover each cell's deficit.
+    pub count_sat: bool,
+    /// Single-cell endgame: skip backtracking when all remaining pieces are [1].
+    pub single_cell_endgame: bool,
+}
+
+impl Default for SubgamePruningConfig {
+    fn default() -> Self {
+        Self {
+            total_deficit: true,
+            count_sat: true,
+            single_cell_endgame: true,
+        }
+    }
+}
+
+impl SubgamePruningConfig {
+    /// All pruning disabled.
+    pub fn none() -> Self {
+        Self {
+            total_deficit: false,
+            count_sat: false,
+            single_cell_endgame: false,
+        }
+    }
+
+    /// Enable only the specified pruning options.
+    pub fn only(mut self, f: impl FnOnce(&mut Self)) -> Self {
+        f(&mut self);
+        self
+    }
+}
+
+/// Subgame solver with backtracking and pruning.
 ///
-/// Tries all placements of each piece in order. The structure is designed
-/// to make adding pruning techniques straightforward:
-///
-/// - **Total deficit pruning**: remaining piece cells must exactly equal remaining deficit.
-/// - **Per-cell bounds**: each cell's deficit must be achievable by remaining pieces.
-/// - **Duplicate piece symmetry breaking**: skip placements that reorder identical pieces.
-///
-/// Currently only total-deficit pruning is implemented. The solver returns the
-/// first solution found, or `Unsolvable` if none exists.
+/// The solver returns the first solution found, or `Unsolvable` if none exists.
 pub struct SubgameSolver {
     /// The subgame to solve.
     game: SubgameGame,
@@ -38,17 +73,85 @@ pub struct SubgameSolver {
     solution: Vec<usize>,
     /// Solver statistics.
     stats: SolverStats,
+    /// Pruning configuration.
+    config: SubgamePruningConfig,
+    /// Suffix max-contribution per cell: `max_contrib_suffix[d]` is the SIMD vector
+    /// where lane `i` = sum of max contributions to cell `i` from pieces `d..n`.
+    max_contrib_suffix: Vec<u16x16>,
+    /// Index where all remaining pieces are single-cell ([1] profile).
+    /// At this depth, if total deficit matches we can return true immediately.
+    endgame_start: usize,
 }
 
 impl SubgameSolver {
-    /// Create a new solver for the given subgame.
+    /// Create a new solver for the given subgame with all pruning enabled.
     pub fn new(game: SubgameGame) -> Self {
+        Self::with_config(game, SubgamePruningConfig::default())
+    }
+
+    /// Create a solver with the given pruning configuration.
+    pub fn with_config(game: SubgameGame, config: SubgamePruningConfig) -> Self {
         let n = game.pieces().len();
+        let max_contrib_suffix = if config.count_sat {
+            Self::build_max_contrib_suffix(&game)
+        } else {
+            vec![u16x16::splat(u16::MAX); n + 1]
+        };
+        let endgame_start = if config.single_cell_endgame {
+            let pieces = game.pieces();
+            let mut i = n;
+            while i > 0 && pieces[i - 1].len() == 1 && pieces[i - 1].cell_count() == 1 {
+                i -= 1;
+            }
+            i
+        } else {
+            n // never triggers
+        };
         Self {
             game,
             solution: Vec::with_capacity(n),
             stats: SolverStats::default(),
+            config,
+            max_contrib_suffix,
+            endgame_start,
         }
+    }
+
+    /// Precompute suffix sums of per-cell max contributions.
+    ///
+    /// For each piece, compute the element-wise max across all its placements.
+    /// Then `max_contrib_suffix[d][i]` = sum over pieces `d..n` of that per-piece max at cell `i`.
+    fn build_max_contrib_suffix(game: &SubgameGame) -> Vec<u16x16> {
+        let n = game.pieces().len();
+        // Per-piece max contribution at each cell.
+        let mut per_piece_max: Vec<u16x16> = Vec::with_capacity(n);
+        for p in 0..n {
+            let placements = game.placements_for(p);
+            let mut max_vec = u16x16::splat(0);
+            for &(_pos, shifted) in placements {
+                max_vec = max_vec.simd_max(shifted);
+            }
+            per_piece_max.push(max_vec);
+        }
+
+        // Build suffix sums: suffix[n] = 0, suffix[d] = suffix[d+1] + per_piece_max[d]
+        let mut suffix = vec![u16x16::splat(0); n + 1];
+        for d in (0..n).rev() {
+            suffix[d] = suffix[d + 1] + per_piece_max[d];
+        }
+        suffix
+    }
+
+    /// Check count satisfiability: can remaining pieces (from `depth` onward)
+    /// cover every cell's current deficit?
+    #[inline(always)]
+    fn check_count_sat(&self, depth: usize) -> bool {
+        let board_cells = self.game.board().cells();
+        let max_reachable = self.max_contrib_suffix[depth];
+        // For each active cell: max_reachable[i] >= board_cells[i]
+        // Equivalently: saturating_sub(board, max_reachable) == 0 for all lanes
+        let shortfall = board_cells.saturating_sub(max_reachable);
+        shortfall == u16x16::splat(0)
     }
 
     /// Solve the subgame. Returns the result and solver statistics.
@@ -84,11 +187,40 @@ impl SubgameSolver {
         }
 
         // --- Pruning: total deficit check ---
-        // Remaining piece cells must exactly equal remaining deficit.
-        let remaining_cells = self.game.remaining_cells_from(depth);
-        let remaining_deficit = self.game.board().total_deficit();
-        if remaining_cells != remaining_deficit {
-            self.stats.deficit_prunes += 1;
+        if self.config.total_deficit {
+            let remaining_cells = self.game.remaining_cells_from(depth);
+            let remaining_deficit = self.game.board().total_deficit();
+            if remaining_cells != remaining_deficit {
+                self.stats.deficit_prunes += 1;
+                return false;
+            }
+        }
+
+        // --- Endgame: all remaining pieces are single-cell ---
+        // N single-cell pieces can always fill any deficit that sums to N
+        // with all values >= 0 (guaranteed by board invariant), and each cell's
+        // deficit <= N. We greedily assign pieces to cells.
+        if depth >= self.endgame_start {
+            let n_remaining = (self.game.pieces().len() - depth) as u16;
+            let board_len = self.game.board().len() as usize;
+            let cells = self.game.board().cells().to_array();
+            for i in 0..board_len {
+                if cells[i] > n_remaining {
+                    return false;
+                }
+            }
+            // Fill in solution: assign pieces greedily to cells by deficit.
+            for i in 0..board_len {
+                for _ in 0..cells[i] {
+                    self.solution.push(i);
+                }
+            }
+            return true;
+        }
+
+        // --- Pruning: per-cell count satisfiability ---
+        if !self.check_count_sat(depth) {
+            self.stats.count_sat_prunes += 1;
             return false;
         }
 
@@ -128,13 +260,19 @@ pub fn solve(game: SubgameGame) -> (SubgameSolveResult, SolverStats) {
     SubgameSolver::new(game).solve()
 }
 
+/// Solve without count-satisfiability or endgame pruning (for benchmarking).
+pub fn solve_baseline(game: SubgameGame) -> (SubgameSolveResult, SolverStats) {
+    SubgameSolver::with_config(game, SubgamePruningConfig::none().only(|c| {
+        c.total_deficit = true;
+    })).solve()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::subgame::board::SubgameBoard;
     use crate::subgame::piece::SubgamePiece;
     use crate::subgame::game::SubgameGame;
-    use crate::subgame::generate::{to_row_subgame, to_col_subgame};
     use crate::core::board::Board;
     use crate::core::piece::Piece;
     use crate::game::Game;
@@ -184,7 +322,8 @@ mod tests {
         let game = SubgameGame::new(board, vec![piece]);
         let (result, stats) = solve(game);
         assert_eq!(result, SubgameSolveResult::Unsolvable);
-        assert!(stats.underflow_rejections > 0);
+        // Pruned by either count-sat or underflow detection.
+        assert!(stats.underflow_rejections > 0 || stats.count_sat_prunes > 0);
     }
 
     #[test]
@@ -297,5 +436,463 @@ mod tests {
         let game = SubgameGame::new(board, vec![p1, p2]);
         let (result, _) = solve(game);
         assert_eq!(result, SubgameSolveResult::Solved(vec![0, 0]));
+    }
+
+    // --- Fuzz infrastructure ---
+
+    use rand::SeedableRng;
+    use crate::generate::generate_game;
+    use crate::level::LevelSpec;
+    use crate::subgame::generate::{to_row_subgame, to_col_subgame, piece_row_profile, piece_col_profile, board_row_deficits, board_col_deficits};
+
+    /// Generate a full 2D game, sort pieces like the main solver, then project
+    /// to row and column subgames.
+    fn generate_subgames(
+        spec: &LevelSpec,
+        seed: u64,
+    ) -> (SubgameGame, SubgameGame) {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+        let game = generate_game(spec, &mut rng);
+        let h = spec.rows;
+        let w = spec.columns;
+
+        // Sort pieces like the main solver: fewer placements first, then
+        // larger perimeter, larger cell count, limbs tiebreak.
+        let pieces = game.pieces();
+        let mut indexed: Vec<(usize, usize)> = pieces
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, p.placements(h, w).len()))
+            .collect();
+        indexed.sort_by(|(i, a_pl), (j, b_pl)| {
+            a_pl.cmp(b_pl)
+                .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
+                .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
+                .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
+        });
+        let sorted_pieces: Vec<_> = indexed.iter().map(|(i, _)| &pieces[*i]).collect();
+
+        // Project sorted pieces to row and column profiles.
+        let row_profiles: Vec<SubgamePiece> = sorted_pieces.iter().map(|p| piece_row_profile(p)).collect();
+        let col_profiles: Vec<SubgamePiece> = sorted_pieces.iter().map(|p| piece_col_profile(p)).collect();
+
+        let row_board = crate::subgame::generate::board_row_deficits(game.board());
+        let col_board = crate::subgame::generate::board_col_deficits(game.board());
+
+        let row_sg = SubgameGame::new(row_board, row_profiles);
+        let col_sg = SubgameGame::new(col_board, col_profiles);
+        (row_sg, col_sg)
+    }
+
+    /// Verify that a solution is correct: applying placements zeroes the board.
+    fn verify_solution(game: &SubgameGame, positions: &[usize]) -> bool {
+        let mut board = game.board().clone();
+        for (i, &pos) in positions.iter().enumerate() {
+            let placements = game.placements_for(i);
+            let shifted = match placements.iter().find(|&&(p, _)| p == pos) {
+                Some(&(_, s)) => s,
+                None => return false,
+            };
+            if !board.apply_piece(shifted) {
+                return false;
+            }
+        }
+        board.is_solved()
+    }
+
+    /// Fuzz helper: generate full 2D games, project to subgames, solve with
+    /// given config, verify soundness, return total nodes.
+    fn fuzz_with_config(
+        config: &SubgamePruningConfig,
+        configs: &[(u8, u8, u8, u8)], // (m, rows, cols, shapes)
+        seeds: &[u64],
+    ) -> (u64, usize) {
+        let mut total_nodes = 0u64;
+        let mut failures = 0usize;
+
+        for &(m, rows, cols, shapes) in configs {
+            let spec = LevelSpec {
+                level: 0, shifts: m, rows, columns: cols, shapes,
+            };
+            for &seed in seeds {
+                let (row_sg, col_sg) = generate_subgames(&spec, seed);
+
+                // Test row subgame.
+                let solver = SubgameSolver::with_config(row_sg.clone(), *config);
+                let (result, stats) = solver.solve();
+                total_nodes += stats.nodes_visited;
+                match result {
+                    SubgameSolveResult::Solved(ref positions) => {
+                        if !verify_solution(&row_sg, positions) {
+                            failures += 1;
+                        }
+                    }
+                    // Subgame may be unsolvable (deficit mismatch from mod arithmetic).
+                    SubgameSolveResult::Unsolvable => {}
+                }
+
+                // Test column subgame.
+                let solver = SubgameSolver::with_config(col_sg.clone(), *config);
+                let (result, stats) = solver.solve();
+                total_nodes += stats.nodes_visited;
+                match result {
+                    SubgameSolveResult::Solved(ref positions) => {
+                        if !verify_solution(&col_sg, positions) {
+                            failures += 1;
+                        }
+                    }
+                    SubgameSolveResult::Unsolvable => {}
+                }
+            }
+        }
+        (total_nodes, failures)
+    }
+
+    fn fuzz_configs() -> Vec<(u8, u8, u8, u8)> {
+        vec![
+            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
+            (3, 3, 3, 3), (3, 3, 3, 5),
+            (2, 4, 3, 5), (2, 4, 3, 8),
+            (3, 4, 3, 6),
+            (2, 4, 4, 6), (2, 4, 4, 10),
+            (3, 4, 4, 8),
+            (4, 3, 3, 3), (4, 3, 3, 5),
+        ]
+    }
+
+    fn fuzz_seeds() -> Vec<u64> {
+        (0..30).collect()
+    }
+
+    // --- Hand-crafted pruning tests ---
+
+    /// Solve with a given config, return (nodes, result).
+    fn solve_with(game: SubgameGame, config: SubgamePruningConfig) -> (u64, SubgameSolveResult) {
+        let solver = SubgameSolver::with_config(game, config);
+        let (result, stats) = solver.solve();
+        (stats.nodes_visited, result)
+    }
+
+    // -- count_sat: unsolvable, concentrated deficit --
+    // Board [6,4], 5x[1,1]. Total cells = 10 = deficit.
+    // Each [1,1] contributes max 1 to cell 0 (only pos 0 touches cell 0).
+    // 5 pieces can contribute at most 5 to cell 0, but deficit is 6.
+    // Count-sat catches this at the root. Baseline must place pieces
+    // one by one until underflow.
+    #[test]
+    fn test_count_sat_unsolvable_concentrated_deficit() {
+        let board = SubgameBoard::from_cells(&[6, 4]);
+        let piece = SubgamePiece::from_profile(&[1, 1]);
+        let game = SubgameGame::new(board, vec![piece; 5]);
+
+        let base = baseline_config();
+        let with_cs = baseline_config().only(|c| c.count_sat = true);
+
+        let (nodes_base, res_base) = solve_with(game.clone(), base);
+        let (nodes_cs, res_cs) = solve_with(game, with_cs);
+
+        assert_eq!(res_base, SubgameSolveResult::Unsolvable);
+        assert_eq!(res_cs, SubgameSolveResult::Unsolvable);
+        // Baseline places pieces greedily until cell 1 underflows.
+        // Count-sat prunes at the root (max 5 to cell 0, need 6).
+        assert!(
+            nodes_cs < nodes_base,
+            "count-sat should reduce nodes: {} vs baseline {}", nodes_cs, nodes_base,
+        );
+    }
+
+    // -- count_sat: unsolvable, wider board --
+    // Board [10,1,1,1,1,1,1], 8x[1,1]. Total = 16 = deficit.
+    // Max contribution to cell 0: each [1,1] can give 1 (at pos 0). 8 pieces → max 8.
+    // Deficit at cell 0 = 10. 8 < 10 → count-sat prunes at root.
+    // Baseline: places [1,1] at pos 0 repeatedly until underflow at cell 1.
+    #[test]
+    fn test_count_sat_unsolvable_wide_board() {
+        let board = SubgameBoard::from_cells(&[10, 1, 1, 1, 1, 1, 1]);
+        let piece = SubgamePiece::from_profile(&[1, 1]);
+        let game = SubgameGame::new(board, vec![piece; 8]);
+
+        let base = baseline_config();
+        let with_cs = baseline_config().only(|c| c.count_sat = true);
+
+        let (nodes_base, _) = solve_with(game.clone(), base);
+        let (nodes_cs, res_cs) = solve_with(game, with_cs);
+
+        assert_eq!(res_cs, SubgameSolveResult::Unsolvable);
+        assert!(
+            nodes_cs < nodes_base,
+            "count-sat should reduce nodes: {} vs baseline {}", nodes_cs, nodes_base,
+        );
+    }
+
+    // -- count_sat: prunes wrong branch on solvable game --
+    // Board [3,1,1,1,2] (len 5). Pieces: [1,1,1] (len 3), [1,1,1], [1,1].
+    // Built from: [1,1,1]@pos0, [1,1,1]@pos2, [1,1]@pos3 = [1,1,1,0,0]+[0,0,1,1,1]+[0,0,0,1,1]
+    // = [1,1,2,2,2]. Hmm, let me just construct and test empirically.
+    // The key: after placing [1,1,1] at pos 0 (wrong), board has high deficit
+    // at cell 4 that remaining pieces can't cover, and count-sat catches it.
+    #[test]
+    fn test_count_sat_prunes_wrong_branch_solvable() {
+        // Build from placements: [1,1,1]@2, [1,1,1]@0, [1,1]@3
+        // Board = [1,1,1,0,0] + [0,0,1,1,1] + [0,0,0,1,1] = [1,1,2,2,2]
+        let board = SubgameBoard::from_cells(&[1, 1, 2, 2, 2]);
+        let p3 = SubgamePiece::from_profile(&[1, 1, 1]);
+        let p2 = SubgamePiece::from_profile(&[1, 1]);
+        // Sorted: [1,1,1] x2 first, then [1,1]
+        let game = SubgameGame::new(board, vec![p3, p3, p2]);
+
+        let base = baseline_config();
+        let with_cs = baseline_config().only(|c| c.count_sat = true);
+
+        let (nodes_base, res_base) = solve_with(game.clone(), base);
+        let (nodes_cs, res_cs) = solve_with(game, with_cs);
+
+        assert!(matches!(res_base, SubgameSolveResult::Solved(_)));
+        assert!(matches!(res_cs, SubgameSolveResult::Solved(_)));
+        assert!(
+            nodes_cs <= nodes_base,
+            "count-sat should not increase nodes: {} vs baseline {}", nodes_cs, nodes_base,
+        );
+    }
+
+    // -- endgame: all single-cell pieces --
+    // Board [2,3,1], 6x[1]. Without endgame, solver recurses through all 6
+    // pieces. With endgame, resolves in 1 node.
+    #[test]
+    fn test_endgame_all_single_cell() {
+        let board = SubgameBoard::from_cells(&[2, 3, 1]);
+        let piece = SubgamePiece::from_profile(&[1]);
+        let game = SubgameGame::new(board, vec![piece; 6]);
+
+        let base = baseline_config();
+        let with_eg = baseline_config().only(|c| c.single_cell_endgame = true);
+
+        let (nodes_base, res_base) = solve_with(game.clone(), base);
+        let (nodes_eg, res_eg) = solve_with(game, with_eg);
+
+        assert!(matches!(res_base, SubgameSolveResult::Solved(_)));
+        assert!(matches!(res_eg, SubgameSolveResult::Solved(_)));
+        // Endgame resolves at depth 0 in 1 node. Baseline must recurse.
+        assert_eq!(nodes_eg, 1, "endgame should solve in 1 node");
+        assert!(
+            nodes_eg < nodes_base,
+            "endgame should reduce nodes: {} vs baseline {}", nodes_eg, nodes_base,
+        );
+    }
+
+    // -- endgame: mixed pieces, single-cell tail --
+    // Board built from: [2,1]@pos0, [1]@pos0, [1]@pos1, [1]@pos2
+    // = [2,1,0] + [1,0,0] + [0,1,0] + [0,0,1] = [3,2,1]
+    // Sorted: [2,1], [1], [1], [1]. Endgame at index 1.
+    // With endgame: after placing [2,1], endgame handles remaining 3x[1].
+    // Without: must recurse through all 3 single-cell pieces.
+    #[test]
+    fn test_endgame_mixed_pieces_single_cell_tail() {
+        let board = SubgameBoard::from_cells(&[3, 2, 1]);
+        let p21 = SubgamePiece::from_profile(&[2, 1]);
+        let p1 = SubgamePiece::from_profile(&[1]);
+        let game = SubgameGame::new(board, vec![p21, p1, p1, p1]);
+
+        let base = baseline_config();
+        let with_eg = baseline_config().only(|c| c.single_cell_endgame = true);
+
+        let (nodes_base, res_base) = solve_with(game.clone(), base);
+        let (nodes_eg, res_eg) = solve_with(game, with_eg);
+
+        assert!(matches!(res_base, SubgameSolveResult::Solved(_)));
+        assert!(matches!(res_eg, SubgameSolveResult::Solved(_)));
+        assert!(
+            nodes_eg < nodes_base,
+            "endgame should reduce nodes: {} vs baseline {}", nodes_eg, nodes_base,
+        );
+    }
+
+    // -- endgame: large single-cell tail --
+    // Board [1,1,1,1,1,1,1,1] (len 8), 8x[1]. Baseline: 9 nodes.
+    // Endgame: 1 node.
+    #[test]
+    fn test_endgame_large_single_cell() {
+        let board = SubgameBoard::from_cells(&[1, 1, 1, 1, 1, 1, 1, 1]);
+        let piece = SubgamePiece::from_profile(&[1]);
+        let game = SubgameGame::new(board, vec![piece; 8]);
+
+        let base = baseline_config();
+        let with_eg = baseline_config().only(|c| c.single_cell_endgame = true);
+
+        let (nodes_base, _) = solve_with(game.clone(), base);
+        let (nodes_eg, res_eg) = solve_with(game, with_eg);
+
+        assert!(matches!(res_eg, SubgameSolveResult::Solved(_)));
+        assert_eq!(nodes_eg, 1);
+        assert!(
+            nodes_eg < nodes_base,
+            "endgame should reduce nodes: {} vs baseline {}", nodes_eg, nodes_base,
+        );
+    }
+
+    // -- count_sat: scaling test --
+    // Board [N+1, N-1], Nx[1,1]. Count-sat prunes in 1 node.
+    // Baseline: N nodes (places N-1 pieces before underflow on Nth).
+    #[test]
+    fn test_count_sat_scaling() {
+        for n in [5, 10, 20] {
+            let board = SubgameBoard::from_cells(&[n as u16 + 1, n as u16 - 1]);
+            let piece = SubgamePiece::from_profile(&[1, 1]);
+            let game = SubgameGame::new(board, vec![piece; n]);
+
+            let base = baseline_config();
+            let with_cs = baseline_config().only(|c| c.count_sat = true);
+
+            let (nodes_base, _) = solve_with(game.clone(), base);
+            let (nodes_cs, res_cs) = solve_with(game, with_cs);
+
+            assert_eq!(res_cs, SubgameSolveResult::Unsolvable);
+            // Count-sat prunes at root; baseline needs ~N nodes.
+            assert_eq!(nodes_cs, 1, "count-sat should prune at root for N={n}");
+            assert!(
+                nodes_base >= n as u64,
+                "baseline should visit >= {n} nodes, got {nodes_base}",
+            );
+        }
+    }
+
+    // --- Fuzz: baseline soundness ---
+
+    fn baseline_config() -> SubgamePruningConfig {
+        SubgamePruningConfig::none().only(|c| c.total_deficit = true)
+    }
+
+    #[test]
+    fn test_fuzz_baseline_soundness() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let config = baseline_config();
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "baseline solver produced {} unsound results", failures);
+    }
+
+    // --- Fuzz: total deficit pruning ---
+
+    #[test]
+    fn test_fuzz_total_deficit_soundness() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let config = SubgamePruningConfig::none().only(|c| c.total_deficit = true);
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "total_deficit prune caused {} failures", failures);
+    }
+
+    #[test]
+    fn test_fuzz_total_deficit_reduces_nodes() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let no_prune = SubgamePruningConfig::none();
+        let with_prune = SubgamePruningConfig::none().only(|c| c.total_deficit = true);
+
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_with, _) = fuzz_with_config(&with_prune, &configs, &seeds);
+        assert!(
+            nodes_with <= nodes_without,
+            "total_deficit should not increase nodes: {} vs baseline {}",
+            nodes_with, nodes_without,
+        );
+    }
+
+    // --- Fuzz: count-sat pruning ---
+
+    #[test]
+    fn test_fuzz_count_sat_soundness() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let config = baseline_config().only(|c| c.count_sat = true);
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "count-sat prune caused {} failures", failures);
+    }
+
+    #[test]
+    fn test_fuzz_count_sat_reduces_nodes() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let base = baseline_config();
+        let with_cs = baseline_config().only(|c| c.count_sat = true);
+
+        let (nodes_base, _) = fuzz_with_config(&base, &configs, &seeds);
+        let (nodes_cs, _) = fuzz_with_config(&with_cs, &configs, &seeds);
+        assert!(
+            nodes_cs <= nodes_base,
+            "count-sat should not increase nodes: {} vs baseline {}",
+            nodes_cs, nodes_base,
+        );
+    }
+
+    // --- Fuzz: endgame pruning ---
+
+    #[test]
+    fn test_fuzz_endgame_soundness() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let config = baseline_config().only(|c| c.single_cell_endgame = true);
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "endgame prune caused {} failures", failures);
+    }
+
+    #[test]
+    fn test_fuzz_endgame_reduces_nodes() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let base = baseline_config();
+        let with_eg = baseline_config().only(|c| c.single_cell_endgame = true);
+
+        let (nodes_base, _) = fuzz_with_config(&base, &configs, &seeds);
+        let (nodes_eg, _) = fuzz_with_config(&with_eg, &configs, &seeds);
+        assert!(
+            nodes_eg <= nodes_base,
+            "endgame should not increase nodes: {} vs baseline {}",
+            nodes_eg, nodes_base,
+        );
+    }
+
+    // --- Fuzz: all optimizations combined ---
+
+    #[test]
+    fn test_fuzz_all_optimizations_soundness() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let config = SubgamePruningConfig::default();
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "combined optimizations caused {} failures", failures);
+    }
+
+    #[test]
+    fn test_fuzz_all_optimizations_reduce_nodes() {
+        let configs = fuzz_configs();
+        let seeds = fuzz_seeds();
+        let base = baseline_config();
+        let all = SubgamePruningConfig::default();
+
+        let (nodes_base, _) = fuzz_with_config(&base, &configs, &seeds);
+        let (nodes_all, _) = fuzz_with_config(&all, &configs, &seeds);
+        assert!(
+            nodes_all <= nodes_base,
+            "combined optimizations should not increase nodes: {} vs baseline {}",
+            nodes_all, nodes_base,
+        );
+    }
+
+    // --- Fuzz: stress test with larger instances ---
+
+    #[test]
+    fn test_fuzz_stress_soundness() {
+        let configs = vec![
+            (2, 4, 4, 14), (2, 4, 4, 16),
+            (3, 4, 4, 12), (3, 4, 4, 14),
+            (2, 6, 6, 10), (2, 6, 6, 12),
+            (3, 6, 6, 8),
+            (2, 8, 7, 8),
+        ];
+        let seeds: Vec<u64> = (0..50).collect();
+        let config = SubgamePruningConfig::default();
+        let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
+        assert_eq!(failures, 0, "stress test had {} failures", failures);
     }
 }
