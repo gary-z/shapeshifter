@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
-use crate::subgame::generate::{board_row_deficits, board_col_deficits};
 use super::SolverData;
 
 /// Max number of lines in any family (diagonals on 14x14: 27).
@@ -328,14 +327,11 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
 ///   reduction but 6-16% time cost — removed from hot path.
 pub(crate) fn prune_node(
     board: &Board,
+    sg: &crate::subgame::state::SubgameState,
     data: &SolverData,
     piece_idx: usize,
     config: &super::PruningConfig,
 ) -> bool {
-    // Ordered by cost-effectiveness. Checks that prune 0-1% of nodes but cost
-    // 6-16% of time (active_planes, coverage, cell_locking, total_deficit_rowcol,
-    // subgrid) are omitted. Validated on simulated L36-60:
-    // 78/125 vs 79/125 solves — negligible impact, +14-27% throughput gain.
     if config.total_deficit_global && !prune_total_deficit_global(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
     if config.total_deficit_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
@@ -343,28 +339,25 @@ pub(crate) fn prune_node(
     if config.total_deficit_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.total_deficit_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
     if config.total_deficit_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
-    if config.subgame && !prune_subgame(board, data, piece_idx) { return false; }
+    if config.subgame && !prune_subgame(sg, data, piece_idx) { return false; }
     true
 }
 
-/// Subgame pruning: reconstruct row/col subgame boards from the current main
-/// board state and check feasibility via backtracking.
+/// Subgame pruning using incrementally maintained SubgameState.
 ///
 /// Returns `false` if either subgame is provably infeasible from `piece_idx`
-/// onward. The reconstruction is O(H*W) and the feasibility check is
-/// budget-capped to avoid spending too long on a single node.
+/// onward. The SubgameState is maintained by the backtracker (O(1) per
+/// placement via SIMD), so no O(H*W) reconstruction is needed here.
 ///
 /// Only sound when `remaining_piece_cells == remaining_deficit` (no wrapping).
-/// When pieces would overshoot (wrap) cells, the strict "decrement to zero"
-/// subgame model can falsely reject valid states. See DESIGN.md wrapping caveat.
-fn prune_subgame(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+fn prune_subgame(sg: &crate::subgame::state::SubgameState, data: &SolverData, piece_idx: usize) -> bool {
     // Guard: subgame strict decrement model is only valid when no wrapping.
-    if data.remaining_bits[piece_idx] != board.total_deficit() {
-        return true; // wrapping possible — can't prune via subgame
+    if data.remaining_bits[piece_idx] != sg.row_board().total_deficit() {
+        return true;
     }
-    let row_board = board_row_deficits(board);
-    let col_board = board_col_deficits(board);
-    let (feasible, sg_nodes) = data.subgame_data.check_feasible(row_board, col_board, piece_idx);
+    let (feasible, sg_nodes) = data.subgame_data.check_feasible(
+        *sg.row_board(), *sg.col_board(), piece_idx,
+    );
     data.subgame_nodes.fetch_add(sg_nodes, Ordering::Relaxed);
     feasible
 }

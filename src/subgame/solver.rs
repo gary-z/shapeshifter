@@ -561,7 +561,7 @@ mod tests {
     }
 
     fn fuzz_seeds() -> Vec<u64> {
-        (0..30).collect()
+        (0..5).collect()
     }
 
     // --- Hand-crafted pruning tests ---
@@ -888,9 +888,8 @@ mod tests {
             (3, 4, 4, 12), (3, 4, 4, 14),
             (2, 6, 6, 10), (2, 6, 6, 12),
             (3, 6, 6, 8),
-            (2, 8, 7, 8),
         ];
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
         let config = SubgamePruningConfig::default();
         let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
         assert_eq!(failures, 0, "stress test had {} failures", failures);

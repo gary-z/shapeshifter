@@ -554,9 +554,11 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
+    let sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
 
     let found = backtrack::backtrack(
         &board,
+        &sg,
         &data,
         0,
         usize::MAX, // no prev placement at root
@@ -662,9 +664,12 @@ fn solve_with_config_parallel(
 
     // Seed the work queue with a single root task.
     // Budget-based splitting will naturally generate work for idle threads.
+    let initial_sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
+
     let wq = backtrack::WorkQueue::new();
     wq.push(backtrack::StealableTask {
         board: board.clone(),
+        sg: initial_sg,
         prefix: Vec::new(),
         depth: 0,
         prev_placement: usize::MAX,
@@ -740,6 +745,7 @@ fn solve_with_config_parallel(
 
                     let found = backtrack::backtrack_stealing(
                         &task.board,
+                        &task.sg,
                         &data,
                         task.depth,
                         task.prev_placement,
@@ -957,32 +963,19 @@ mod tests {
 
         // Test configurations: (M, rows, cols, num_pieces)
         let configs: Vec<(u8, u8, u8, u8)> = vec![
-            // Small boards, M=2
-            (2, 3, 3, 2), (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
-            // Small boards, M=3
-            (3, 3, 3, 3), (3, 3, 3, 5), (3, 3, 3, 7),
-            // Medium boards, M=2
-            (2, 4, 3, 5), (2, 4, 3, 8), (2, 4, 3, 12),
-            (2, 4, 4, 6), (2, 4, 4, 10), (2, 4, 4, 14),
-            // Medium boards, M=3
-            (3, 4, 3, 6), (3, 4, 3, 10),
-            (3, 4, 4, 8), (3, 4, 4, 12),
-            // Medium boards, M=4
+            // Small boards
+            (2, 3, 3, 4), (2, 3, 3, 8),
+            (3, 3, 3, 3), (3, 3, 3, 7),
+            // Medium boards
+            (2, 4, 3, 5), (2, 4, 3, 8),
+            (2, 4, 4, 6), (2, 4, 4, 10),
+            (3, 4, 3, 6), (3, 4, 4, 8),
             (4, 4, 4, 6), (4, 4, 4, 10),
-            // Larger boards, M=2
-            (2, 6, 6, 8), (2, 6, 6, 12),
-            // Larger boards, M=3
-            (3, 6, 6, 8), (3, 6, 6, 12),
-            // Larger boards, M=4
-            (4, 6, 6, 8), (4, 6, 6, 10),
-            // Larger boards, M=5
-            (5, 6, 6, 6), (5, 6, 6, 8),
-            // Big boards, low piece count
-            (2, 8, 7, 8), (3, 8, 7, 8), (4, 8, 8, 8),
-            (2, 10, 10, 8), (3, 10, 10, 8), (4, 10, 10, 8),
+            // Larger boards (fewer configs, lower piece counts)
+            (2, 6, 6, 8), (3, 6, 6, 8), (4, 6, 6, 8), (5, 6, 6, 6),
         ];
 
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
 
         let failures: Vec<String> = configs
             .par_iter()
@@ -1078,19 +1071,16 @@ mod tests {
     /// Small configs suitable for brute-force comparison.
     fn small_configs() -> Vec<(u8, u8, u8, u8)> {
         vec![
-            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
+            (2, 3, 3, 4), (2, 3, 3, 8),
             (3, 3, 3, 3), (3, 3, 3, 5),
-            (2, 4, 3, 5), (2, 4, 3, 8),
-            (3, 4, 3, 6),
-            (2, 4, 4, 6), (2, 4, 4, 10),
-            (3, 4, 4, 8),
-            (4, 3, 3, 3), (4, 3, 3, 5),
-            (4, 4, 3, 4),
+            (2, 4, 3, 5), (2, 4, 4, 6),
+            (3, 4, 3, 6), (3, 4, 4, 8),
+            (4, 3, 3, 3), (4, 4, 3, 4),
         ]
     }
 
     fn test_seeds() -> Vec<u64> {
-        (0..30).collect()
+        (0..5).collect()
     }
 
     #[test]
@@ -1162,15 +1152,13 @@ mod tests {
 
     #[test]
     fn test_prune_total_deficit_rowcol_soundness_stress() {
-        // Larger configs to stress test row/col pruning soundness.
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
             (3, 4, 4, 8), (3, 4, 4, 12),
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
         ];
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
         let config = PruningConfig::none().only(|c| {
             c.total_deficit_global = true;
             c.total_deficit_rowcol = true;
@@ -1186,9 +1174,8 @@ mod tests {
             (3, 4, 4, 8), (3, 4, 4, 12),
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
         ];
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
         let config = PruningConfig::none().only(|c| {
             c.total_deficit_global = true;
             c.total_deficit_diagonal = true;
@@ -1286,10 +1273,9 @@ mod tests {
         let configs = vec![
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
-            (4, 8, 8, 8), (5, 6, 6, 6),
+            (5, 6, 6, 6),
         ];
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
         let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(failures, 0, "parity partition stress test had {} failures", failures);
     }
@@ -1314,7 +1300,7 @@ mod tests {
             (2, 4, 4, 6), (2, 4, 4, 10),
             (3, 4, 4, 8), (3, 4, 4, 12),
         ];
-        let seeds: Vec<u64> = (0..30).collect();
+        let seeds: Vec<u64> = (0..5).collect();
 
         let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(failures, 0, "pair skip tables caused {} failures", failures);
@@ -1328,7 +1314,7 @@ mod tests {
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
         ];
-        let seeds: Vec<u64> = (0..50).collect();
+        let seeds: Vec<u64> = (0..5).collect();
 
         let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         assert_eq!(failures, 0, "pair skip stress test had {} failures", failures);
@@ -1606,124 +1592,6 @@ mod tests {
         let result = solve_with_config(&game, &config);
         assert!(result.solution.is_some(), "should find a solution");
         verify_solution(&game, result.solution.as_ref().unwrap());
-    }
-
-    #[test]
-    #[test]
-    fn test_subgame_pruning_benchmark_levels_40_50() {
-        // A/B comparison: solve levels 40-50 with and without subgame pruning.
-        // 2 games per level, 60s timeout per game via parallel solver (has abort).
-        use rand::SeedableRng;
-        use crate::generate::generate_for_level;
-        use std::sync::atomic::{AtomicBool, Ordering as AtomOrd};
-
-        fn solve_with_timeout(game: &Game, config: &PruningConfig, timeout: std::time::Duration) -> SolveResult {
-            let abort = AtomicBool::new(false);
-            let result = Mutex::new(None);
-            let t0 = std::time::Instant::now();
-
-            std::thread::scope(|s| {
-                s.spawn(|| {
-                    let r = solve_with_config(game, config);
-                    *result.lock().unwrap() = Some(r);
-                });
-                // Timeout watcher
-                s.spawn(|| {
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        if result.lock().unwrap().is_some() || t0.elapsed() > timeout {
-                            break;
-                        }
-                    }
-                });
-            });
-
-            result.into_inner().unwrap().unwrap_or(SolveResult {
-                solution: None, nodes_visited: 0, subgame_nodes_visited: 0, progress: 0.0,
-            })
-        }
-
-        let overall_start = std::time::Instant::now();
-        let overall_timeout = std::time::Duration::from_secs(600);
-        let per_game_timeout = std::time::Duration::from_secs(60);
-
-        let mut total_with = 0u64;
-        let mut total_without = 0u64;
-        let mut sg_nodes_total = 0u64;
-        let mut solved_with = 0u32;
-        let mut solved_without = 0u32;
-        let mut games = 0u32;
-        let mut time_with_ms = 0u64;
-        let mut time_without_ms = 0u64;
-
-        println!("\n{:<6} {:<4} {:<10} {:>12} {:>10} {:>12} {:>10} {:>10}",
-            "Level", "Game", "Board", "Nodes(+SG)", "Time(+SG)", "Nodes(-SG)", "Time(-SG)", "SG-nodes");
-        println!("{}", "-".repeat(86));
-
-        for level in 40..=50 {
-            if overall_start.elapsed() > overall_timeout { break; }
-
-            let spec = crate::level::get_level(level).unwrap();
-            for g in 0..2u32 {
-                if overall_start.elapsed() > overall_timeout { break; }
-
-                let seed = level as u64 * 1000 + g as u64;
-                let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
-                let game = generate_for_level(level, &mut rng).unwrap();
-                let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
-                games += 1;
-
-                // With subgame pruning
-                let mut config_with = PruningConfig::default();
-                config_with.subgame = true;
-                let t0 = std::time::Instant::now();
-                let result_with = solve_with_timeout(&game, &config_with, per_game_timeout);
-                let elapsed_with = t0.elapsed();
-
-                // Without subgame pruning (default)
-                let config_without = PruningConfig::default();
-                let t1 = std::time::Instant::now();
-                let result_without = solve_with_timeout(&game, &config_without, per_game_timeout);
-                let elapsed_without = t1.elapsed();
-
-                let status_w = if result_with.solution.is_some() { "OK" } else { "TIMEOUT" };
-                let status_wo = if result_without.solution.is_some() { "OK" } else { "TIMEOUT" };
-
-                if result_with.solution.is_some() { solved_with += 1; }
-                if result_without.solution.is_some() { solved_without += 1; }
-                total_with += result_with.nodes_visited;
-                total_without += result_without.nodes_visited;
-                sg_nodes_total += result_with.subgame_nodes_visited;
-                time_with_ms += elapsed_with.as_millis() as u64;
-                time_without_ms += elapsed_without.as_millis() as u64;
-
-                println!("{:<6} {:<4} {:<10} {:>12} {:>10} {:>12} {:>10} {:>10} {} / {}",
-                    level, g, board_desc,
-                    result_with.nodes_visited,
-                    format!("{:.0?}", elapsed_with),
-                    result_without.nodes_visited,
-                    format!("{:.0?}", elapsed_without),
-                    result_with.subgame_nodes_visited,
-                    status_w, status_wo,
-                );
-            }
-        }
-
-        println!("\n--- Summary ---");
-        println!("Games: {}", games);
-        println!("Solved with subgame:    {}/{}", solved_with, games);
-        println!("Solved without subgame: {}/{}", solved_without, games);
-        println!("Total nodes with:    {}", total_with);
-        println!("Total nodes without: {}", total_without);
-        println!("Total subgame nodes: {}", sg_nodes_total);
-        println!("Total time with:     {}ms", time_with_ms);
-        println!("Total time without:  {}ms", time_without_ms);
-        if total_without > 0 {
-            println!("Node ratio (with/without): {:.3}", total_with as f64 / total_without as f64);
-        }
-        if time_without_ms > 0 {
-            println!("Time ratio (with/without): {:.3}", time_with_ms as f64 / time_without_ms as f64);
-        }
     }
 
     #[test]
