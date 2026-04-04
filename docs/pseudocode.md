@@ -21,12 +21,12 @@ solve(game):
 
 backtrack(board, piece_idx, min_placement):
     if piece_idx == n:
-        return board.min_flips == 0
+        return board.total_deficit == 0
 
     # --- 1x1 endgame: solve remaining single-cell pieces directly ---
     if piece_idx >= single_cell_start:
-        for each non-zero cell at value d:
-            assign (M-d) pieces to that cell
+        for each non-zero cell at deficit d:
+            assign d pieces to that cell
         return total_assigned == remaining_pieces
 
     # --- Pruning checks ---
@@ -34,14 +34,14 @@ backtrack(board, piece_idx, min_placement):
     # Active planes: each piece removes at most 1
     if board.active_planes > n - piece_idx:  PRUNE
 
-    # Min-flips budget: remaining piece area must cover needed flips
-    if remaining_bits[piece_idx] < board.min_flips:  PRUNE
+    # Total-deficit budget: remaining piece area must cover needed deficit
+    if remaining_bits[piece_idx] < board.total_deficit:  PRUNE
 
     # (Modular check is an invariant — only validated once at root)
 
     # Per-cell coverage: every non-zero cell must be reachable enough times
     for d in 1..M:
-        needed = M - d
+        needed = M - d  # deficit for cells at value d
         if any cell in plane[d] has suffix_coverage[piece_idx] < needed:  PRUNE
 
     # Jaggedness: boundary complexity must be achievable
@@ -77,7 +77,7 @@ backtrack(board, piece_idx, min_placement):
 ```
 Board:
     planes[0..M]    : Bitboard per digit value (mutually exclusive)
-    min_flips       : u32, incrementally maintained on apply/undo
+    total_deficit   : u32, incrementally maintained on apply/undo
     active_planes   : u8, recomputed after each apply/undo
 
 Bitboard:
@@ -90,6 +90,6 @@ CoverageCounter:
 ```
 
 ## Invariant
-`(remaining_bits - min_flips) % M` is constant throughout the search.
+`(remaining_bits - total_deficit) % M` is constant throughout the search.
 Each placement changes it by `-M * zeros_hit ≡ 0 (mod M)`.
 Only needs to be checked once at the root for input validation.

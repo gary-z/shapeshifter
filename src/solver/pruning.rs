@@ -7,7 +7,7 @@ pub(crate) const MAX_LINES: usize = 27;
 /// Max number of pieces (n+1 for suffix arrays).
 pub(crate) const MAX_PIECES: usize = 37;
 
-/// A family of parallel lines for the min_flips DP pruning.
+/// A family of parallel lines for the deficit DP pruning.
 pub(crate) struct LineFamily {
     pub(crate) masks: [Bitboard; MAX_LINES],
     pub(crate) num_lines: usize,
@@ -83,9 +83,9 @@ pub(crate) fn check_line_family(
 pub(crate) struct ParityPartition {
     /// Mask of group-0 cells on the board.
     pub(crate) mask: Bitboard,
-    /// suffix_max[i] = max achievable group-0 increments from pieces [i..n].
+    /// suffix_max[i] = max achievable group-0 deficit contribution from pieces [i..n].
     pub(crate) suffix_max: Vec<u32>,
-    /// suffix_min[i] = min achievable group-0 increments from pieces [i..n].
+    /// suffix_min[i] = min achievable group-0 deficit contribution from pieces [i..n].
     pub(crate) suffix_min: Vec<u32>,
     /// suffix_dp[i] = achievable group-0 totals from pieces [i..n].
     pub(crate) suffix_dp: Vec<Vec<bool>>,
@@ -206,8 +206,8 @@ impl SubsetReachability {
 }
 
 #[inline(always)]
-pub(crate) fn prune_min_flips_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    data.remaining_bits[piece_idx] >= board.min_flips_needed()
+pub(crate) fn prune_total_deficit_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
+    data.remaining_bits[piece_idx] >= board.total_deficit()
 }
 
 #[inline(always)]
@@ -271,28 +271,28 @@ pub(crate) fn prune_weight_tuples(board: &Board, data: &SolverData, piece_idx: u
 
 pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
     let m = data.m as u32;
-    let total_min_flips = board.min_flips_needed();
+    let total_deficit = board.total_deficit();
 
     for partition in &data.parity_partitions {
-        // Compute group-0 min_flips using the precomputed mask.
-        let mut g0_min_flips = 0u32;
+        // Compute group-0 deficit using the precomputed mask.
+        let mut g0_deficit = 0u32;
         for d in 1..data.m {
-            g0_min_flips += (data.m - d) as u32 * (board.plane(d) & partition.mask).count_ones();
+            g0_deficit += (data.m - d) as u32 * (board.plane(d) & partition.mask).count_ones();
         }
 
         // Simple bounds check.
-        if partition.suffix_max[piece_idx] < g0_min_flips {
+        if partition.suffix_max[piece_idx] < g0_deficit {
             return false;
         }
-        let g1_min_flips = total_min_flips - g0_min_flips;
+        let g1_deficit = total_deficit - g0_deficit;
         let max_g1 = data.remaining_bits[piece_idx] - partition.suffix_min[piece_idx];
-        if max_g1 < g1_min_flips {
+        if max_g1 < g1_deficit {
             return false;
         }
 
-        // Full DP check: is g0_min_flips achievable (accounting for wraps)?
+        // Full DP check: is g0_deficit achievable (accounting for overshoot cycles)?
         let dp = &partition.suffix_dp[piece_idx];
-        let mut target = g0_min_flips;
+        let mut target = g0_deficit;
         let mut found = false;
         while (target as usize) < dp.len() {
             if dp[target as usize] {
@@ -316,12 +316,12 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
 /// Ordered by effectiveness: cheapest high-impact checks first.
 ///
 /// Ablation results on historical puzzles (L43 M=2, L36/L46 M=3):
-/// - min_flips_global: CRITICAL (>10× node increase without it)
+/// - total_deficit_global: CRITICAL (>10× node increase without it)
 /// - pair skip tables: CRITICAL (handled in placement filtering, not here)
 /// - jaggedness: +83% nodes on M=2, marginal on M=3
-/// - min_flips_diagonal: +16% nodes on M=2, marginal on M=3
-/// - parity_partitions, subset_reachability, weight_tuples: part of min_flips_global gate
-/// - active_planes, coverage, cell_locking, min_flips_rowcol: 0-1% node
+/// - total_deficit_diagonal: +16% nodes on M=2, marginal on M=3
+/// - parity_partitions, subset_reachability, weight_tuples: part of total_deficit_global gate
+/// - active_planes, coverage, cell_locking, total_deficit_rowcol: 0-1% node
 ///   reduction but 6-16% time cost — removed from hot path.
 pub(crate) fn prune_node(
     board: &Board,
@@ -330,15 +330,15 @@ pub(crate) fn prune_node(
     config: &super::PruningConfig,
 ) -> bool {
     // Ordered by cost-effectiveness. Checks that prune 0-1% of nodes but cost
-    // 6-16% of time (active_planes, coverage, cell_locking, min_flips_rowcol,
+    // 6-16% of time (active_planes, coverage, cell_locking, total_deficit_rowcol,
     // subgrid) are omitted. Validated on simulated L36-60:
     // 78/125 vs 79/125 solves — negligible impact, +14-27% throughput gain.
-    if config.min_flips_global && !prune_min_flips_global(board, data, piece_idx) { return false; }
+    if config.total_deficit_global && !prune_total_deficit_global(board, data, piece_idx) { return false; }
     if config.jaggedness && !prune_jaggedness(board, data, piece_idx) { return false; }
-    if config.min_flips_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
-    if config.min_flips_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
-    if config.min_flips_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
-    if config.min_flips_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
-    if config.min_flips_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
+    if config.total_deficit_rowcol && !prune_line_families_rowcol(board, data, piece_idx) { return false; }
+    if config.total_deficit_diagonal && !prune_line_families_diagonal(board, data, piece_idx) { return false; }
+    if config.total_deficit_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
+    if config.total_deficit_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
+    if config.total_deficit_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
     true
 }

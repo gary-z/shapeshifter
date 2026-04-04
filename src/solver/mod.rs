@@ -41,9 +41,9 @@ pub struct SolveResult {
 #[derive(Clone)]
 pub struct PruningConfig {
     pub active_planes: bool,
-    pub min_flips_global: bool,
-    pub min_flips_rowcol: bool,
-    pub min_flips_diagonal: bool,
+    pub total_deficit_global: bool,
+    pub total_deficit_rowcol: bool,
+    pub total_deficit_diagonal: bool,
     pub coverage: bool,
     pub jaggedness: bool,
     pub cell_locking: bool,
@@ -54,9 +54,9 @@ impl Default for PruningConfig {
     fn default() -> Self {
         Self {
             active_planes: true,
-            min_flips_global: true,
-            min_flips_rowcol: true,
-            min_flips_diagonal: true,
+            total_deficit_global: true,
+            total_deficit_rowcol: true,
+            total_deficit_diagonal: true,
             coverage: true,
             jaggedness: true,
             cell_locking: true,
@@ -70,9 +70,9 @@ impl PruningConfig {
     pub fn none() -> Self {
         Self {
             active_planes: false,
-            min_flips_global: false,
-            min_flips_rowcol: false,
-            min_flips_diagonal: false,
+            total_deficit_global: false,
+            total_deficit_rowcol: false,
+            total_deficit_diagonal: false,
             coverage: false,
             jaggedness: false,
             cell_locking: false,
@@ -877,10 +877,10 @@ mod tests {
     }
 
     #[test]
-    fn test_min_flips_pruning() {
+    fn test_total_deficit_pruning() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.min_flips_needed(), 9);
+        assert_eq!(board.total_deficit(), 9);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
         assert!(solve(&game, false, false).solution.is_none());
@@ -1081,59 +1081,59 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_min_flips_global() {
+    fn test_prune_total_deficit_global() {
         let configs = small_configs();
         let seeds = test_seeds();
         let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.min_flips_global = true);
+        let with_prune = PruningConfig::none().only(|c| c.total_deficit_global = true);
 
         let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
         let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
 
-        assert_eq!(fail_with, 0, "min_flips_global prune caused failures");
+        assert_eq!(fail_with, 0, "total_deficit_global prune caused failures");
         assert!(nodes_with <= nodes_without,
-            "min_flips_global should reduce nodes: {} vs {}", nodes_with, nodes_without);
+            "total_deficit_global should reduce nodes: {} vs {}", nodes_with, nodes_without);
     }
 
     #[test]
-    fn test_prune_min_flips_rowcol() {
+    fn test_prune_total_deficit_rowcol() {
         let configs = small_configs();
         let seeds = test_seeds();
         // Enable global so the rowcol check has something to build on.
-        let baseline = PruningConfig::none().only(|c| c.min_flips_global = true);
+        let baseline = PruningConfig::none().only(|c| c.total_deficit_global = true);
         let with_prune = PruningConfig::none().only(|c| {
-            c.min_flips_global = true;
-            c.min_flips_rowcol = true;
+            c.total_deficit_global = true;
+            c.total_deficit_rowcol = true;
         });
 
         let (nodes_baseline, _) = fuzz_with_config(&baseline, &configs, &seeds);
         let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
 
-        assert_eq!(fail_with, 0, "min_flips_rowcol prune caused failures");
+        assert_eq!(fail_with, 0, "total_deficit_rowcol prune caused failures");
         assert!(nodes_with <= nodes_baseline,
-            "min_flips_rowcol should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
+            "total_deficit_rowcol should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
     }
 
     #[test]
-    fn test_prune_min_flips_diagonal() {
+    fn test_prune_total_deficit_diagonal() {
         let configs = small_configs();
         let seeds = test_seeds();
-        let baseline = PruningConfig::none().only(|c| c.min_flips_global = true);
+        let baseline = PruningConfig::none().only(|c| c.total_deficit_global = true);
         let with_prune = PruningConfig::none().only(|c| {
-            c.min_flips_global = true;
-            c.min_flips_diagonal = true;
+            c.total_deficit_global = true;
+            c.total_deficit_diagonal = true;
         });
 
         let (nodes_baseline, _) = fuzz_with_config(&baseline, &configs, &seeds);
         let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
 
-        assert_eq!(fail_with, 0, "min_flips_diagonal prune caused failures");
+        assert_eq!(fail_with, 0, "total_deficit_diagonal prune caused failures");
         assert!(nodes_with <= nodes_baseline,
-            "min_flips_diagonal should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
+            "total_deficit_diagonal should reduce nodes: {} vs {}", nodes_with, nodes_baseline);
     }
 
     #[test]
-    fn test_prune_min_flips_rowcol_soundness_stress() {
+    fn test_prune_total_deficit_rowcol_soundness_stress() {
         // Larger configs to stress test row/col pruning soundness.
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
@@ -1144,15 +1144,15 @@ mod tests {
         ];
         let seeds: Vec<u64> = (0..50).collect();
         let config = PruningConfig::none().only(|c| {
-            c.min_flips_global = true;
-            c.min_flips_rowcol = true;
+            c.total_deficit_global = true;
+            c.total_deficit_rowcol = true;
         });
         let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
-        assert_eq!(failures, 0, "min_flips_rowcol stress test had {} failures", failures);
+        assert_eq!(failures, 0, "total_deficit_rowcol stress test had {} failures", failures);
     }
 
     #[test]
-    fn test_prune_min_flips_diagonal_soundness_stress() {
+    fn test_prune_total_deficit_diagonal_soundness_stress() {
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
             (3, 4, 4, 8), (3, 4, 4, 12),
@@ -1162,11 +1162,11 @@ mod tests {
         ];
         let seeds: Vec<u64> = (0..50).collect();
         let config = PruningConfig::none().only(|c| {
-            c.min_flips_global = true;
-            c.min_flips_diagonal = true;
+            c.total_deficit_global = true;
+            c.total_deficit_diagonal = true;
         });
         let (_, failures) = fuzz_with_config(&config, &configs, &seeds);
-        assert_eq!(failures, 0, "min_flips_diagonal stress test had {} failures", failures);
+        assert_eq!(failures, 0, "total_deficit_diagonal stress test had {} failures", failures);
     }
 
     #[test]
@@ -1272,7 +1272,7 @@ mod tests {
         let seeds = test_seeds();
         let (nodes_with, _) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
         let mut no_parity = PruningConfig::default();
-        no_parity.min_flips_global = false;
+        no_parity.total_deficit_global = false;
         let (nodes_without, _) = fuzz_with_config(&no_parity, &configs, &seeds);
         assert!(nodes_with <= nodes_without,
             "parity partitions should reduce nodes: {} vs {}", nodes_with, nodes_without);

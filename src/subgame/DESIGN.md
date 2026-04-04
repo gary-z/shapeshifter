@@ -118,7 +118,7 @@ After all pieces, row `r` in the subgame has value
 `row_deficit[r] - (row_deficit[r] + M * K_r) = -M * K_r ≡ 0 (mod M)`.
 
 When no wrapping occurs (`K_r = 0` for all `r`, i.e.
-`total_piece_cells == min_flips`), all cells reach exactly 0.
+`total_piece_cells == total_deficit`), all cells reach exactly 0.
 
 Therefore the same row positions that solve the full game also solve the row
 subgame. The argument is symmetric for the column subgame. **QED**
@@ -179,22 +179,22 @@ doesn't match the per-cell deficits `[0,2,1; 1,0,2; 2,1,0]`.
 
 The "decrement to exactly zero" formulation assumes each cell in the full game
 receives exactly its minimum coverage: `(M - board[r][c]) % M` hits. This
-holds when `total_piece_cells == min_flips` (total cells across all pieces
+holds when `total_piece_cells == total_deficit` (total cells across all pieces
 equals total deficit across the board). In this case no cell ever wraps past
 zero, and the unreduced subgame goal of "all cells reach exactly 0" is sound.
 
-When `total_piece_cells > min_flips`, some cells must wrap (receive more hits
+When `total_piece_cells > total_deficit`, some cells must wrap (receive more hits
 than their minimum deficit). The excess hits satisfy
-`total_piece_cells - min_flips ≡ 0 (mod M)`. In this case the strict
+`total_piece_cells - total_deficit ≡ 0 (mod M)`. In this case the strict
 "exactly zero" goal could falsely reject valid solutions. The correct
 subgame goal generalizes to: all cells reach a value `≡ 0 (mod M)`.
 
 In practice:
 
-- The solver already checks `total_piece_cells >= min_flips` and
-  `total_piece_cells ≡ min_flips (mod M)` as necessary conditions.
+- The solver already checks `total_piece_cells >= total_deficit` and
+  `total_piece_cells ≡ total_deficit (mod M)` as necessary conditions.
 - After piece cancellation (removing groups of M identical pieces), most
-  puzzles have `total_piece_cells == min_flips` exactly.
+  puzzles have `total_piece_cells == total_deficit` exactly.
 - When wrapping is needed, we can fall back to the modular check or allow
   subgame cells to end at any non-negative multiple of M rather than only 0.
 
@@ -226,7 +226,7 @@ full game board to store deficits rather than raw values:
 - Cell stores value `v in [0, M)`.
 - `apply_piece` increments covered cells by 1 mod M.
 - Solved when all cells are 0.
-- `min_flips = sum (M - d) * popcount(planes[d])` for d > 0.
+- `total_deficit = sum (M - d) * popcount(planes[d])` for d > 0.
 
 ### Proposed model (decrement-to-zero)
 
@@ -235,7 +235,7 @@ full game board to store deficits rather than raw values:
   (deficit `d` becomes `(d - 1 + M) % M`, but conceptually we track the
   remaining work).
 - Solved when all deficits are 0 (same check).
-- `min_flips` is the sum of all deficits (same value, just reframed).
+- `total_deficit` is the sum of all deficits (same value, just reframed).
 
 The two models are isomorphic -- a board with value `v` in the current model is
 a board with deficit `(M - v) % M` in the new model, and `apply_piece` in one
@@ -252,7 +252,7 @@ stays the same; only the interpretation changes:
 2. **Piece application is uniform**: both the full game and subgame decrement
    cells. No conceptual mismatch between "increment mod M" and "decrement
    toward zero."
-3. **Bounds are clearer**: `min_flips` directly reads as "total remaining
+3. **Bounds are clearer**: `total_deficit` directly reads as "total remaining
    work." Each piece application reduces it by exactly `popcount(piece_mask)`.
    Overshoot (hitting a 0-deficit cell) increases it by `M - 1`, which is
    the natural penalty.
@@ -260,16 +260,16 @@ stays the same; only the interpretation changes:
 ### Migration plan
 
 The reframe is largely an interpretation change. The existing `Board` already
-computes `min_flips` as the sum of deficits and checks `min_flips == 0` for
+computes `total_deficit` as the sum of deficits and checks `total_deficit == 0` for
 solved. The bitboard layout is identical under either interpretation:
 
 | Current field       | Current meaning                   | Deficit meaning                     |
 |---------------------|-----------------------------------|-------------------------------------|
 | `planes[0]`         | cells with value 0                | cells with deficit 0 (solved)       |
 | `planes[d]` (d > 0) | cells with value d                | cells with deficit `(M - d) % M`    |
-| `min_flips`         | sum of `(M - d) * count(planes[d])` | sum of all deficits (same value)  |
+| `total_deficit`         | sum of `(M - d) * count(planes[d])` | sum of all deficits (same value)  |
 | `apply_piece`       | increment covered cells mod M     | rotate deficits (same bit ops)      |
-| `is_solved`         | `min_flips == 0`                  | all deficits are 0 (same check)     |
+| `is_solved`         | `total_deficit == 0`                  | all deficits are 0 (same check)     |
 
 No runtime behavior changes. The concrete steps are:
 
