@@ -10,12 +10,11 @@ subgame lets us prune immediately.
 
 ## Decrement Formulation
 
-Both the full game and the subgames use a **decrement-to-zero** model rather
-than the original increment-and-wrap model. This makes the relationship between
-the two levels transparent:
+Both the full game and the subgames use a **decrement-to-zero** model. This
+makes the relationship between the two levels transparent:
 
-- Each cell stores its **deficit**: how many increments it still needs to reach
-  0 mod M. For a full-game cell with value `v`, the deficit is `(M - v) % M`.
+- Each cell stores its **deficit**: how many hits it still needs to reach 0.
+  For a full-game cell with value `v`, the deficit is `(M - v) % M`.
 - Placing a piece **decrements** each covered cell by the piece's contribution
   at that position.
 - The goal is to bring every cell to exactly zero. A cell going negative means
@@ -52,7 +51,7 @@ Range: `[0, H * (M - 1)]`.
 Consider M = 5 and a row `[0, 0, 0, 0, 1, 1]`. The per-cell deficits are
 `[0, 0, 0, 0, 4, 4]`, summing to 8.
 
-- **Mod-M version**: `8 mod 5 = 3`. Claims 3 increments suffice.
+- **Mod-M version**: `8 mod 5 = 3`. Claims 3 hits suffice.
 - **Unreduced version**: stores 8. Correctly requires exactly 8 piece-cells.
 
 The unreduced version is strictly tighter and catches infeasibility that the
@@ -150,15 +149,15 @@ all three columns by 1. Three pieces: `[3-3, 3-3, 3-3]` = `[0, 0, 0]`. **Solved.
 **Full game**: The only valid column position for a 1 x 3 bar on a 3-wide board
 is column 0. The row subgame forces one bar per row. So each bar covers an
 entire row, and every cell is hit exactly once. But cell (0,0) has deficit 0
-and receives 1 hit -- overshoot. In the original model: value 0 increments to
-1 (mod 3), not 0. Exhaustively:
+and receives 1 hit -- overshoot (deficit 0 wraps to deficit M-1 = 2).
+Exhaustively:
 
-| Placement          | Hits per row | Result (original model)      |
+| Placement          | Hits per row | Resulting deficits           |
 |--------------------|-------------|------------------------------|
-| 1 per row (forced) | all cells +1 | `1 2 0 / 0 1 2 / 2 0 1` ≠ 0 |
-| 2 in row 0, 1 in 1 | row 0: +2   | `2 0 1 / 0 1 2 / 1 2 0` ≠ 0 |
-| 3 in row 0         | row 0: +3≡0 | `0 1 2 / 2 0 1 / 1 2 0` ≠ 0 |
-| (all 10 combos)    | ...         | none solve the board         |
+| 1 per row (forced) | all cells -1 | `2 1 0 / 0 2 1 / 1 0 2` ≠ 0 |
+| 2 in row 0, 1 in 1 | row 0: -2   | `1 0 2 / 0 2 1 / 2 1 0` ≠ 0 |
+| 3 in row 0         | row 0: -3≡0 | `0 2 1 / 1 0 2 / 2 1 0` ≠ 0 |
+| (all 10 combos)    | ...         | none zero all deficits       |
 
 No arrangement of three 1 x 3 bars solves this board. **The full game is
 unsolvable, but both subgames are solvable. QED**
@@ -216,74 +215,48 @@ The subgame has the same number of pieces (N, up to 36) but dramatically fewer
 placements per piece. Combined with the 1D structure enabling tighter DP bounds,
 infeasibility can often be detected orders of magnitude faster.
 
-## Reframing the Full Game as Decrement-to-Zero
+## Full Game: Decrement-to-Zero Model
 
-To unify reasoning between the full game and subgames, we propose reframing the
-full game board to store deficits rather than raw values:
+The full game codebase uses the same **decrement-to-zero** model as the
+subgames. Each cell stores a deficit `d = (M - v) % M` in `[0, M)`, and
+`apply_piece` decrements covered cells by 1 (mod M). The board is solved when
+all deficits are 0.
 
-### Current model (increment-and-wrap)
+The bitboard plane layout maps directly:
 
-- Cell stores value `v in [0, M)`.
-- `apply_piece` increments covered cells by 1 mod M.
-- Solved when all cells are 0.
-- `total_deficit = sum (M - d) * popcount(planes[d])` for d > 0.
+- `planes[0]` = cells with deficit 0 (already solved)
+- `planes[d]` (d > 0) = cells with deficit `(M - d) % M`, needing that many
+  more hits
 
-### Proposed model (decrement-to-zero)
+Key fields:
 
-- Cell stores deficit `d = (M - v) % M`, in `[0, M)`.
-- `apply_piece` decrements covered cells by 1, with floor at 0 via mod M
-  (deficit `d` becomes `(d - 1 + M) % M`, but conceptually we track the
-  remaining work).
-- Solved when all deficits are 0 (same check).
-- `total_deficit` is the sum of all deficits (same value, just reframed).
+| Field               | Meaning                                               |
+|---------------------|-------------------------------------------------------|
+| `planes[0]`         | cells with deficit 0 (solved)                         |
+| `planes[d]` (d > 0) | cells with deficit `(M - d) % M`                     |
+| `total_deficit`     | sum of all per-cell deficits                          |
+| `apply_piece`       | decrement deficit of covered cells by 1 (mod M)      |
+| `is_solved`         | `total_deficit == 0`                                  |
 
-The two models are isomorphic -- a board with value `v` in the current model is
-a board with deficit `(M - v) % M` in the new model, and `apply_piece` in one
-corresponds exactly to `apply_piece` in the other. The bitboard plane layout
-stays the same; only the interpretation changes:
-
-- `planes[0]` = cells with deficit 0 (already solved) = cells with value 0
-- `planes[d]` = cells needing d more hits = cells with value `(M - d) % M`
-
-### Why reframe?
+### Why decrement-to-zero?
 
 1. **Subgame construction becomes a plain sum**: the subgame cell value for
    row `r` is `sum of deficits in row r`, directly summing the same quantity.
 2. **Piece application is uniform**: both the full game and subgame decrement
-   cells. No conceptual mismatch between "increment mod M" and "decrement
-   toward zero."
+   cells toward zero.
 3. **Bounds are clearer**: `total_deficit` directly reads as "total remaining
    work." Each piece application reduces it by exactly `popcount(piece_mask)`.
    Overshoot (hitting a 0-deficit cell) increases it by `M - 1`, which is
    the natural penalty.
 
-### Migration plan
+### Subgame construction
 
-The reframe is largely an interpretation change. The existing `Board` already
-computes `total_deficit` as the sum of deficits and checks `total_deficit == 0` for
-solved. The bitboard layout is identical under either interpretation:
+Methods to produce subgame boards and pieces from the full game:
+- `to_row_subgame() -> (SubgameBoard, Vec<SubgamePiece>)`
+- `to_col_subgame() -> (SubgameBoard, Vec<SubgamePiece>)`
 
-| Current field       | Current meaning                   | Deficit meaning                     |
-|---------------------|-----------------------------------|-------------------------------------|
-| `planes[0]`         | cells with value 0                | cells with deficit 0 (solved)       |
-| `planes[d]` (d > 0) | cells with value d                | cells with deficit `(M - d) % M`    |
-| `total_deficit`         | sum of `(M - d) * count(planes[d])` | sum of all deficits (same value)  |
-| `apply_piece`       | increment covered cells mod M     | rotate deficits (same bit ops)      |
-| `is_solved`         | `total_deficit == 0`                  | all deficits are 0 (same check)     |
+### Integration
 
-No runtime behavior changes. The concrete steps are:
-
-1. **Subgame module** (`src/subgame/`): Build natively in decrement-to-zero.
-   Board cells store unreduced deficit sums. Pieces decrement. Goal is zero.
-
-2. **Full game comments**: Optionally update comments in `board.rs` to use
-   deficit language, but this is cosmetic and can be deferred.
-
-3. **Subgame construction**: Add methods to `Board` (or a standalone function)
-   that produce subgame boards and pieces from the full game:
-   - `to_row_subgame() -> (SubgameBoard, Vec<SubgamePiece>)`
-   - `to_col_subgame() -> (SubgameBoard, Vec<SubgamePiece>)`
-
-4. **Integration**: Wire subgame feasibility checks into the solver's pruning
-   pipeline, likely as a precomputation step (check once before backtracking)
-   and optionally during search (recheck after each piece placement).
+Wire subgame feasibility checks into the solver's pruning pipeline, likely as
+a precomputation step (check once before backtracking) and optionally during
+search (recheck after each piece placement).
