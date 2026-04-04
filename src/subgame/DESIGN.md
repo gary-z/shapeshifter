@@ -13,8 +13,7 @@ subgame lets us prune immediately.
 Both the full game and the subgames use a **decrement-to-zero** model. This
 makes the relationship between the two levels transparent:
 
-- Each cell stores its **deficit**: how many hits it still needs to reach 0.
-  For a full-game cell with value `v`, the deficit is `(M - v) % M`.
+- Each cell stores its **deficit** directly: how many hits it still needs to reach 0.
 - Placing a piece **decrements** each covered cell by the piece's contribution
   at that position.
 - The goal is to bring every cell to exactly zero. A cell going negative means
@@ -30,7 +29,7 @@ reason about: deficits start high and shrink toward zero, never wrapping.
 For each row `r`, sum the per-cell deficits across all columns:
 
 ```
-row_deficit[r] = sum_{c=0}^{W-1} (M - board[r][c]) % M
+row_deficit[r] = sum_{c=0}^{W-1} board[r][c]
 ```
 
 Range: `[0, W * (M - 1)]`. This value is **not** reduced mod M. It represents
@@ -41,7 +40,7 @@ the exact total number of piece-cell hits that must land in row `r`.
 Symmetric:
 
 ```
-col_deficit[c] = sum_{r=0}^{H-1} (M - board[r][c]) % M
+col_deficit[c] = sum_{r=0}^{H-1} board[r][c]
 ```
 
 Range: `[0, H * (M - 1)]`.
@@ -96,11 +95,11 @@ subgame of length N:
 For any row `r`, the full-game solution satisfies:
 
 ```
-coverage[r][c] ≡ (M - board[r][c])  (mod M)    for all c
+coverage[r][c] ≡ board[r][c]  (mod M)    for all c
 ```
 
 where `coverage[r][c]` is the number of pieces covering cell `(r, c)`.
-Specifically, `coverage[r][c] = (M - board[r][c]) % M + k_{r,c} * M` for some
+Specifically, `coverage[r][c] = board[r][c] + k_{r,c} * M` for some
 `k_{r,c} >= 0` (wrapping count). Summing over all columns in row `r`:
 
 ```
@@ -129,19 +128,19 @@ subgame. The argument is symmetric for the column subgame. **QED**
 **Counterexample**: 3 x 3 board, M = 3:
 
 ```
-Board:           Deficits ((M - v) % M):
-  0 1 2            0 2 1
-  2 0 1            1 0 2
-  1 2 0            2 1 0
+Board (values = deficits):
+  0 1 2
+  2 0 1
+  1 2 0
 ```
 
 Three pieces: all 1 x 3 horizontal bars (shape `[###]`).
 
-**Row subgame**: deficit = `[0+2+1, 1+0+2, 2+1+0]` = `[3, 3, 3]`.
+**Row subgame**: deficit = `[0+1+2, 2+0+1, 1+2+0]` = `[3, 3, 3]`.
 Each piece has row profile = `[3]` (1 row, 3 cells). Place one piece per row:
 `[3-3, 3-3, 3-3]` = `[0, 0, 0]`. **Solved.**
 
-**Column subgame**: deficit = `[0+1+2, 2+0+1, 1+2+0]` = `[3, 3, 3]`.
+**Column subgame**: deficit = `[0+2+1, 1+0+2, 2+1+0]` = `[3, 3, 3]`.
 Each piece has column profile = `[1, 1, 1]` (3 columns, 1 cell each).
 On a 3-wide board, the only valid column position is 0. Each piece decrements
 all three columns by 1. Three pieces: `[3-3, 3-3, 3-3]` = `[0, 0, 0]`. **Solved.**
@@ -172,12 +171,12 @@ does not determine the individual entries.
 In the counterexample, the row subgame says "3 hits in each row" and the column
 subgame says "3 hits in each column," which is consistent. But the only way to
 achieve this with 1 x 3 bars is to hit every cell exactly once -- and that
-doesn't match the per-cell deficits `[0,2,1; 1,0,2; 2,1,0]`.
+doesn't match the per-cell deficits `[0,1,2; 2,0,1; 1,2,0]`.
 
 ## Wrapping Caveat
 
 The "decrement to exactly zero" formulation assumes each cell in the full game
-receives exactly its minimum coverage: `(M - board[r][c]) % M` hits. This
+receives exactly its minimum coverage: `board[r][c]` hits. This
 holds when `total_piece_cells == total_deficit` (total cells across all pieces
 equals total deficit across the board). In this case no cell ever wraps past
 zero, and the unreduced subgame goal of "all cells reach exactly 0" is sound.
@@ -218,23 +217,22 @@ infeasibility can often be detected orders of magnitude faster.
 ## Full Game: Decrement-to-Zero Model
 
 The full game codebase uses the same **decrement-to-zero** model as the
-subgames. Each cell stores a deficit `d = (M - v) % M` in `[0, M)`, and
+subgames. Each cell stores its deficit `d` directly in `[0, M)`, and
 `apply_piece` decrements covered cells by 1 (mod M). The board is solved when
 all deficits are 0.
 
 The bitboard plane layout maps directly:
 
 - `planes[0]` = cells with deficit 0 (already solved)
-- `planes[d]` (d > 0) = cells with deficit `(M - d) % M`, needing that many
-  more hits
+- `planes[d]` (d > 0) = cells with deficit `d`, needing `d` more hits
 
 Key fields:
 
 | Field               | Meaning                                               |
 |---------------------|-------------------------------------------------------|
 | `planes[0]`         | cells with deficit 0 (solved)                         |
-| `planes[d]` (d > 0) | cells with deficit `(M - d) % M`                     |
-| `total_deficit`     | sum of all per-cell deficits                          |
+| `planes[d]` (d > 0) | cells with deficit `d`                               |
+| `total_deficit`     | sum of all per-cell deficits = `Σ d * popcount(planes[d])` |
 | `apply_piece`       | decrement deficit of covered cells by 1 (mod M)      |
 | `is_solved`         | `total_deficit == 0`                                  |
 

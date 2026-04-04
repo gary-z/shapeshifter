@@ -41,7 +41,7 @@ backtrack(board, piece_idx, min_placement):
 
     # Per-cell coverage: every non-zero cell must be reachable enough times
     for d in 1..M:
-        needed = M - d  # deficit for cells at value d
+        needed = d  # board values are deficits directly
         if any cell in plane[d] has suffix_coverage[piece_idx] < needed:  PRUNE
 
     # Jaggedness: boundary complexity must be achievable

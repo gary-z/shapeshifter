@@ -349,7 +349,7 @@ pub(crate) fn build_solver_data(
                 for i in 0..k {
                     if effect[i] > 0 {
                         let digit = (result / multiplier) % m_val;
-                        let new_digit = (digit + effect[i] as usize) % m_val;
+                        let new_digit = (digit + m_val - effect[i] as usize) % m_val;
                         result = result - digit * multiplier + new_digit * multiplier;
                     }
                     multiplier *= m_val;

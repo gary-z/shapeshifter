@@ -51,19 +51,16 @@ pub fn piece_col_profile(piece: &Piece) -> SubgamePiece {
 
 /// Compute the row subgame board: for each row, sum the per-cell deficits.
 ///
-/// `deficit(r, c) = (M - board[r][c]) % M`
-///
+/// Board values are deficits directly, so this is just a row-wise sum.
 /// The result is an unreduced sum in `[0, W * (M-1)]`.
 pub fn board_row_deficits(board: &Board) -> SubgameBoard {
     let h = board.height() as usize;
     let w = board.width() as usize;
-    let m = board.m() as u16;
     let mut cells = Vec::with_capacity(h);
     for r in 0..h {
         let mut sum = 0u16;
         for c in 0..w {
-            let v = board.get(r, c) as u16;
-            sum += (m - v) % m;
+            sum += board.get(r, c) as u16;
         }
         cells.push(sum);
     }
@@ -74,13 +71,11 @@ pub fn board_row_deficits(board: &Board) -> SubgameBoard {
 pub fn board_col_deficits(board: &Board) -> SubgameBoard {
     let h = board.height() as usize;
     let w = board.width() as usize;
-    let m = board.m() as u16;
     let mut cells = Vec::with_capacity(w);
     for c in 0..w {
         let mut sum = 0u16;
         for r in 0..h {
-            let v = board.get(r, c) as u16;
-            sum += (m - v) % m;
+            sum += board.get(r, c) as u16;
         }
         cells.push(sum);
     }
@@ -247,14 +242,10 @@ mod tests {
 
     #[test]
     fn test_row_deficits_nontrivial() {
-        // 3x3, M=3: board values
-        // 0 1 2
-        // 2 1 0
-        // 1 0 2
-        // Deficits: (3-v)%3
-        // 0 2 1  -> sum = 3
-        // 1 2 0  -> sum = 3
-        // 2 0 1  -> sum = 3
+        // 3x3, M=3: board values are deficits directly
+        // 0 1 2  -> sum = 3
+        // 2 1 0  -> sum = 3
+        // 1 0 2  -> sum = 3
         let grid: &[&[u8]] = &[&[0, 1, 2], &[2, 1, 0], &[1, 0, 2]];
         let board = Board::from_grid(grid, 3);
         let rd = board_row_deficits(&board);
@@ -267,22 +258,20 @@ mod tests {
 
     #[test]
     fn test_col_deficits_nontrivial() {
-        // Same board as above
-        // Deficits:
-        // 0 2 1
-        // 1 2 0
-        // 2 0 1
-        // Col sums: 3, 4, 2 -> wait:
-        // Col 0: 0+1+2 = 3
-        // Col 1: 2+2+0 = 4
-        // Col 2: 1+0+1 = 2
+        // Same board as above — values are deficits directly
+        // 0 1 2
+        // 2 1 0
+        // 1 0 2
+        // Col 0: 0+2+1 = 3
+        // Col 1: 1+1+0 = 2
+        // Col 2: 2+0+2 = 4
         let grid: &[&[u8]] = &[&[0, 1, 2], &[2, 1, 0], &[1, 0, 2]];
         let board = Board::from_grid(grid, 3);
         let cd = board_col_deficits(&board);
         assert_eq!(cd.len(), 3);
         assert_eq!(cd.get(0), 3);
-        assert_eq!(cd.get(1), 4);
-        assert_eq!(cd.get(2), 2);
+        assert_eq!(cd.get(1), 2);
+        assert_eq!(cd.get(2), 4);
         assert_eq!(cd.total_deficit(), 9);
     }
 
@@ -303,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_m2_deficits() {
-        // M=2: deficit = (2-v)%2, so 0->0, 1->1
+        // M=2: values are deficits directly (0->0, 1->1)
         let grid: &[&[u8]] = &[&[0, 1, 1], &[1, 0, 0], &[0, 1, 0]];
         let board = Board::from_grid(grid, 2);
         let rd = board_row_deficits(&board);
@@ -317,17 +306,16 @@ mod tests {
 
     #[test]
     fn test_m5_deficits() {
-        // M=5: deficit = (5-v)%5
-        // v=0 -> 0, v=1 -> 4, v=2 -> 3, v=3 -> 2, v=4 -> 1
+        // M=5: values are deficits directly
         let grid: &[&[u8]] = &[&[0, 1, 2], &[3, 4, 0], &[1, 2, 3]];
         let board = Board::from_grid(grid, 5);
         let rd = board_row_deficits(&board);
-        // Row 0: 0+4+3 = 7
-        // Row 1: 2+1+0 = 3
-        // Row 2: 4+3+2 = 9
-        assert_eq!(rd.get(0), 7);
-        assert_eq!(rd.get(1), 3);
-        assert_eq!(rd.get(2), 9);
+        // Row 0: 0+1+2 = 3
+        // Row 1: 3+4+0 = 7
+        // Row 2: 1+2+3 = 6
+        assert_eq!(rd.get(0), 3);
+        assert_eq!(rd.get(1), 7);
+        assert_eq!(rd.get(2), 6);
     }
 
     // --- Full projection tests ---
@@ -428,11 +416,10 @@ mod tests {
 
     #[test]
     fn test_design_counterexample_subgames_solvable() {
-        // 3x3, M=3:
-        // Board:          Deficits:
-        //   0 1 2           0 2 1
-        //   2 0 1           1 0 2
-        //   1 2 0           2 1 0
+        // 3x3, M=3: board values are deficits directly.
+        //   0 1 2
+        //   2 0 1
+        //   1 2 0
         // Three 1x3 horizontal bars.
         let grid: &[&[u8]] = &[&[0, 1, 2], &[2, 0, 1], &[1, 2, 0]];
         let board = Board::from_grid(grid, 3);

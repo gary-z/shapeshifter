@@ -148,7 +148,7 @@ pub fn generate_game(spec: &LevelSpec, rng: &mut impl Rng) -> Game {
         let row = rng.random_range(0..=max_row as usize);
         let col = rng.random_range(0..=max_col as usize);
 
-        // Undo this piece (decrement) to build the scrambled board.
+        // Undo this piece (increment deficit) to build the scrambled board.
         let mask = piece.placed_at(row, col);
         board.undo_piece(mask);
 
