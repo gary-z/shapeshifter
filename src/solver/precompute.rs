@@ -820,7 +820,8 @@ pub(crate) fn build_solver_data(
         .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
         .collect();
 
-    // Build subgame data: row/col profiles and shifted lookup tables.
+    // Build subgame data: row/col profiles, shifted lookup tables, and
+    // feasibility check data (placements, max_contrib_suffix, remaining_cells).
     let subgame_data = SubgameData::build(board, pieces, order);
 
     SolverData {
@@ -842,6 +843,7 @@ pub(crate) fn build_solver_data(
         weight_tuple_checks,
         progress_weights,
         subgame_data,
+        subgame_nodes: std::sync::atomic::AtomicU64::new(0),
     }
 }
 
