@@ -46,6 +46,7 @@ fn run_task(
     timeout_secs: u64,
     parallel: bool,
     exhaustive: bool,
+    subgame: bool,
 ) -> TaskResult {
     let mut cmd = Command::new(solver_path);
     cmd.arg("--worker");
@@ -54,6 +55,9 @@ fn run_task(
     }
     if exhaustive {
         cmd.arg("--exhaustive");
+    }
+    if subgame {
+        cmd.arg("--subgame");
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -225,6 +229,7 @@ fn run_bench(
     max_parallel: usize,
     parallel: bool,
     exhaustive: bool,
+    subgame: bool,
     show_nodes_per_sec: bool,
 ) {
     let total = tasks.len();
@@ -249,7 +254,7 @@ fn run_bench(
                         None => break,
                     };
 
-                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive);
+                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive, subgame);
                     let _ = result_tx.send(r);
                 }
             });
@@ -358,6 +363,7 @@ fn print_usage() {
          Options:\n  \
            --parallel       Use parallel solver (each game gets all cores)\n  \
            --exhaustive     Explore full search tree (no early termination)\n  \
+           --subgame        Enable subgame pruning\n  \
            --timeout SECS   Timeout per game (default: 5 for simulated, 60 for historical)\n  \
            --games-per N    Games per level for simulated mode (default: 5)\n  \
            -h, --help       Show this help"
@@ -376,6 +382,7 @@ fn main() {
     let mut positional = Vec::new();
     let mut parallel = false;
     let mut exhaustive = false;
+    let mut subgame = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
 
@@ -384,6 +391,7 @@ fn main() {
         match args[i].as_str() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
+            "--subgame" => subgame = true,
             "--timeout" => {
                 i += 1;
                 timeout_secs = Some(args[i].parse().expect("invalid timeout"));
@@ -454,6 +462,7 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
+                subgame,
                 exhaustive,
             );
         }
@@ -487,6 +496,7 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
+                subgame,
                 false,
             );
         }
