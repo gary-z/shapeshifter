@@ -4,79 +4,8 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 use super::SolverData;
 
-/// Max number of lines in any family (diagonals on 14x14: 27).
-pub(crate) const MAX_LINES: usize = 27;
-/// Max number of pieces (n+1 for suffix arrays).
-pub(crate) const MAX_PIECES: usize = 37;
-
-/// A family of parallel lines for the deficit DP pruning.
-pub(crate) struct LineFamily {
-    pub(crate) masks: [Bitboard; MAX_LINES],
-    pub(crate) num_lines: usize,
-    /// remaining_budget[i] = suffix sum of max_thickness for pieces [i..n]
-    pub(crate) remaining_budget: [u32; MAX_PIECES],
-    /// suffix_max_span[i] = max span among pieces [i..n]
-    pub(crate) suffix_max_span: [u8; MAX_PIECES],
-    /// Whether per_line_budget is available (only for rows and columns).
-    pub(crate) has_per_line_budget: bool,
-    /// per_line_budget[i][line] = position-aware suffix budget.
-    pub(crate) per_line_budget: [[u32; MAX_LINES]; MAX_PIECES],
-}
-
-impl LineFamily {
-    pub(crate) fn new() -> Self {
-        Self {
-            masks: [Bitboard::ZERO; MAX_LINES],
-            num_lines: 0,
-            remaining_budget: [0; MAX_PIECES],
-            suffix_max_span: [0; MAX_PIECES],
-            has_per_line_budget: false,
-            per_line_budget: [[0; MAX_LINES]; MAX_PIECES],
-        }
-    }
-}
-
-/// Check a line family. Returns false if any prune fires.
-#[inline(always)]
-pub(crate) fn check_line_family(
-    board: &Board,
-    family: &LineFamily,
-    piece_idx: usize,
-    m: u8,
-) -> bool {
-    let gap = family.suffix_max_span[piece_idx] as usize;
-    let n = family.num_lines;
-    if n == 0 {
-        return true;
-    }
-
-    // Compute weights.
-    let mut weights = [0u32; MAX_LINES];
-    for i in 0..n {
-        for d in 1..m {
-            weights[i] += d as u32 * (board.plane(d) & family.masks[i]).count_ones();
-        }
-        // Per-line position-aware check.
-        if family.has_per_line_budget && family.per_line_budget[piece_idx][i] < weights[i] {
-            return false;
-        }
-    }
-
-    // DP: max weight independent set with spacing >= gap.
-    if gap > 0 {
-        let mut dp = [0u32; MAX_LINES];
-        for i in 0..n {
-            let take = weights[i] + if i >= gap { dp[i - gap] } else { 0 };
-            let skip = if i > 0 { dp[i - 1] } else { 0 };
-            dp[i] = take.max(skip);
-        }
-        if family.remaining_budget[piece_idx] < dp[n - 1] {
-            return false;
-        }
-    }
-
-    true
-}
+// LineFamily struct and check_line_family moved to prune::line_family.
+pub(crate) use super::prune::line_family::LineFamily;
 
 /// A parity-based board partition for pruning.
 /// The board is split into "group 0" and "group 1" cells based on some parity function.
@@ -214,18 +143,12 @@ pub(crate) fn prune_total_deficit_global(board: &Board, data: &SolverData, piece
 
 #[inline(always)]
 pub(crate) fn prune_line_families_rowcol(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    for f in &data.line_families[..2] {
-        if !check_line_family(board, f, piece_idx, data.m) { return false; }
-    }
-    true
+    data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m)
 }
 
 #[inline(always)]
 pub(crate) fn prune_line_families_diagonal(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    for f in &data.line_families[2..] {
-        if !check_line_family(board, f, piece_idx, data.m) { return false; }
-    }
-    true
+    data.line_family_prune.try_prune_diagonal(board, piece_idx, data.m)
 }
 
 #[inline(always)]

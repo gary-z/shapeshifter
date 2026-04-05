@@ -101,7 +101,7 @@ pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
-    pub(crate) line_families: [LineFamily; 6],
+    pub(crate) line_family_prune: prune::line_family::LineFamilyPrune,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
