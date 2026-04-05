@@ -194,6 +194,12 @@ struct SubgameSubsetReachability {
     reachable: Vec<u8>,
     /// Earliest depth where some config is unreachable.
     first_useful: usize,
+    /// Per-cell upper bound on total contribution from remaining pieces,
+    /// constrained by subset reachability. `cell_thresholds[depth]` is a
+    /// u16x16 where lane `c` = max hits cell `c` can receive from feasible
+    /// placement sequences for pieces `depth..n`. Applies to ALL cells,
+    /// not just subset cells.
+    cell_thresholds: Vec<u16x16>,
 }
 
 impl SubgameSubsetReachability {
@@ -290,7 +296,54 @@ impl SubgameSubsetReachability {
             }
         }
 
-        SubgameSubsetReachability { cells, num_configs, reachable, first_useful }
+        // Compute per-cell thresholds from live placements.
+        // A placement is "live" at depth d if it leads from at least one
+        // reachable config to another reachable config at d+1.
+        let board_len = game.board().len() as usize;
+        let mut cell_thresholds: Vec<[u16; 16]> = vec![[0u16; 16]; n + 1];
+
+        for d in (0..n).rev() {
+            let cur_base = d * num_configs;
+            let next_base = (d + 1) * num_configs;
+            let placements = game.placements_for(d);
+
+            let mut max_per_cell = [0u16; 16];
+            for &(_pos, shifted) in placements {
+                let arr = shifted.to_array();
+                let effect: Vec<u8> = cells.iter()
+                    .map(|&ci| (arr[ci] % m as u16) as u8)
+                    .collect();
+
+                // Check if this placement is live for any reachable config.
+                let mut is_live = false;
+                for config in 0..num_configs {
+                    if reachable[cur_base + config] != 0 {
+                        let new_config = apply_effect(config, &effect);
+                        if reachable[next_base + new_config] != 0 {
+                            is_live = true;
+                            break;
+                        }
+                    }
+                }
+
+                if is_live {
+                    for c in 0..board_len {
+                        max_per_cell[c] = max_per_cell[c].max(arr[c]);
+                    }
+                }
+            }
+
+            for c in 0..16 {
+                cell_thresholds[d][c] = max_per_cell[c].saturating_add(cell_thresholds[d + 1][c]);
+            }
+        }
+
+        let cell_thresholds: Vec<u16x16> = cell_thresholds
+            .into_iter()
+            .map(|arr| u16x16::from_array(arr))
+            .collect();
+
+        SubgameSubsetReachability { cells, num_configs, reachable, first_useful, cell_thresholds }
     }
 }
 
@@ -329,7 +382,7 @@ impl SubgameAxisPrune {
     pub fn precompute(game: &SubgameGame) -> Self {
         let n = game.pieces().len();
 
-        let max_contrib_suffix = Self::build_max_contrib_suffix(game);
+        let mut max_contrib_suffix = Self::build_max_contrib_suffix(game);
 
         let mut remaining_cells = vec![0u32; n + 1];
         for i in (0..n).rev() {
@@ -338,6 +391,17 @@ impl SubgameAxisPrune {
 
         let parity_partitions = Self::build_parity_partitions(game);
         let subset_checks = Self::build_subset_checks(game);
+
+        // Tighten max_contrib_suffix using subset cell thresholds.
+        // Each subset constrains which placements are feasible; the threshold
+        // is the max per-cell contribution from only "live" placements.
+        // Taking the element-wise min across subsets and count-sat gives the
+        // tightest upper bound per cell.
+        for check in &subset_checks {
+            for d in 0..=n {
+                max_contrib_suffix[d] = max_contrib_suffix[d].simd_min(check.cell_thresholds[d]);
+            }
+        }
 
         let mut endgame_start = n;
         let pieces = game.pieces();
