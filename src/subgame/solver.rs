@@ -352,6 +352,47 @@ impl SubgameSubsetReachability {
 /// Built once during solver precomputation. Provides fast feasibility checks
 /// that use all subgame pruning techniques (count-sat, parity, subset SAT,
 /// endgame) without per-call precomputation overhead.
+/// Simple fixed-size cache for known-feasible (board_hash, depth) pairs.
+/// Thread-safe via relaxed atomics (races just cause misses, not bugs).
+struct FeasibilityCache {
+    keys: Vec<std::sync::atomic::AtomicU64>,
+}
+
+const CACHE_SIZE: usize = 1 << 16; // 64K entries
+const CACHE_MASK: usize = CACHE_SIZE - 1;
+
+impl FeasibilityCache {
+    fn new() -> Self {
+        Self {
+            keys: (0..CACHE_SIZE)
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect(),
+        }
+    }
+
+    #[inline(always)]
+    fn make_key(cells: &u16x16, depth: usize) -> u64 {
+        let arr = cells.to_array();
+        let mut h = depth as u64 ^ 0x517cc1b727220a95;
+        for i in 0..16 {
+            h = h.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(arr[i] as u64);
+        }
+        h | 1 // ensure nonzero (0 = empty slot)
+    }
+
+    #[inline(always)]
+    fn check(&self, key: u64) -> bool {
+        let idx = (key as usize) & CACHE_MASK;
+        self.keys[idx].load(std::sync::atomic::Ordering::Relaxed) == key
+    }
+
+    #[inline(always)]
+    fn insert(&self, key: u64) {
+        let idx = (key as usize) & CACHE_MASK;
+        self.keys[idx].store(key, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub struct SubgameAxisPrune {
     max_contrib_suffix: Vec<u16x16>,
     remaining_cells: Vec<u32>,
@@ -367,6 +408,8 @@ pub struct SubgameAxisPrune {
     /// from pieces depth..end.
     suffix_max: Vec<[u32; 16]>,
     board_len: usize,
+    /// Cache of known-feasible states to skip expensive checks.
+    feasibility_cache: FeasibilityCache,
     endgame_start: usize,
     skip_deficit_check: bool,
 }
@@ -387,6 +430,7 @@ impl SubgameAxisPrune {
             prefix_max: vec![[0; 16]],
             suffix_max: vec![[0; 16]],
             board_len: 0,
+            feasibility_cache: FeasibilityCache::new(),
             endgame_start: 0,
             skip_deficit_check: false,
         }
@@ -505,6 +549,7 @@ impl SubgameAxisPrune {
             prefix_max,
             suffix_max,
             board_len,
+            feasibility_cache: FeasibilityCache::new(),
             endgame_start,
             skip_deficit_check: false,
         }
@@ -528,7 +573,7 @@ impl SubgameAxisPrune {
             let mut new_board = *board;
             new_board.apply_piece(shifted);
 
-            // Deficit check.
+            // Deficit check (cheapest).
             if next < self.remaining_cells.len() {
                 let rc = self.remaining_cells[next];
                 let td = new_board.total_deficit();
@@ -539,10 +584,17 @@ impl SubgameAxisPrune {
                 valid |= 1 << pos;
                 continue;
             }
-            // Count-sat (SIMD).
+            // Count-sat (SIMD, cheap).
             if next < self.max_contrib_suffix.len() {
                 let shortfall = new_board.cells().saturating_sub(self.max_contrib_suffix[next]);
                 if shortfall != u16x16::splat(0) { continue; }
+            }
+
+            // Cache check: known-feasible state → skip expensive checks.
+            let cache_key = FeasibilityCache::make_key(&new_board.cells(), next);
+            if self.feasibility_cache.check(cache_key) {
+                valid |= 1 << pos;
+                continue;
             }
 
             // Prefix/suffix check.
@@ -586,6 +638,8 @@ impl SubgameAxisPrune {
                 if !ok { continue; }
             }
 
+            // Passed all checks — cache as known-feasible.
+            self.feasibility_cache.insert(cache_key);
             valid |= 1 << pos;
         }
         valid
