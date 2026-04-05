@@ -357,6 +357,9 @@ pub struct SubgameAxisPrune {
     remaining_cells: Vec<u32>,
     parity_partitions: Vec<SubgameParityPartition>,
     subset_checks: Vec<SubgameSubsetReachability>,
+    /// `skip_tables[i]` = Some(table) if pieces i-1 and i have redundant
+    /// orderings. `table[prev_pl * num_curr + curr_pl]` = true to skip.
+    skip_tables: Vec<Option<Vec<bool>>>,
     endgame_start: usize,
     skip_deficit_check: bool,
 }
@@ -373,6 +376,7 @@ impl SubgameAxisPrune {
             remaining_cells: vec![0],
             parity_partitions: vec![],
             subset_checks: vec![],
+            skip_tables: vec![],
             endgame_start: 0,
             skip_deficit_check: false,
         }
@@ -412,11 +416,41 @@ impl SubgameAxisPrune {
             endgame_start -= 1;
         }
 
+        // Build skip tables for consecutive piece pairs.
+        // The combined effect of placing piece i-1 at position a then piece i
+        // at position b is shifted_a + shifted_b (element-wise). Since addition
+        // is commutative, swapping placements between two pieces with the same
+        // profile set yields the same net effect. We detect this by hashing the
+        // sum and marking duplicates.
+        let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
+            if i == 0 { return None; }
+            let prev_pl = game.placements_for(i - 1);
+            let curr_pl = game.placements_for(i);
+            let num_prev = prev_pl.len();
+            let num_curr = curr_pl.len();
+            let mut table = vec![false; num_prev * num_curr];
+            let mut seen = std::collections::HashSet::new();
+            let mut any_skips = false;
+            for a in 0..num_prev {
+                let shifted_a = prev_pl[a].1;
+                for b in 0..num_curr {
+                    let shifted_b = curr_pl[b].1;
+                    let sum = shifted_a + shifted_b;
+                    if !seen.insert(sum.to_array()) {
+                        table[a * num_curr + b] = true;
+                        any_skips = true;
+                    }
+                }
+            }
+            if any_skips { Some(table) } else { None }
+        }).collect();
+
         SubgameAxisPrune {
             max_contrib_suffix,
             remaining_cells,
             parity_partitions,
             subset_checks,
+            skip_tables,
             endgame_start,
             skip_deficit_check: false,
         }
@@ -462,7 +496,7 @@ impl SubgameAxisPrune {
         }
 
         let mut nodes = 0u64;
-        let found = self.backtrack(board, from_piece, placements, budget, &mut nodes, &mut solution, deadline);
+        let found = self.backtrack(board, from_piece, placements, budget, &mut nodes, &mut solution, deadline, usize::MAX);
         (found, nodes)
     }
 
@@ -475,6 +509,7 @@ impl SubgameAxisPrune {
         nodes: &mut u64,
         solution: &mut Option<&mut Vec<usize>>,
         deadline: Option<Instant>,
+        prev_placement: usize,
     ) -> bool {
         *nodes += 1;
         if budget > 0 && *nodes > budget {
@@ -550,9 +585,27 @@ impl SubgameAxisPrune {
         }
 
         // Evaluate and sort placements: prefer least deficit, then least max cell.
+        // Also apply skip table filtering.
+        let skip_table = if depth < self.skip_tables.len() {
+            self.skip_tables[depth].as_deref()
+        } else {
+            None
+        };
+        let num_curr = placements[depth].len();
+
         let mut candidates: Vec<(u32, u16, usize, SubgameBoard)> = placements[depth]
             .iter()
             .enumerate()
+            .filter(|&(pl_idx, _)| {
+                if prev_placement < usize::MAX {
+                    if let Some(table) = skip_table {
+                        if table[prev_placement * num_curr + pl_idx] {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
             .map(|(i, &(_pos, shifted))| {
                 let mut b = board;
                 b.apply_piece(shifted);
@@ -562,11 +615,16 @@ impl SubgameAxisPrune {
             .collect();
         candidates.sort_unstable_by_key(|&(deficit, max_cell, _, _)| (deficit, max_cell));
 
+        // Determine if the next piece has a skip table (to pass prev_placement).
+        let next_has_skip = depth + 1 < self.skip_tables.len()
+            && self.skip_tables[depth + 1].is_some();
+
         for (_, _, idx, new_board) in candidates {
             if let Some(sol) = solution.as_deref_mut() {
                 sol.push(placements[depth][idx].0);
             }
-            if self.backtrack(new_board, depth + 1, placements, budget, nodes, solution, deadline) {
+            let next_prev = if next_has_skip { idx } else { usize::MAX };
+            if self.backtrack(new_board, depth + 1, placements, budget, nodes, solution, deadline, next_prev) {
                 return true;
             }
             if let Some(sol) = solution.as_deref_mut() {
