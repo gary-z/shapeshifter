@@ -609,6 +609,41 @@ impl SubgameAxisPrune {
             }
         }
 
+        // Quick solve: 1 piece remaining — try each placement directly.
+        if n - depth == 1 {
+            for &(pos, shifted) in &placements[depth] {
+                let mut b = board;
+                b.apply_piece(shifted);
+                if b.is_solved() {
+                    if let Some(sol) = solution.as_deref_mut() {
+                        sol.push(pos);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Quick solve: 2 pieces remaining — try all pairs.
+        if n - depth == 2 {
+            for &(pos1, shifted1) in &placements[depth] {
+                let mut b1 = board;
+                b1.apply_piece(shifted1);
+                for &(pos2, shifted2) in &placements[depth + 1] {
+                    let mut b2 = b1;
+                    b2.apply_piece(shifted2);
+                    if b2.is_solved() {
+                        if let Some(sol) = solution.as_deref_mut() {
+                            sol.push(pos1);
+                            sol.push(pos2);
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         // Count-sat (per-cell).
         let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[depth]);
         if shortfall != u16x16::splat(0) {
@@ -1022,7 +1057,7 @@ mod tests {
         let game = SubgameGame::new(board, vec![piece]);
         let (result, stats) = solve(game);
         assert_eq!(result, SubgameSolveResult::Solved(vec![0]));
-        assert!(stats.nodes_visited >= 2); // root + base case
+        assert!(stats.nodes_visited >= 1); // quick solve may handle in 1 node
     }
 
     #[test]
