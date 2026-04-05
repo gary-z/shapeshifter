@@ -261,13 +261,7 @@ fn run_bench(
         }
         drop(result_tx);
 
-        let mut results: Vec<TaskResult> = Vec::with_capacity(total);
-        for r in result_rx {
-            results.push(r);
-        }
-        results.sort_by_key(|r| (r.level, r.game_idx));
-
-        // Print detailed results.
+        // Print header, then stream results as they arrive.
         if show_nodes_per_sec {
             println!(
                 "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
@@ -282,11 +276,12 @@ fn run_bench(
             println!("{}", "-".repeat(68));
         }
 
+        let mut results: Vec<TaskResult> = Vec::with_capacity(total);
         let mut ok = 0u32;
         let mut fail = 0u32;
         let mut timeout = 0u32;
 
-        for r in &results {
+        for r in result_rx {
             match r.status.as_str() {
                 "OK" | "DONE" => ok += 1,
                 "FAIL" => fail += 1,
@@ -316,7 +311,13 @@ fn run_bench(
                     r.level, r.game_idx, r.n_pieces, r.board_desc, nodes_str, time_str, r.status,
                 );
             }
+
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            results.push(r);
         }
+
+        results.sort_by_key(|r| (r.level, r.game_idx));
 
         // Per-level summary.
         println!("\n{:<8} {:<7} {:<7} {:<10}", "Level", "OK", "Rate", "Board");

@@ -134,9 +134,18 @@ macro_rules! define_backtrack {
                 board.apply_piece(mask);
 
                 // Incrementally update subgame state (O(1) SIMD ops).
+                // Always update to keep state consistent for deeper depths.
+                // Only prune on underflow when no wrapping (remaining_bits == total_deficit).
                 let mut sg = sg_snapshot;
-                if config.subgame && !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
-                    continue; // subgame underflow → prune
+                if config.subgame {
+                    let no_wrapping = data.remaining_bits[piece_idx] == board_snapshot.total_deficit();
+                    if no_wrapping {
+                        if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
+                            continue; // subgame underflow → prune
+                        }
+                    } else {
+                        sg.apply_piece_wrapping(&data.subgame_data, piece_idx, row, col);
+                    }
                 }
 
                 solution.push((row, col));
@@ -485,15 +494,20 @@ pub(crate) fn backtrack_stealing(
         board.apply_piece(mask);
 
         let mut sg = frame.sg;
-        if config.subgame && !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
-            // Subgame underflow → prune this placement.
-            progress_local += data.progress_weights[piece_idx];
-            // Still need to update solution tracking for correct depth.
-            let sol_depth = base_solution_len + stack.len() - 1;
-            solution.truncate(sol_depth);
-            solution.push((row, col));
-            nodes.set(nodes.get() + 1);
-            continue;
+        if config.subgame {
+            let no_wrapping = data.remaining_bits[piece_idx] == frame.board.total_deficit();
+            if no_wrapping {
+                if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
+                    progress_local += data.progress_weights[piece_idx];
+                    let sol_depth = base_solution_len + stack.len() - 1;
+                    solution.truncate(sol_depth);
+                    solution.push((row, col));
+                    nodes.set(nodes.get() + 1);
+                    continue;
+                }
+            } else {
+                sg.apply_piece_wrapping(&data.subgame_data, piece_idx, row, col);
+            }
         }
 
         // Update solution: truncate to this frame's depth, then push.

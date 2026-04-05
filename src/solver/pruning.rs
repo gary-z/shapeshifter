@@ -339,7 +339,7 @@ pub(crate) fn prune_node(
     if config.total_deficit_global && !prune_parity_partitions(board, data, piece_idx) { return false; }
     if config.total_deficit_global && !prune_subset_reachability(board, data, piece_idx) { return false; }
     if config.total_deficit_global && !prune_weight_tuples(board, data, piece_idx) { return false; }
-    if config.subgame && !prune_subgame(sg, data, piece_idx) { return false; }
+    if config.subgame && !prune_subgame(sg, board, data, piece_idx) { return false; }
     true
 }
 
@@ -350,14 +350,35 @@ pub(crate) fn prune_node(
 /// placement via SIMD), so no O(H*W) reconstruction is needed here.
 ///
 /// Only sound when `remaining_piece_cells == remaining_deficit` (no wrapping).
-fn prune_subgame(sg: &crate::subgame::state::SubgameState, data: &SolverData, piece_idx: usize) -> bool {
-    // Guard: subgame strict decrement model is only valid when no wrapping.
-    if data.remaining_bits[piece_idx] != sg.row_board().total_deficit() {
+fn prune_subgame(
+    #[cfg(not(feature = "bench_subgame_construct"))]
+    sg: &crate::subgame::state::SubgameState,
+    #[cfg(feature = "bench_subgame_construct")]
+    _sg: &crate::subgame::state::SubgameState,
+    board: &Board,
+    data: &SolverData,
+    piece_idx: usize,
+) -> bool {
+    // When bench_subgame_construct is enabled, construct subgame boards from
+    // scratch at every node (to measure the cost) but don't use the result.
+    #[cfg(feature = "bench_subgame_construct")]
+    {
+        let _row = crate::subgame::generate::board_row_deficits(board);
+        let _col = crate::subgame::generate::board_col_deficits(board);
+        std::hint::black_box((&_row, &_col));
         return true;
     }
-    let (feasible, sg_nodes) = data.subgame_data.check_feasible(
-        *sg.row_board(), *sg.col_board(), piece_idx,
-    );
-    data.subgame_nodes.fetch_add(sg_nodes, Ordering::Relaxed);
-    feasible
+
+    #[cfg(not(feature = "bench_subgame_construct"))]
+    {
+        // Guard: subgame strict decrement model is only valid when no wrapping.
+        if data.remaining_bits[piece_idx] != sg.row_board().total_deficit() {
+            return true;
+        }
+        let (feasible, sg_nodes) = data.subgame_data.check_feasible(
+            *sg.row_board(), *sg.col_board(), piece_idx,
+        );
+        data.subgame_nodes.fetch_add(sg_nodes, Ordering::Relaxed);
+        feasible
+    }
 }
