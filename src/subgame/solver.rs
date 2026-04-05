@@ -430,12 +430,12 @@ impl SubgameAxisPrune {
         from_piece: usize,
         placements: &[Vec<(usize, u16x16)>],
     ) -> (bool, u64) {
-        self.solve_inner(board, from_piece, placements, FEASIBILITY_NODE_BUDGET, None)
+        self.solve_inner(board, from_piece, placements, FEASIBILITY_NODE_BUDGET, None, None)
     }
 
     /// Solve the subgame, returning positions if `solution` is provided.
     /// `budget` = max nodes (0 = unlimited). Returns `(found, nodes)`.
-    /// If budget is exceeded, returns `(true, nodes)` conservatively.
+    /// If budget is exceeded or deadline is hit, returns `(true, nodes)` conservatively.
     pub(crate) fn solve_inner(
         &self,
         board: SubgameBoard,
@@ -443,6 +443,7 @@ impl SubgameAxisPrune {
         placements: &[Vec<(usize, u16x16)>],
         budget: u64,
         mut solution: Option<&mut Vec<usize>>,
+        deadline: Option<Instant>,
     ) -> (bool, u64) {
         if !self.skip_deficit_check {
             let rc = self.remaining_cells[from_piece];
@@ -461,7 +462,7 @@ impl SubgameAxisPrune {
         }
 
         let mut nodes = 0u64;
-        let found = self.backtrack(board, from_piece, placements, budget, &mut nodes, &mut solution);
+        let found = self.backtrack(board, from_piece, placements, budget, &mut nodes, &mut solution, deadline);
         (found, nodes)
     }
 
@@ -473,10 +474,18 @@ impl SubgameAxisPrune {
         budget: u64,
         nodes: &mut u64,
         solution: &mut Option<&mut Vec<usize>>,
+        deadline: Option<Instant>,
     ) -> bool {
         *nodes += 1;
         if budget > 0 && *nodes > budget {
             return true; // conservatively assume feasible
+        }
+        if *nodes & 0xFFF == 0 {
+            if let Some(dl) = deadline {
+                if Instant::now() >= dl {
+                    return true; // conservatively assume feasible
+                }
+            }
         }
 
         let n = placements.len();
@@ -557,7 +566,7 @@ impl SubgameAxisPrune {
             if let Some(sol) = solution.as_deref_mut() {
                 sol.push(placements[depth][idx].0);
             }
-            if self.backtrack(new_board, depth + 1, placements, budget, nodes, solution) {
+            if self.backtrack(new_board, depth + 1, placements, budget, nodes, solution, deadline) {
                 return true;
             }
             if let Some(sol) = solution.as_deref_mut() {
@@ -732,10 +741,14 @@ impl SubgameSolver {
             &self.placements,
             0, // no budget
             Some(&mut solution),
+            self.deadline,
         );
 
-        let result = if found {
+        let timed_out = self.deadline.map_or(false, |dl| Instant::now() >= dl);
+        let result = if found && !timed_out {
             SubgameSolveResult::Solved(solution)
+        } else if timed_out {
+            SubgameSolveResult::Timeout
         } else {
             SubgameSolveResult::Unsolvable
         };
