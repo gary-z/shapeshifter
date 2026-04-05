@@ -539,51 +539,72 @@ impl SubgameAxisPrune {
                 valid |= 1 << pos;
                 continue;
             }
-            // Count-sat (SIMD).
+            // Count-sat (SIMD, cheap).
             if next < self.max_contrib_suffix.len() {
                 let shortfall = new_board.cells().saturating_sub(self.max_contrib_suffix[next]);
                 if shortfall != u16x16::splat(0) { continue; }
             }
 
-            // Prefix/suffix check.
-            if next < self.prefix_max.len() {
-                let cells = new_board.cells().to_array();
-                let bl = self.board_len;
-                let prefix_bounds = &self.prefix_max[next];
-                let suffix_bounds = &self.suffix_max[next];
-                let mut failed = false;
-                let mut prefix_deficit = 0u32;
-                let mut suffix_deficit = 0u32;
-                for k in 1..=bl {
-                    prefix_deficit += cells[k - 1] as u32;
-                    if prefix_deficit > prefix_bounds[k] { failed = true; break; }
-                    suffix_deficit += cells[bl - k] as u32;
-                    if suffix_deficit > suffix_bounds[k] { failed = true; break; }
+            // Subset satisfiability — the strongest check. If the first subset
+            // covers the full board (M=2, or small board with M=3/4), a pass
+            // here means the mod-M config is reachable: declare feasible and
+            // skip the weaker parity/prefix checks.
+            let cells = new_board.cells().to_array();
+            let m_usize = new_board.m() as usize;
+            let mut subset_failed = false;
+            let mut full_board_subset = false;
+            for (i, check) in self.subset_checks.iter().enumerate() {
+                if !check.check(&cells, m_usize, next) {
+                    subset_failed = true;
+                    break;
                 }
-                if failed { continue; }
+                // First subset is full-board if its cell count == board_len.
+                if i == 0 && check.cells.len() == self.board_len {
+                    full_board_subset = true;
+                    break; // full-board subset passed → feasible, skip rest
+                }
             }
+            if subset_failed { continue; }
 
-            // Parity partitions.
-            {
-                let cells = new_board.cells().to_array();
-                let bl = self.board_len;
-                let m32 = new_board.m() as u32;
-                let mut ok = true;
-                for partition in &self.parity_partitions {
-                    if !partition.check(&cells, bl, next, m32) { ok = false; break; }
+            // Only run parity/prefix if we don't have a full-board subset
+            // confirmation.
+            if !full_board_subset {
+                // Prefix/suffix check.
+                if next < self.prefix_max.len() {
+                    let bl = self.board_len;
+                    let prefix_bounds = &self.prefix_max[next];
+                    let suffix_bounds = &self.suffix_max[next];
+                    let mut failed = false;
+                    let mut prefix_deficit = 0u32;
+                    let mut suffix_deficit = 0u32;
+                    for k in 1..=bl {
+                        prefix_deficit += cells[k - 1] as u32;
+                        if prefix_deficit > prefix_bounds[k] { failed = true; break; }
+                        suffix_deficit += cells[bl - k] as u32;
+                        if suffix_deficit > suffix_bounds[k] { failed = true; break; }
+                    }
+                    if failed { continue; }
                 }
-                if !ok { continue; }
-            }
 
-            // Subset satisfiability.
-            {
-                let cells = new_board.cells().to_array();
-                let m_usize = new_board.m() as usize;
-                let mut ok = true;
-                for check in &self.subset_checks {
-                    if !check.check(&cells, m_usize, next) { ok = false; break; }
+                // Parity partitions.
+                {
+                    let bl = self.board_len;
+                    let m32 = new_board.m() as u32;
+                    let mut ok = true;
+                    for partition in &self.parity_partitions {
+                        if !partition.check(&cells, bl, next, m32) { ok = false; break; }
+                    }
+                    if !ok { continue; }
                 }
-                if !ok { continue; }
+
+                // Remaining subset checks (windows, not full board).
+                for check in self.subset_checks.iter().skip(1) {
+                    if !check.check(&cells, m_usize, next) {
+                        subset_failed = true;
+                        break;
+                    }
+                }
+                if subset_failed { continue; }
             }
 
             valid |= 1 << pos;
