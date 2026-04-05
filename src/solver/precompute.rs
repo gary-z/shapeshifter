@@ -28,12 +28,7 @@ pub(crate) fn build_solver_data(
 
     // Precompute suffix sums/maxes of piece properties.
     let total_deficit_prune = super::prune::total_deficit::TotalDeficitPrune::precompute(pieces, order);
-    let mut remaining_h_perimeter = vec![0u32; n + 1];
-    let mut remaining_v_perimeter = vec![0u32; n + 1];
-    for i in (0..n).rev() {
-        remaining_h_perimeter[i] = remaining_h_perimeter[i + 1] + pieces[order[i]].h_perimeter();
-        remaining_v_perimeter[i] = remaining_v_perimeter[i + 1] + pieces[order[i]].v_perimeter();
-    }
+    let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
 
     // Precompute per-piece reach: union of all placement masks.
     let reaches: Vec<Bitboard> = all_placements
@@ -196,16 +191,6 @@ pub(crate) fn build_solver_data(
 
     let line_families = [rows_family, cols_family, diags_family, antidiags_family, zigzag_r_family, zigzag_l_family];
 
-    // Precompute jaggedness masks.
-    let mut jagg_h_mask = Bitboard::ZERO;
-    let mut jagg_v_mask = Bitboard::ZERO;
-    for r in 0..bh {
-        for c in 0..bw {
-            let bit = (r * 15 + c) as u32;
-            if c + 1 < bw { jagg_h_mask.set_bit(bit); }
-            if r + 1 < bh { jagg_v_mask.set_bit(bit); }
-        }
-    }
     // Precompute parity partition checks.
     let build_partition = |group_fn: &dyn Fn(usize, usize) -> bool,
                            num_offsets: usize,
@@ -826,10 +811,7 @@ pub(crate) fn build_solver_data(
     SolverData {
         all_placements,
         total_deficit_prune,
-        remaining_h_perimeter,
-        remaining_v_perimeter,
-        jagg_h_mask,
-        jagg_v_mask,
+        jaggedness_prune,
         line_families,
         suffix_coverage,
         skip_tables,

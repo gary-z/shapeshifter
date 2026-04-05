@@ -230,26 +230,7 @@ pub(crate) fn prune_line_families_diagonal(board: &Board, data: &SolverData, pie
 
 #[inline(always)]
 pub(crate) fn prune_jaggedness(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    let j = board.split_jaggedness(data.jagg_h_mask, data.jagg_v_mask);
-    let rem_h = data.remaining_h_perimeter[piece_idx];
-    let rem_v = data.remaining_v_perimeter[piece_idx];
-    // Circular (symmetric) bound: sum of min(|a-b|, M-|a-b|) <= perimeter.
-    if j.circular_h > rem_h || j.circular_v > rem_v {
-        return false;
-    }
-    // Directional (asymmetric) bound for M>=3:
-    // max(forward, backward) <= M/2 * perimeter, i.e., 2*max(fwd,bwd) <= M*perim.
-    // Strictly tighter than circular when adjacencies are direction-biased.
-    if data.m >= 3 {
-        let m = data.m as u32;
-        if j.forward_h * 2 > m * rem_h || j.backward_h * 2 > m * rem_h {
-            return false;
-        }
-        if j.forward_v * 2 > m * rem_v || j.backward_v * 2 > m * rem_v {
-            return false;
-        }
-    }
-    true
+    data.jaggedness_prune.try_prune(board, piece_idx, data.m)
 }
 
 #[inline(always)]

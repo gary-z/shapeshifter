@@ -100,10 +100,7 @@ impl PruningConfig {
 pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
-    pub(crate) remaining_h_perimeter: Vec<u32>,
-    pub(crate) remaining_v_perimeter: Vec<u32>,
-    pub(crate) jagg_h_mask: Bitboard,
-    pub(crate) jagg_v_mask: Bitboard,
+    pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) line_families: [LineFamily; 6],
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,

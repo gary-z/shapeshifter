@@ -4,4 +4,5 @@
 //!
 //! All structs are concrete (no trait objects) for zero-overhead static dispatch.
 
+pub(crate) mod jaggedness;
 pub(crate) mod total_deficit;
