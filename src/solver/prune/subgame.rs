@@ -6,7 +6,6 @@
 
 use crate::core::board::Board;
 use crate::subgame::data::SubgameData;
-use crate::subgame::generate::{board_row_deficits, board_col_deficits};
 
 /// Subgame pruning data.
 pub(crate) struct SubgamePrune {
@@ -23,16 +22,22 @@ impl SubgamePrune {
         }
     }
 
-    /// Check subgame feasibility. Returns false to prune.
+    /// Check subgame feasibility using incrementally tracked 1D boards.
     /// Only sound when remaining_bits == total_deficit (no wrapping).
     #[inline(always)]
-    pub fn try_prune(&self, board: &Board, piece_idx: usize, remaining_bits: u32) -> bool {
-        if remaining_bits != board.total_deficit() {
+    pub fn try_prune(
+        &self,
+        sg_state: &crate::subgame::state::SubgameState,
+        piece_idx: usize,
+        remaining_bits: u32,
+        total_deficit: u32,
+    ) -> bool {
+        if remaining_bits != total_deficit {
             return true; // wrapping possible — can't prune
         }
-        let row_board = board_row_deficits(board);
-        let col_board = board_col_deficits(board);
-        let (feasible, sg_nodes) = self.data.check_feasible(row_board, col_board, piece_idx);
+        let (feasible, sg_nodes) = self.data.check_feasible(
+            *sg_state.row_board(), *sg_state.col_board(), piece_idx,
+        );
         self.nodes.fetch_add(sg_nodes, std::sync::atomic::Ordering::Relaxed);
         feasible
     }
@@ -48,6 +53,7 @@ mod tests {
     use super::*;
     use crate::core::board::Board;
     use crate::core::piece::Piece;
+    use crate::subgame::state::SubgameState;
 
     #[test]
     fn test_try_prune_solved_board() {
@@ -56,9 +62,10 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let sp = SubgamePrune::precompute(&board, &pieces, &order);
+        let sg = SubgameState::new(&sp.data);
         // Solved board, 1 remaining piece cell, deficit=0, remaining_bits=1 != 0
         // → wrapping guard fires, returns true (skip check)
-        assert!(sp.try_prune(&board, 0, 1));
+        assert!(sp.try_prune(&sg, 0, 1, board.total_deficit()));
     }
 
     #[test]
@@ -71,8 +78,9 @@ mod tests {
         let pieces: Vec<Piece> = (0..9).map(|_| p.clone()).collect();
         let order: Vec<usize> = (0..9).collect();
         let sp = SubgamePrune::precompute(&board, &pieces, &order);
+        let sg = SubgameState::new(&sp.data);
 
         // Should be feasible — place one piece per cell
-        assert!(sp.try_prune(&board, 0, 9));
+        assert!(sp.try_prune(&sg, 0, 9, board.total_deficit()));
     }
 }

@@ -4,6 +4,7 @@
 //! This module provides `prune_node` which chains them in cost-effectiveness order.
 
 use crate::core::board::Board;
+use crate::subgame::state::SubgameState;
 use super::SolverData;
 
 // Re-export types still needed by precompute.rs (subset/weight_tuple construction).
@@ -18,6 +19,7 @@ pub(crate) fn prune_node(
     data: &SolverData,
     piece_idx: usize,
     config: &super::PruningConfig,
+    sg_state: &SubgameState,
 ) -> bool {
     let rb = data.total_deficit_prune.remaining_bits(piece_idx);
 
@@ -28,6 +30,6 @@ pub(crate) fn prune_node(
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, data.m, rb) { return false; }
     if config.total_deficit_global && !data.subset_prune.try_prune(board, piece_idx) { return false; }
     if config.total_deficit_global && !data.weight_tuple_prune.try_prune(board, piece_idx) { return false; }
-    if config.subgame && !data.subgame_prune.try_prune(board, piece_idx, rb) { return false; }
+    if config.subgame && !data.subgame_prune.try_prune(sg_state, piece_idx, rb, board.total_deficit()) { return false; }
     true
 }
