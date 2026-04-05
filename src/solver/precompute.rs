@@ -27,11 +27,10 @@ pub(crate) fn build_solver_data(
     let bw = w as usize;
 
     // Precompute suffix sums/maxes of piece properties.
-    let mut remaining_bits = vec![0u32; n + 1];
+    let total_deficit_prune = super::prune::total_deficit::TotalDeficitPrune::precompute(pieces, order);
     let mut remaining_h_perimeter = vec![0u32; n + 1];
     let mut remaining_v_perimeter = vec![0u32; n + 1];
     for i in (0..n).rev() {
-        remaining_bits[i] = remaining_bits[i + 1] + pieces[order[i]].cell_count();
         remaining_h_perimeter[i] = remaining_h_perimeter[i + 1] + pieces[order[i]].h_perimeter();
         remaining_v_perimeter[i] = remaining_v_perimeter[i + 1] + pieces[order[i]].v_perimeter();
     }
@@ -826,7 +825,7 @@ pub(crate) fn build_solver_data(
 
     SolverData {
         all_placements,
-        remaining_bits,
+        total_deficit_prune,
         remaining_h_perimeter,
         remaining_v_perimeter,
         jagg_h_mask,

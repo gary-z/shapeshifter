@@ -209,7 +209,7 @@ impl SubsetReachability {
 
 #[inline(always)]
 pub(crate) fn prune_total_deficit_global(board: &Board, data: &SolverData, piece_idx: usize) -> bool {
-    data.remaining_bits[piece_idx] >= board.total_deficit()
+    data.total_deficit_prune.try_prune(board, piece_idx)
 }
 
 #[inline(always)]
@@ -287,7 +287,7 @@ pub(crate) fn prune_parity_partitions(board: &Board, data: &SolverData, piece_id
             return false;
         }
         let g1_deficit = total_deficit - g0_deficit;
-        let max_g1 = data.remaining_bits[piece_idx] - partition.suffix_min[piece_idx];
+        let max_g1 = data.total_deficit_prune.remaining_bits(piece_idx) - partition.suffix_min[piece_idx];
         if max_g1 < g1_deficit {
             return false;
         }
@@ -372,7 +372,7 @@ fn prune_subgame(
     #[cfg(not(feature = "bench_subgame_construct"))]
     {
         // Guard: subgame strict decrement model is only valid when no wrapping.
-        if data.remaining_bits[piece_idx] != sg.row_board().total_deficit() {
+        if data.total_deficit_prune.remaining_bits(piece_idx) != sg.row_board().total_deficit() {
             return true;
         }
         let (feasible, sg_nodes) = data.subgame_data.check_feasible(

@@ -1,5 +1,6 @@
 mod backtrack;
 mod precompute;
+pub(crate) mod prune;
 pub(crate) mod pruning;
 
 use std::cell::Cell;
@@ -98,7 +99,7 @@ impl PruningConfig {
 /// Bundled into a single struct to keep the backtrack signature small.
 pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
-    pub(crate) remaining_bits: Vec<u32>,
+    pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) remaining_h_perimeter: Vec<u32>,
     pub(crate) remaining_v_perimeter: Vec<u32>,
     pub(crate) jagg_h_mask: Bitboard,

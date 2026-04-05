@@ -138,7 +138,7 @@ macro_rules! define_backtrack {
                 // Only prune on underflow when no wrapping (remaining_bits == total_deficit).
                 let mut sg = sg_snapshot;
                 if config.subgame {
-                    let no_wrapping = data.remaining_bits[piece_idx] == board_snapshot.total_deficit();
+                    let no_wrapping = data.total_deficit_prune.remaining_bits(piece_idx) == board_snapshot.total_deficit();
                     if no_wrapping {
                         if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
                             continue; // subgame underflow → prune
@@ -495,7 +495,7 @@ pub(crate) fn backtrack_stealing(
 
         let mut sg = frame.sg;
         if config.subgame {
-            let no_wrapping = data.remaining_bits[piece_idx] == frame.board.total_deficit();
+            let no_wrapping = data.total_deficit_prune.remaining_bits(piece_idx) == frame.board.total_deficit();
             if no_wrapping {
                 if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
                     progress_local += data.progress_weights[piece_idx];
