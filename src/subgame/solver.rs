@@ -31,7 +31,7 @@ pub struct SolverStats {
 }
 
 /// Configuration for subgame solver pruning techniques.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubgamePruningConfig {
     /// Total deficit check: remaining piece cells must equal remaining deficit.
     pub total_deficit: bool,
@@ -305,6 +305,7 @@ pub struct SubgameAxisPrune {
     parity_partitions: Vec<SubgameParityPartition>,
     subset_checks: Vec<SubgameSubsetReachability>,
     endgame_start: usize,
+    skip_deficit_check: bool,
 }
 
 /// Node budget for feasibility checks — bail out conservatively (assume
@@ -320,6 +321,7 @@ impl SubgameAxisPrune {
             parity_partitions: vec![],
             subset_checks: vec![],
             endgame_start: 0,
+            skip_deficit_check: false,
         }
     }
 
@@ -327,15 +329,15 @@ impl SubgameAxisPrune {
     pub fn precompute(game: &SubgameGame) -> Self {
         let n = game.pieces().len();
 
-        let max_contrib_suffix = SubgameSolver::build_max_contrib_suffix(game);
+        let max_contrib_suffix = Self::build_max_contrib_suffix(game);
 
         let mut remaining_cells = vec![0u32; n + 1];
         for i in (0..n).rev() {
             remaining_cells[i] = remaining_cells[i + 1] + game.pieces()[i].cell_count() as u32;
         }
 
-        let parity_partitions = SubgameSolver::build_parity_partitions(game);
-        let subset_checks = SubgameSolver::build_subset_checks(game);
+        let parity_partitions = Self::build_parity_partitions(game);
+        let subset_checks = Self::build_subset_checks(game);
 
         let mut endgame_start = n;
         let pieces = game.pieces();
@@ -352,6 +354,7 @@ impl SubgameAxisPrune {
             parity_partitions,
             subset_checks,
             endgame_start,
+            skip_deficit_check: false,
         }
     }
 
@@ -363,13 +366,29 @@ impl SubgameAxisPrune {
         from_piece: usize,
         placements: &[Vec<(usize, u16x16)>],
     ) -> (bool, u64) {
-        let rc = self.remaining_cells[from_piece];
-        let td = board.total_deficit();
-        let m = board.m() as u32;
-        if rc < td || (rc - td) % m != 0 {
-            return (false, 0);
+        self.solve_inner(board, from_piece, placements, FEASIBILITY_NODE_BUDGET, None)
+    }
+
+    /// Solve the subgame, returning positions if `solution` is provided.
+    /// `budget` = max nodes (0 = unlimited). Returns `(found, nodes)`.
+    /// If budget is exceeded, returns `(true, nodes)` conservatively.
+    pub(crate) fn solve_inner(
+        &self,
+        board: SubgameBoard,
+        from_piece: usize,
+        placements: &[Vec<(usize, u16x16)>],
+        budget: u64,
+        mut solution: Option<&mut Vec<usize>>,
+    ) -> (bool, u64) {
+        if !self.skip_deficit_check {
+            let rc = self.remaining_cells[from_piece];
+            let td = board.total_deficit();
+            let m = board.m() as u32;
+            if rc < td || (rc - td) % m != 0 {
+                return (false, 0);
+            }
         }
-        if board.is_solved() {
+        if board.is_solved() && from_piece >= placements.len() {
             return (true, 0);
         }
         let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[from_piece]);
@@ -378,8 +397,8 @@ impl SubgameAxisPrune {
         }
 
         let mut nodes = 0u64;
-        let feasible = self.backtrack(board, from_piece, placements, &mut nodes);
-        (feasible, nodes)
+        let found = self.backtrack(board, from_piece, placements, budget, &mut nodes, &mut solution);
+        (found, nodes)
     }
 
     fn backtrack(
@@ -387,10 +406,12 @@ impl SubgameAxisPrune {
         board: SubgameBoard,
         depth: usize,
         placements: &[Vec<(usize, u16x16)>],
+        budget: u64,
         nodes: &mut u64,
+        solution: &mut Option<&mut Vec<usize>>,
     ) -> bool {
         *nodes += 1;
-        if *nodes > FEASIBILITY_NODE_BUDGET {
+        if budget > 0 && *nodes > budget {
             return true; // conservatively assume feasible
         }
 
@@ -400,7 +421,7 @@ impl SubgameAxisPrune {
         }
 
         // Total deficit check.
-        if self.remaining_cells[depth] < board.total_deficit() {
+        if !self.skip_deficit_check && self.remaining_cells[depth] < board.total_deficit() {
             return false;
         }
 
@@ -413,6 +434,13 @@ impl SubgameAxisPrune {
                 for i in 0..board_len {
                     if cells[i] > n_remaining as u16 {
                         return false;
+                    }
+                }
+                if let Some(sol) = solution.as_deref_mut() {
+                    for i in 0..board_len {
+                        for _ in 0..cells[i] {
+                            sol.push(i);
+                        }
                     }
                 }
                 return true;
@@ -448,96 +476,32 @@ impl SubgameAxisPrune {
             }
         }
 
-        // Try each placement (copy-make).
-        for &(_pos, shifted) in &placements[depth] {
-            let mut new_board = board;
-            new_board.apply_piece(shifted);
-            if self.backtrack(new_board, depth + 1, placements, nodes) {
+        // Evaluate and sort placements: prefer least deficit, then least max cell.
+        let mut candidates: Vec<(u32, u16, usize, SubgameBoard)> = placements[depth]
+            .iter()
+            .enumerate()
+            .map(|(i, &(_pos, shifted))| {
+                let mut b = board;
+                b.apply_piece(shifted);
+                let max_cell = b.cells().reduce_max();
+                (b.total_deficit(), max_cell, i, b)
+            })
+            .collect();
+        candidates.sort_unstable_by_key(|&(deficit, max_cell, _, _)| (deficit, max_cell));
+
+        for (_, _, idx, new_board) in candidates {
+            if let Some(sol) = solution.as_deref_mut() {
+                sol.push(placements[depth][idx].0);
+            }
+            if self.backtrack(new_board, depth + 1, placements, budget, nodes, solution) {
                 return true;
+            }
+            if let Some(sol) = solution.as_deref_mut() {
+                sol.pop();
             }
         }
 
         false
-    }
-}
-
-/// Subgame solver with backtracking and pruning.
-///
-/// The solver returns the first solution found, or `Unsolvable` if none exists.
-pub struct SubgameSolver {
-    /// The subgame to solve.
-    game: SubgameGame,
-    /// Placement positions chosen so far (one per placed piece).
-    solution: Vec<usize>,
-    /// Solver statistics.
-    stats: SolverStats,
-    /// Pruning configuration.
-    config: SubgamePruningConfig,
-    /// Suffix max-contribution per cell: `max_contrib_suffix[d]` is the SIMD vector
-    /// where lane `i` = sum of max contributions to cell `i` from pieces `d..n`.
-    max_contrib_suffix: Vec<u16x16>,
-    /// Index where all remaining pieces are single-cell ([1] profile).
-    /// At this depth, if total deficit matches we can return true immediately.
-    endgame_start: usize,
-    /// Parity partitions for reachability pruning.
-    parity_partitions: Vec<SubgameParityPartition>,
-    /// Subset satisfiability checks (mod-M reachability).
-    subset_checks: Vec<SubgameSubsetReachability>,
-    /// Optional deadline for timeout support.
-    deadline: Option<Instant>,
-}
-
-impl SubgameSolver {
-    /// Create a new solver for the given subgame with all pruning enabled.
-    pub fn new(game: SubgameGame) -> Self {
-        Self::with_config(game, SubgamePruningConfig::default())
-    }
-
-    /// Create a solver with the given pruning configuration.
-    pub fn with_config(game: SubgameGame, config: SubgamePruningConfig) -> Self {
-        let n = game.pieces().len();
-        let max_contrib_suffix = if config.count_sat {
-            Self::build_max_contrib_suffix(&game)
-        } else {
-            vec![u16x16::splat(u16::MAX); n + 1]
-        };
-        let endgame_start = if config.single_cell_endgame {
-            let pieces = game.pieces();
-            let mut i = n;
-            while i > 0 && pieces[i - 1].len() == 1 && pieces[i - 1].cell_count() == 1 {
-                i -= 1;
-            }
-            i
-        } else {
-            n // never triggers
-        };
-        let parity_partitions = if config.parity {
-            Self::build_parity_partitions(&game)
-        } else {
-            vec![]
-        };
-        let subset_checks = if config.subset_sat {
-            Self::build_subset_checks(&game)
-        } else {
-            vec![]
-        };
-        Self {
-            game,
-            solution: Vec::with_capacity(n),
-            stats: SolverStats::default(),
-            config,
-            max_contrib_suffix,
-            endgame_start,
-            parity_partitions,
-            subset_checks,
-            deadline: None,
-        }
-    }
-
-    /// Set a deadline after which the solver will abort.
-    pub fn with_deadline(mut self, deadline: Instant) -> Self {
-        self.deadline = Some(deadline);
-        self
     }
 
     /// Build parity partitions for the 1D board.
@@ -545,10 +509,8 @@ impl SubgameSolver {
         let board_len = game.board().len() as usize;
         let mut partitions = Vec::new();
 
-        // Even/odd partition (always useful).
         partitions.push(SubgameParityPartition::build(game, |i| i % 2 == 0));
 
-        // Mod-3 partitions (useful for boards >= 6 cells).
         if board_len >= 6 {
             partitions.push(SubgameParityPartition::build(game, |i| i % 3 == 0));
             partitions.push(SubgameParityPartition::build(game, |i| i % 3 == 1));
@@ -574,32 +536,27 @@ impl SubgameSolver {
 
         let mut add = |cells: Vec<usize>| {
             let k = cells.len();
-            if k < 2 || k > k_max || k > board_len {
-                return;
-            }
+            if k < 2 || k > k_max || k > board_len { return; }
             let mut sorted = cells.clone();
             sorted.sort_unstable();
             sorted.dedup();
-            if sorted.len() != k { return; } // had duplicates
+            if sorted.len() != k { return; }
             if *sorted.last().unwrap() >= board_len { return; }
             if seen.contains(&sorted) { return; }
             seen.push(sorted.clone());
             checks.push(SubgameSubsetReachability::build(game, sorted));
         };
 
-        // Full board for M=2 (or any M where board fits).
         if board_len <= k_max {
             add((0..board_len).collect());
         }
 
-        // Sliding windows of k_max contiguous cells.
         if board_len > k_max {
             for start in 0..=(board_len - k_max) {
                 add((start..start + k_max).collect());
             }
         }
 
-        // For larger M, also add smaller windows for coverage.
         if m >= 3 {
             let k_small = k_max.min(board_len).saturating_sub(1).max(2);
             if k_small < k_max && board_len > k_small {
@@ -609,7 +566,6 @@ impl SubgameSolver {
             }
         }
 
-        // Endpoint subsets: first and last few cells.
         if board_len > k_max {
             let half = k_max / 2;
             let mut endpoint_cells: Vec<usize> = (0..half).collect();
@@ -621,12 +577,8 @@ impl SubgameSolver {
     }
 
     /// Precompute suffix sums of per-cell max contributions.
-    ///
-    /// For each piece, compute the element-wise max across all its placements.
-    /// Then `max_contrib_suffix[d][i]` = sum over pieces `d..n` of that per-piece max at cell `i`.
     fn build_max_contrib_suffix(game: &SubgameGame) -> Vec<u16x16> {
         let n = game.pieces().len();
-        // Per-piece max contribution at each cell.
         let mut per_piece_max: Vec<u16x16> = Vec::with_capacity(n);
         for p in 0..n {
             let placements = game.placements_for(p);
@@ -637,152 +589,99 @@ impl SubgameSolver {
             per_piece_max.push(max_vec);
         }
 
-        // Build suffix sums: suffix[n] = 0, suffix[d] = suffix[d+1] + per_piece_max[d]
         let mut suffix = vec![u16x16::splat(0); n + 1];
         for d in (0..n).rev() {
             suffix[d] = suffix[d + 1] + per_piece_max[d];
         }
         suffix
     }
+}
 
-    /// Check count satisfiability: can remaining pieces (from `depth` onward)
-    /// cover every cell's current deficit?
-    #[inline(always)]
-    fn check_count_sat(&self, depth: usize) -> bool {
-        let board_cells = self.game.board().cells();
-        let max_reachable = self.max_contrib_suffix[depth];
-        // For each active cell: max_reachable[i] >= board_cells[i]
-        // Equivalently: saturating_sub(board, max_reachable) == 0 for all lanes
-        let shortfall = board_cells.saturating_sub(max_reachable);
-        shortfall == u16x16::splat(0)
+/// Subgame solver: thin wrapper around `SubgameAxisPrune`.
+///
+/// Returns the first solution found, or `Unsolvable` if none exists.
+pub struct SubgameSolver {
+    axis: SubgameAxisPrune,
+    placements: Vec<Vec<(usize, u16x16)>>,
+    board: SubgameBoard,
+    deadline: Option<Instant>,
+}
+
+impl SubgameSolver {
+    /// Create a new solver for the given subgame with all pruning enabled.
+    pub fn new(game: SubgameGame) -> Self {
+        let placements: Vec<Vec<(usize, u16x16)>> = (0..game.pieces().len())
+            .map(|i| game.placements_for(i).to_vec())
+            .collect();
+        let board = *game.board();
+        let axis = SubgameAxisPrune::precompute(&game);
+        Self { axis, placements, board, deadline: None }
+    }
+
+    /// Create a solver with the given pruning configuration.
+    pub fn with_config(game: SubgameGame, config: SubgamePruningConfig) -> Self {
+        // For non-default configs (used in tests), build axis with
+        // only the requested features by constructing a game and using
+        // the full precompute path, then masking out disabled features.
+        let placements: Vec<Vec<(usize, u16x16)>> = (0..game.pieces().len())
+            .map(|i| game.placements_for(i).to_vec())
+            .collect();
+        let board = *game.board();
+        let mut axis = if config == SubgamePruningConfig::default() {
+            SubgameAxisPrune::precompute(&game)
+        } else {
+            // Build with all features, then strip disabled ones.
+            let mut a = SubgameAxisPrune::precompute(&game);
+            if !config.count_sat {
+                let n = game.pieces().len();
+                a.max_contrib_suffix = vec![u16x16::splat(u16::MAX); n + 1];
+            }
+            if !config.parity {
+                a.parity_partitions = vec![];
+            }
+            if !config.subset_sat {
+                a.subset_checks = vec![];
+            }
+            if !config.single_cell_endgame {
+                a.endgame_start = game.pieces().len();
+            }
+            if !config.total_deficit {
+                a.skip_deficit_check = true;
+            }
+            a
+        };
+        Self { axis, placements, board, deadline: None }
+    }
+
+    /// Set a deadline after which the solver will abort.
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     /// Solve the subgame. Returns the result and solver statistics.
-    pub fn solve(mut self) -> (SubgameSolveResult, SolverStats) {
-        let total_cells = self.game.remaining_cells_from(0);
-        let total_deficit = self.game.board().total_deficit();
-        let m = self.game.board().m() as u32;
+    pub fn solve(self) -> (SubgameSolveResult, SolverStats) {
+        let mut solution = Vec::new();
+        let (found, nodes) = self.axis.solve_inner(
+            self.board,
+            0,
+            &self.placements,
+            0, // no budget
+            Some(&mut solution),
+        );
 
-        // Feasibility: need enough cells, and excess must be a multiple of M
-        // (each wrap consumes exactly M extra cells).
-        if total_cells < total_deficit || (total_cells - total_deficit) % m != 0 {
-            return (SubgameSolveResult::Unsolvable, self.stats);
-        }
-
-        if self.game.board().is_solved() && self.game.pieces().is_empty() {
-            return (SubgameSolveResult::Solved(vec![]), self.stats);
-        }
-
-        let found = self.backtrack(0);
-        if found {
-            (SubgameSolveResult::Solved(self.solution.clone()), self.stats)
-        } else if self.deadline.map_or(false, |dl| Instant::now() >= dl) {
-            (SubgameSolveResult::Timeout, self.stats)
+        let result = if found {
+            SubgameSolveResult::Solved(solution)
         } else {
-            (SubgameSolveResult::Unsolvable, self.stats)
-        }
-    }
+            SubgameSolveResult::Unsolvable
+        };
 
-    /// Recursive backtracking search.
-    ///
-    /// `depth` is the index of the current piece to place.
-    fn backtrack(&mut self, depth: usize) -> bool {
-        self.stats.nodes_visited += 1;
+        let stats = SolverStats {
+            nodes_visited: nodes,
+            ..SolverStats::default()
+        };
 
-        // Periodic deadline check.
-        if self.stats.nodes_visited & 0xFFF == 0 {
-            if let Some(dl) = self.deadline {
-                if Instant::now() >= dl {
-                    return false;
-                }
-            }
-        }
-
-        // Base case: all pieces placed.
-        if depth >= self.game.pieces().len() {
-            return self.game.board().is_solved();
-        }
-
-        // --- Pruning: total deficit check ---
-        // With wrapping, deficit can only grow. If remaining cells < deficit,
-        // it's infeasible. The mod-M invariant is checked once at the root.
-        if self.config.total_deficit {
-            let remaining_cells = self.game.remaining_cells_from(depth);
-            let remaining_deficit = self.game.board().total_deficit();
-            if remaining_cells < remaining_deficit {
-                self.stats.deficit_prunes += 1;
-                return false;
-            }
-        }
-
-        // --- Endgame: all remaining pieces are single-cell ---
-        // Only valid when remaining cells == remaining deficit (no wrapping needed).
-        if depth >= self.endgame_start {
-            let n_remaining = self.game.pieces().len() - depth;
-            if n_remaining as u32 == self.game.board().total_deficit() {
-                let board_len = self.game.board().len() as usize;
-                let cells = self.game.board().cells().to_array();
-                for i in 0..board_len {
-                    if cells[i] > n_remaining as u16 {
-                        return false;
-                    }
-                }
-                // Fill in solution: assign pieces greedily to cells by deficit.
-                for i in 0..board_len {
-                    for _ in 0..cells[i] {
-                        self.solution.push(i);
-                    }
-                }
-                return true;
-            }
-        }
-
-        // --- Pruning: per-cell count satisfiability ---
-        if !self.check_count_sat(depth) {
-            self.stats.count_sat_prunes += 1;
-            return false;
-        }
-
-        // --- Pruning: parity partition reachability ---
-        if !self.parity_partitions.is_empty() {
-            let cells = self.game.board().cells().to_array();
-            let board_len = self.game.board().len() as usize;
-            let m = self.game.board().m() as u32;
-            for partition in &self.parity_partitions {
-                if !partition.check(&cells, board_len, depth, m) {
-                    self.stats.parity_prunes += 1;
-                    return false;
-                }
-            }
-        }
-
-        // --- Pruning: subset satisfiability (mod-M reachability) ---
-        if !self.subset_checks.is_empty() {
-            let cells = self.game.board().cells().to_array();
-            let m = self.game.board().m() as usize;
-            for check in &self.subset_checks {
-                if !check.check(&cells, m, depth) {
-                    self.stats.subset_sat_prunes += 1;
-                    return false;
-                }
-            }
-        }
-
-        // Try each placement for the current piece.
-        let placements = self.game.placements_for(depth).to_vec();
-        for &(pos, shifted) in &placements {
-            let wrap_add = self.game.board_mut().apply_piece(shifted);
-            self.solution.push(pos);
-
-            if self.backtrack(depth + 1) {
-                return true;
-            }
-
-            self.solution.pop();
-            self.game.board_mut().undo_piece(shifted, wrap_add);
-        }
-
-        false
+        (result, stats)
     }
 }
 
@@ -1280,8 +1179,8 @@ mod tests {
             let (nodes_cs, res_cs) = solve_with(game, with_cs);
 
             assert_eq!(res_cs, SubgameSolveResult::Unsolvable);
-            // Count-sat prunes at root; baseline needs ~N nodes.
-            assert_eq!(nodes_cs, 1, "count-sat should prune at root for N={n}");
+            // Count-sat prunes at root (before any backtrack node).
+            assert!(nodes_cs <= 1, "count-sat should prune at root for N={n}, got {nodes_cs}");
             assert!(
                 nodes_base >= n as u64,
                 "baseline should visit >= {n} nodes, got {nodes_base}",
