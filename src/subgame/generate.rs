@@ -64,7 +64,7 @@ pub fn board_row_deficits(board: &Board) -> SubgameBoard {
         }
         cells.push(sum);
     }
-    SubgameBoard::from_cells(&cells)
+    SubgameBoard::from_cells(&cells, board.m())
 }
 
 /// Compute the column subgame board: for each column, sum the per-cell deficits.
@@ -79,7 +79,7 @@ pub fn board_col_deficits(board: &Board) -> SubgameBoard {
         }
         cells.push(sum);
     }
-    SubgameBoard::from_cells(&cells)
+    SubgameBoard::from_cells(&cells, board.m())
 }
 
 /// Project a full game into its row subgame.

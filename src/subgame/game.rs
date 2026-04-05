@@ -79,25 +79,22 @@ impl SubgameGame {
     }
 
     /// Place the next piece with the given shifted profile.
-    /// Returns `true` if the placement was valid (no underflow).
-    /// Advances the piece pointer on success.
-    /// On failure, the board is NOT modified (caller need not undo).
+    /// Wrapping is handled automatically. Returns the wrap_add vector
+    /// (needed by `undo_last`). Advances the piece pointer.
     #[inline(always)]
-    pub fn place_next(&mut self, shifted_profile: u16x16) -> bool {
-        if self.board.apply_piece(shifted_profile) {
-            self.next += 1;
-            true
-        } else {
-            false
-        }
+    pub fn place_next(&mut self, shifted_profile: u16x16) -> u16x16 {
+        let wrap_add = self.board.apply_piece(shifted_profile);
+        self.next += 1;
+        wrap_add
     }
 
-    /// Undo the last placed piece with the given shifted profile.
+    /// Undo the last placed piece. `wrap_add` must be the value returned
+    /// by the corresponding `place_next` call.
     #[inline(always)]
-    pub fn undo_last(&mut self, shifted_profile: u16x16) {
+    pub fn undo_last(&mut self, shifted_profile: u16x16, wrap_add: u16x16) {
         assert!(self.next > 0, "no pieces to undo");
         self.next -= 1;
-        self.board.undo_piece(shifted_profile);
+        self.board.undo_piece(shifted_profile, wrap_add);
     }
 }
 
@@ -115,13 +112,14 @@ impl std::fmt::Debug for SubgameGame {
 
 #[cfg(test)]
 mod tests {
+    use std::simd::u16x16;
     use super::*;
 
     fn make_game() -> SubgameGame {
         // Board [3, 3], two pieces with profile [1, 1] each
         // Two placements of [1,1] at pos 0 covers 2+2=4 > deficit 6, so needs 3 of them
         // Actually let's use a simpler setup: board [2, 2], pieces [1,1] and [1,1]
-        let board = SubgameBoard::from_cells(&[2, 2]);
+        let board = SubgameBoard::from_cells(&[2, 2], 2);
         let p = SubgamePiece::from_profile(&[1, 1]);
         SubgameGame::new(board, vec![p, p])
     }
@@ -142,8 +140,7 @@ mod tests {
         assert!(!placements.is_empty());
 
         // Place first piece at position 0
-        let ok = game.place_next(placements[0].1);
-        assert!(ok);
+        game.place_next(placements[0].1);
         assert_eq!(game.next_index(), 1);
         assert_eq!(game.board().get(0), 1);
         assert_eq!(game.board().get(1), 1);
@@ -155,9 +152,9 @@ mod tests {
         let pls = game.placements_for(0).to_vec();
 
         // Place both pieces at position 0: [2,2] - [1,1] - [1,1] = [0,0]
-        assert!(game.place_next(pls[0].1));
+        game.place_next(pls[0].1);
         let pls2 = game.placements_for(1).to_vec();
-        assert!(game.place_next(pls2[0].1));
+        game.place_next(pls2[0].1);
         assert!(game.is_solved());
     }
 
@@ -166,27 +163,27 @@ mod tests {
         let mut game = make_game();
         let pls = game.placements_for(0).to_vec();
 
-        assert!(game.place_next(pls[0].1));
+        let wrap = game.place_next(pls[0].1);
         assert_eq!(game.board().get(0), 1);
 
-        game.undo_last(pls[0].1);
+        game.undo_last(pls[0].1, wrap);
         assert_eq!(game.next_index(), 0);
         assert_eq!(game.board().get(0), 2);
         assert_eq!(game.board().get(1), 2);
     }
 
     #[test]
-    fn test_place_underflow_rejected() {
-        // Board [1, 0], piece [1, 1] -> cell 1 would go below 0
-        let board = SubgameBoard::from_cells(&[1, 0]);
+    fn test_place_wraps_instead_of_rejecting() {
+        // Board [1, 0], piece [1, 1] -> cell 1 wraps: 0 → M-1 = 1
+        let board = SubgameBoard::from_cells(&[1, 0], 2);
         let p = SubgamePiece::from_profile(&[1, 1]);
         let mut game = SubgameGame::new(board, vec![p]);
 
         let pls = game.placements_for(0).to_vec();
-        let ok = game.place_next(pls[0].1);
-        assert!(!ok);
-        // Board should be unchanged
-        assert_eq!(game.next_index(), 0);
+        game.place_next(pls[0].1);
+        assert_eq!(game.next_index(), 1);
+        assert_eq!(game.board().get(0), 0); // 1 - 1 = 0
+        assert_eq!(game.board().get(1), 1); // 0 → M-1 = 1 (wrapped)
     }
 
     #[test]
@@ -201,13 +198,13 @@ mod tests {
     fn test_undo_empty() {
         let mut game = make_game();
         let pls = game.placements_for(0).to_vec();
-        game.undo_last(pls[0].1);
+        game.undo_last(pls[0].1, u16x16::splat(0));
     }
 
     #[test]
     #[should_panic(expected = "must have at least one piece")]
     fn test_no_pieces() {
-        let board = SubgameBoard::from_cells(&[1, 2]);
+        let board = SubgameBoard::from_cells(&[1, 2], 2);
         SubgameGame::new(board, vec![]);
     }
 }

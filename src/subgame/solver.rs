@@ -16,8 +16,6 @@ pub enum SubgameSolveResult {
 pub struct SolverStats {
     /// Total number of nodes visited in the search tree.
     pub nodes_visited: u64,
-    /// Number of placements rejected by underflow detection.
-    pub underflow_rejections: u64,
     /// Number of branches pruned by total deficit check.
     pub deficit_prunes: u64,
     /// Number of branches pruned by per-cell count satisfiability check.
@@ -156,10 +154,13 @@ impl SubgameSolver {
 
     /// Solve the subgame. Returns the result and solver statistics.
     pub fn solve(mut self) -> (SubgameSolveResult, SolverStats) {
-        // Quick feasibility check: total piece cells must equal total deficit.
         let total_cells = self.game.remaining_cells_from(0);
         let total_deficit = self.game.board().total_deficit();
-        if total_cells != total_deficit {
+        let m = self.game.board().m() as u32;
+
+        // Feasibility: need enough cells, and excess must be a multiple of M
+        // (each wrap consumes exactly M extra cells).
+        if total_cells < total_deficit || (total_cells - total_deficit) % m != 0 {
             return (SubgameSolveResult::Unsolvable, self.stats);
         }
 
@@ -187,35 +188,37 @@ impl SubgameSolver {
         }
 
         // --- Pruning: total deficit check ---
+        // With wrapping, deficit can only grow. If remaining cells < deficit,
+        // it's infeasible. The mod-M invariant is checked once at the root.
         if self.config.total_deficit {
             let remaining_cells = self.game.remaining_cells_from(depth);
             let remaining_deficit = self.game.board().total_deficit();
-            if remaining_cells != remaining_deficit {
+            if remaining_cells < remaining_deficit {
                 self.stats.deficit_prunes += 1;
                 return false;
             }
         }
 
         // --- Endgame: all remaining pieces are single-cell ---
-        // N single-cell pieces can always fill any deficit that sums to N
-        // with all values >= 0 (guaranteed by board invariant), and each cell's
-        // deficit <= N. We greedily assign pieces to cells.
+        // Only valid when remaining cells == remaining deficit (no wrapping needed).
         if depth >= self.endgame_start {
-            let n_remaining = (self.game.pieces().len() - depth) as u16;
-            let board_len = self.game.board().len() as usize;
-            let cells = self.game.board().cells().to_array();
-            for i in 0..board_len {
-                if cells[i] > n_remaining {
-                    return false;
+            let n_remaining = self.game.pieces().len() - depth;
+            if n_remaining as u32 == self.game.board().total_deficit() {
+                let board_len = self.game.board().len() as usize;
+                let cells = self.game.board().cells().to_array();
+                for i in 0..board_len {
+                    if cells[i] > n_remaining as u16 {
+                        return false;
+                    }
                 }
-            }
-            // Fill in solution: assign pieces greedily to cells by deficit.
-            for i in 0..board_len {
-                for _ in 0..cells[i] {
-                    self.solution.push(i);
+                // Fill in solution: assign pieces greedily to cells by deficit.
+                for i in 0..board_len {
+                    for _ in 0..cells[i] {
+                        self.solution.push(i);
+                    }
                 }
+                return true;
             }
-            return true;
         }
 
         // --- Pruning: per-cell count satisfiability ---
@@ -227,22 +230,15 @@ impl SubgameSolver {
         // Try each placement for the current piece.
         let placements = self.game.placements_for(depth).to_vec();
         for &(pos, shifted) in &placements {
-            // Try applying the placement.
-            if !self.game.board_mut().apply_piece(shifted) {
-                self.stats.underflow_rejections += 1;
-                continue;
-            }
-
+            let wrap_add = self.game.board_mut().apply_piece(shifted);
             self.solution.push(pos);
 
-            // Recurse to the next piece.
             if self.backtrack(depth + 1) {
                 return true;
             }
 
-            // Undo and try the next placement.
             self.solution.pop();
-            self.game.board_mut().undo_piece(shifted);
+            self.game.board_mut().undo_piece(shifted, wrap_add);
         }
 
         false
@@ -280,7 +276,7 @@ mod tests {
     #[test]
     fn test_solve_trivial() {
         // Board [1], piece [1] -> place at 0
-        let board = SubgameBoard::from_cells(&[1]);
+        let board = SubgameBoard::from_cells(&[1], 2);
         let piece = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![piece]);
         let (result, stats) = solve(game);
@@ -292,7 +288,7 @@ mod tests {
     fn test_solve_two_pieces() {
         // Board [2, 2], two pieces with profile [1, 1]
         // Both placed at position 0: [2,2] - [1,1] - [1,1] = [0,0]
-        let board = SubgameBoard::from_cells(&[2, 2]);
+        let board = SubgameBoard::from_cells(&[2, 2], 2);
         let piece = SubgamePiece::from_profile(&[1, 1]);
         let game = SubgameGame::new(board, vec![piece, piece]);
         let (result, _) = solve(game);
@@ -307,7 +303,7 @@ mod tests {
     #[test]
     fn test_solve_unsolvable_deficit_mismatch() {
         // Board [3], piece [2] -> total deficit 3 != piece cells 2
-        let board = SubgameBoard::from_cells(&[3]);
+        let board = SubgameBoard::from_cells(&[3], 2);
         let piece = SubgamePiece::from_profile(&[2]);
         let game = SubgameGame::new(board, vec![piece]);
         let (result, _) = solve(game);
@@ -316,21 +312,20 @@ mod tests {
 
     #[test]
     fn test_solve_unsolvable_no_valid_placement() {
-        // Board [1, 3], piece [2, 2] -> deficit matches (4 = 4) but cell 0 underflows
-        let board = SubgameBoard::from_cells(&[1, 3]);
+        // Board [1, 3], piece [2, 2] -> deficit matches (4 = 4) but wrapping
+        // makes it unsolvable (cell 0 wraps, increasing deficit).
+        let board = SubgameBoard::from_cells(&[1, 3], 2);
         let piece = SubgamePiece::from_profile(&[2, 2]);
         let game = SubgameGame::new(board, vec![piece]);
-        let (result, stats) = solve(game);
+        let (result, _stats) = solve(game);
         assert_eq!(result, SubgameSolveResult::Unsolvable);
-        // Pruned by either count-sat or underflow detection.
-        assert!(stats.underflow_rejections > 0 || stats.count_sat_prunes > 0);
     }
 
     #[test]
     fn test_solve_multiple_placements() {
         // Board [1, 0, 1], piece [1] twice
         // First piece at pos 0, second at pos 2 (or vice versa)
-        let board = SubgameBoard::from_cells(&[1, 0, 1]);
+        let board = SubgameBoard::from_cells(&[1, 0, 1], 2);
         let piece = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![piece, piece]);
         let (result, _) = solve(game);
@@ -348,7 +343,7 @@ mod tests {
     #[test]
     fn test_solve_larger_board() {
         // Board [2, 2, 2, 2], two pieces with profile [1, 1, 1, 1]
-        let board = SubgameBoard::from_cells(&[2, 2, 2, 2]);
+        let board = SubgameBoard::from_cells(&[2, 2, 2, 2], 2);
         let piece = SubgamePiece::from_profile(&[1, 1, 1, 1]);
         let game = SubgameGame::new(board, vec![piece, piece]);
         let (result, _) = solve(game);
@@ -373,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_solve_stats_tracking() {
-        let board = SubgameBoard::from_cells(&[1, 1]);
+        let board = SubgameBoard::from_cells(&[1, 1], 2);
         let piece = SubgamePiece::from_profile(&[1, 1]);
         let game = SubgameGame::new(board, vec![piece]);
         let (result, stats) = solve(game);
@@ -383,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_is_solvable_convenience() {
-        let board = SubgameBoard::from_cells(&[1]);
+        let board = SubgameBoard::from_cells(&[1], 2);
         let piece = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![piece]);
         assert!(is_solvable(game));
@@ -430,7 +425,7 @@ mod tests {
     fn test_solve_with_different_profiles() {
         // Board [3, 2, 1], pieces: [2, 1] and [1, 1, 1]
         // Piece 0 at pos 0: [3,2,1]-[2,1,0]=[1,1,1], then piece 1 at pos 0: [1,1,1]-[1,1,1]=[0,0,0]
-        let board = SubgameBoard::from_cells(&[3, 2, 1]);
+        let board = SubgameBoard::from_cells(&[3, 2, 1], 2);
         let p1 = SubgamePiece::from_profile(&[2, 1]);
         let p2 = SubgamePiece::from_profile(&[1, 1, 1]);
         let game = SubgameGame::new(board, vec![p1, p2]);
@@ -493,9 +488,7 @@ mod tests {
                 Some(&(_, s)) => s,
                 None => return false,
             };
-            if !board.apply_piece(shifted) {
-                return false;
-            }
+            board.apply_piece(shifted);
         }
         board.is_solved()
     }
@@ -581,7 +574,7 @@ mod tests {
     // one by one until underflow.
     #[test]
     fn test_count_sat_unsolvable_concentrated_deficit() {
-        let board = SubgameBoard::from_cells(&[6, 4]);
+        let board = SubgameBoard::from_cells(&[6, 4], 2);
         let piece = SubgamePiece::from_profile(&[1, 1]);
         let game = SubgameGame::new(board, vec![piece; 5]);
 
@@ -608,7 +601,7 @@ mod tests {
     // Baseline: places [1,1] at pos 0 repeatedly until underflow at cell 1.
     #[test]
     fn test_count_sat_unsolvable_wide_board() {
-        let board = SubgameBoard::from_cells(&[10, 1, 1, 1, 1, 1, 1]);
+        let board = SubgameBoard::from_cells(&[10, 1, 1, 1, 1, 1, 1], 2);
         let piece = SubgamePiece::from_profile(&[1, 1]);
         let game = SubgameGame::new(board, vec![piece; 8]);
 
@@ -635,7 +628,7 @@ mod tests {
     fn test_count_sat_prunes_wrong_branch_solvable() {
         // Build from placements: [1,1,1]@2, [1,1,1]@0, [1,1]@3
         // Board = [1,1,1,0,0] + [0,0,1,1,1] + [0,0,0,1,1] = [1,1,2,2,2]
-        let board = SubgameBoard::from_cells(&[1, 1, 2, 2, 2]);
+        let board = SubgameBoard::from_cells(&[1, 1, 2, 2, 2], 2);
         let p3 = SubgamePiece::from_profile(&[1, 1, 1]);
         let p2 = SubgamePiece::from_profile(&[1, 1]);
         // Sorted: [1,1,1] x2 first, then [1,1]
@@ -660,7 +653,7 @@ mod tests {
     // pieces. With endgame, resolves in 1 node.
     #[test]
     fn test_endgame_all_single_cell() {
-        let board = SubgameBoard::from_cells(&[2, 3, 1]);
+        let board = SubgameBoard::from_cells(&[2, 3, 1], 2);
         let piece = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![piece; 6]);
 
@@ -688,7 +681,7 @@ mod tests {
     // Without: must recurse through all 3 single-cell pieces.
     #[test]
     fn test_endgame_mixed_pieces_single_cell_tail() {
-        let board = SubgameBoard::from_cells(&[3, 2, 1]);
+        let board = SubgameBoard::from_cells(&[3, 2, 1], 2);
         let p21 = SubgamePiece::from_profile(&[2, 1]);
         let p1 = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![p21, p1, p1, p1]);
@@ -712,7 +705,7 @@ mod tests {
     // Endgame: 1 node.
     #[test]
     fn test_endgame_large_single_cell() {
-        let board = SubgameBoard::from_cells(&[1, 1, 1, 1, 1, 1, 1, 1]);
+        let board = SubgameBoard::from_cells(&[1, 1, 1, 1, 1, 1, 1, 1], 2);
         let piece = SubgamePiece::from_profile(&[1]);
         let game = SubgameGame::new(board, vec![piece; 8]);
 
@@ -736,7 +729,7 @@ mod tests {
     #[test]
     fn test_count_sat_scaling() {
         for n in [5, 10, 20] {
-            let board = SubgameBoard::from_cells(&[n as u16 + 1, n as u16 - 1]);
+            let board = SubgameBoard::from_cells(&[n as u16 + 1, n as u16 - 1], 2);
             let piece = SubgamePiece::from_profile(&[1, 1]);
             let game = SubgameGame::new(board, vec![piece; n]);
 

@@ -24,20 +24,26 @@ fn print_usage() {
     );
 }
 
-/// Generate a full 2D game, sort pieces like the main solver, project to
-/// row and column subgames.
+use rand::{Rng, RngExt};
+
+/// Generate a full 2D game, place `skip` pieces randomly to create a
+/// mid-game state, then project the remaining pieces into subgames.
+/// This produces harder subgame instances than starting from scratch.
 fn generate_subgames(
     spec: &LevelSpec,
     seed: u64,
-) -> (SubgameGame, SubgameGame) {
+    skip: usize,
+) -> Option<(SubgameGame, SubgameGame)> {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
     let game = generate_game(spec, &mut rng);
     let h = spec.rows;
     let w = spec.columns;
 
-    // Sort pieces like the main solver: fewer placements first, then
-    // larger perimeter, larger cell count, limbs tiebreak.
     let pieces = game.pieces();
+    let n = pieces.len();
+    if skip >= n { return None; }
+
+    // Sort pieces like the main solver.
     let mut indexed: Vec<(usize, usize)> = pieces
         .iter()
         .enumerate()
@@ -49,19 +55,43 @@ fn generate_subgames(
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
             .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
-    let sorted_pieces: Vec<_> = indexed.iter().map(|(i, _)| &pieces[*i]).collect();
+    let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+
+    // Place the first `skip` pieces at random valid positions on the 2D board.
+    let mut board = game.board().clone();
+    for k in 0..skip {
+        let orig_idx = order[k];
+        let p = &pieces[orig_idx];
+        let pls = p.placements(h, w);
+        if pls.is_empty() { return None; }
+        let j = rng.random_range(0..pls.len());
+        let (_, _, mask) = pls[j];
+        board.apply_piece(mask);
+    }
+
+    // Project remaining pieces into subgames.
+    let remaining: Vec<_> = order[skip..].iter().map(|&i| &pieces[i]).collect();
 
     let row_profiles: Vec<SubgamePiece> =
-        sorted_pieces.iter().map(|p| piece_row_profile(p)).collect();
+        remaining.iter().map(|p| piece_row_profile(p)).collect();
     let col_profiles: Vec<SubgamePiece> =
-        sorted_pieces.iter().map(|p| piece_col_profile(p)).collect();
+        remaining.iter().map(|p| piece_col_profile(p)).collect();
 
-    let row_board = board_row_deficits(game.board());
-    let col_board = board_col_deficits(game.board());
+    let row_board = board_row_deficits(&board);
+    let col_board = board_col_deficits(&board);
+
+    if row_profiles.is_empty() { return None; }
+
+    // Only return if total_cells == total_deficit (no wrapping).
+    // The subgame strict decrement model requires this.
+    let total_cells: u32 = remaining.iter().map(|p| p.cell_count()).sum();
+    if total_cells != row_board.total_deficit() {
+        return None;
+    }
 
     let row_sg = SubgameGame::new(row_board, row_profiles);
     let col_sg = SubgameGame::new(col_board, col_profiles);
-    (row_sg, col_sg)
+    Some((row_sg, col_sg))
 }
 
 fn main() {
@@ -125,8 +155,21 @@ fn main() {
         let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
 
         for g in 0..games_per {
-            let seed = base_seed + spec.level as u64 * 1000 + g as u64;
-            let (row_sg, col_sg) = generate_subgames(spec, seed);
+            // Try different skip counts and seeds to find no-wrapping mid-game states.
+            let mut found = None;
+            'search: for skip in 1..spec.shapes as usize {
+                for trial in 0..20u64 {
+                    let seed = base_seed + spec.level as u64 * 10000 + g as u64 * 100 + trial;
+                    if let Some(sg) = generate_subgames(spec, seed, skip) {
+                        found = Some(sg);
+                        break 'search;
+                    }
+                }
+            }
+            let (row_sg, col_sg) = match found {
+                Some(sg) => sg,
+                None => continue,
+            };
 
             for (label, sg) in [("row", row_sg), ("col", col_sg)] {
                 let start = Instant::now();

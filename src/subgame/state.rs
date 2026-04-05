@@ -50,16 +50,10 @@ impl SubgameState {
         &self.col_board
     }
 
-    /// Apply a piece placement to both subgame boards.
+    /// Apply a piece placement to both subgame boards (with wrapping).
     ///
     /// `piece_idx` is the solver-order piece index. `row` and `col` are the
     /// placement coordinates from the main solver.
-    ///
-    /// Returns `true` if both subgame boards accepted the placement (no
-    /// underflow). Returns `false` if either subgame detects underflow,
-    /// meaning the placement is infeasible — the state is left in an
-    /// indeterminate state and should be discarded (consistent with
-    /// copy-make usage).
     #[inline(always)]
     pub fn apply_piece(
         &mut self,
@@ -67,82 +61,23 @@ impl SubgameState {
         piece_idx: usize,
         row: usize,
         col: usize,
-    ) -> bool {
-        let row_shifted = data.row_shifted_at(piece_idx, row);
-        if !self.row_board.apply_piece(row_shifted) {
-            return false;
-        }
-
-        let col_shifted = data.col_shifted_at(piece_idx, col);
-        if !self.col_board.apply_piece(col_shifted) {
-            // Row board was modified but col failed — state is indeterminate.
-            // With copy-make, caller discards this copy anyway.
-            return false;
-        }
-
-        true
-    }
-
-    /// Apply a piece unconditionally (allowing underflow wrapping).
-    /// Keeps state consistent when wrapping occurs in the full game.
-    #[inline(always)]
-    pub fn apply_piece_wrapping(
-        &mut self,
-        data: &SubgameData,
-        piece_idx: usize,
-        row: usize,
-        col: usize,
     ) {
         let row_shifted = data.row_shifted_at(piece_idx, row);
-        self.row_board.apply_piece_wrapping(row_shifted);
-        let col_shifted = data.col_shifted_at(piece_idx, col);
-        self.col_board.apply_piece_wrapping(col_shifted);
-    }
-
-    /// Undo a piece placement on both subgame boards.
-    ///
-    /// Only needed if NOT using the copy-make pattern.
-    #[inline(always)]
-    pub fn undo_piece(
-        &mut self,
-        data: &SubgameData,
-        piece_idx: usize,
-        row: usize,
-        col: usize,
-    ) {
-        let row_shifted = data.row_shifted_at(piece_idx, row);
-        self.row_board.undo_piece(row_shifted);
+        self.row_board.apply_piece(row_shifted);
 
         let col_shifted = data.col_shifted_at(piece_idx, col);
-        self.col_board.undo_piece(col_shifted);
+        self.col_board.apply_piece(col_shifted);
     }
 
-    /// Apply a piece using raw shifted profiles (avoids re-lookup when caller
-    /// already has them).
+    /// Apply a piece using raw shifted profiles.
     #[inline(always)]
     pub fn apply_piece_raw(
         &mut self,
         row_shifted: u16x16,
         col_shifted: u16x16,
-    ) -> bool {
-        if !self.row_board.apply_piece(row_shifted) {
-            return false;
-        }
-        if !self.col_board.apply_piece(col_shifted) {
-            return false;
-        }
-        true
-    }
-
-    /// Undo a piece using raw shifted profiles.
-    #[inline(always)]
-    pub fn undo_piece_raw(
-        &mut self,
-        row_shifted: u16x16,
-        col_shifted: u16x16,
     ) {
-        self.row_board.undo_piece(row_shifted);
-        self.col_board.undo_piece(col_shifted);
+        self.row_board.apply_piece(row_shifted);
+        self.col_board.apply_piece(col_shifted);
     }
 
     /// True if both subgame boards are solved (all cells at zero).
@@ -223,23 +158,9 @@ mod tests {
         // Place piece 0 (1x1) at (0, 0)
         // Row: subtract [1] shifted to pos 0 → row deficit [2-1, 1, 2] = [1, 1, 2]
         // Col: subtract [1] shifted to pos 0 → col deficit [2-1, 1, 2] = [1, 1, 2]
-        assert!(state.apply_piece(&data, 0, 0, 0));
+        state.apply_piece(&data, 0, 0, 0);
         assert_eq!(state.row_deficit(), 4);
         assert_eq!(state.col_deficit(), 4);
-    }
-
-    #[test]
-    fn test_apply_and_undo() {
-        let (_, _, _, data) = make_test_data();
-        let mut state = SubgameState::new(&data);
-        let original_row_deficit = state.row_deficit();
-        let original_col_deficit = state.col_deficit();
-
-        assert!(state.apply_piece(&data, 0, 0, 0));
-        state.undo_piece(&data, 0, 0, 0);
-
-        assert_eq!(state.row_deficit(), original_row_deficit);
-        assert_eq!(state.col_deficit(), original_col_deficit);
     }
 
     #[test]
@@ -250,7 +171,7 @@ mod tests {
         // Snapshot, then modify the copy
         let snapshot = state;
         let mut branch = snapshot;
-        assert!(branch.apply_piece(&data, 0, 0, 0));
+        branch.apply_piece(&data, 0, 0, 0);
 
         // Original snapshot is unchanged
         assert_eq!(snapshot.row_deficit(), state.row_deficit());
@@ -258,12 +179,8 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_underflow_rejected() {
+    fn test_apply_wraps_on_underflow() {
         // 3x3 board, M=2. Top row all zeros (deficit 0), bottom rows have deficits.
-        // Board values:
-        //   0 0 0   → deficits: 0 0 0
-        //   0 0 0   → deficits: 0 0 0
-        //   1 1 1   → deficits: 1 1 1
         // Row deficits: [0, 0, 3], Col deficits: [1, 1, 1]
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
@@ -275,8 +192,10 @@ mod tests {
 
         let mut state = SubgameState::new(&data);
         // Place at row 0: row profile [1, 1, 1] at pos 0 → subtract from [0, 0, 3]
-        // Row 0 has deficit 0, subtracting 1 → underflow
-        assert!(!state.apply_piece(&data, 0, 0, 0));
+        // Row 0 and row 1 have deficit 0, subtracting 1 wraps to M-1 = 1
+        state.apply_piece(&data, 0, 0, 0);
+        // Row deficits: [1, 1, 2] (rows 0,1 wrapped, row 2: 3-1=2)
+        assert_eq!(state.row_deficit(), 4); // was 3, +2 wraps (2*M=4) -3 piece = 3-3+4=4
     }
 
     #[test]
@@ -295,15 +214,15 @@ mod tests {
         assert!(!state.is_solved());
 
         // Place bar 0 at (0, 0): row deficit [3-3, 3, 3] = [0, 3, 3]
-        assert!(state.apply_piece(&data, 0, 0, 0));
+        state.apply_piece(&data, 0, 0, 0);
         assert!(!state.is_solved());
 
         // Place bar 1 at (1, 0): row deficit [0, 3-3, 3] = [0, 0, 3]
-        assert!(state.apply_piece(&data, 1, 1, 0));
+        state.apply_piece(&data, 1, 1, 0);
         assert!(!state.is_solved());
 
         // Place bar 2 at (2, 0): row deficit [0, 0, 0], col deficit [0, 0, 0]
-        assert!(state.apply_piece(&data, 2, 2, 0));
+        state.apply_piece(&data, 2, 2, 0);
         assert!(state.is_solved());
     }
 

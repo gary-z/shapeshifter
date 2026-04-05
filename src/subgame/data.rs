@@ -249,8 +249,11 @@ impl SubgameData {
         remaining_cells: &[u32],
         nodes: &mut u64,
     ) -> bool {
-        // Quick check: total remaining cells must equal total deficit.
-        if remaining_cells[from_piece] != board.total_deficit() {
+        // Quick check: remaining cells must cover deficit, excess divisible by M.
+        let rc = remaining_cells[from_piece];
+        let td = board.total_deficit();
+        let m = board.m() as u32;
+        if rc < td || (rc - td) % m != 0 {
             return false;
         }
         if board.is_solved() {
@@ -290,8 +293,8 @@ impl SubgameData {
             return board.is_solved();
         }
 
-        // Total deficit check.
-        if remaining_cells[depth] != board.total_deficit() {
+        // Total deficit check: with wrapping, deficit can only grow.
+        if remaining_cells[depth] < board.total_deficit() {
             return false;
         }
 
@@ -301,13 +304,12 @@ impl SubgameData {
             return false;
         }
 
-        // Try each placement for the current piece.
+        // Try each placement for the current piece (copy-make).
         for &(_pos, shifted) in &placements[depth] {
             let mut new_board = board;
-            if new_board.apply_piece(shifted) {
-                if self.backtrack_1d(new_board, depth + 1, placements, max_contrib_suffix, remaining_cells, nodes) {
-                    return true;
-                }
+            new_board.apply_piece(shifted);
+            if self.backtrack_1d(new_board, depth + 1, placements, max_contrib_suffix, remaining_cells, nodes) {
+                return true;
             }
         }
 
