@@ -36,6 +36,16 @@ impl SubgameGame {
         }
     }
 
+    /// Create a subgame from pre-built parts (avoids recomputing placements).
+    pub fn from_parts(
+        board: SubgameBoard,
+        pieces: Vec<SubgamePiece>,
+        all_placements: Vec<Vec<(usize, u16x16)>>,
+    ) -> Self {
+        assert!(!pieces.is_empty(), "must have at least one piece");
+        Self { board, pieces, next: 0, all_placements }
+    }
+
     pub fn board(&self) -> &SubgameBoard {
         &self.board
     }

@@ -1,6 +1,7 @@
 use std::simd::{u16x16, cmp::SimdOrd, num::SimdUint};
 use std::time::Instant;
 
+use super::board::SubgameBoard;
 use super::game::SubgameGame;
 
 /// Result of a subgame solve attempt.
@@ -290,6 +291,173 @@ impl SubgameSubsetReachability {
         }
 
         SubgameSubsetReachability { cells, num_configs, reachable, first_useful }
+    }
+}
+
+/// Precomputed pruning data for one 1D subgame axis (row or col).
+///
+/// Built once during solver precomputation. Provides fast feasibility checks
+/// that use all subgame pruning techniques (count-sat, parity, subset SAT,
+/// endgame) without per-call precomputation overhead.
+pub struct SubgameAxisPrune {
+    max_contrib_suffix: Vec<u16x16>,
+    remaining_cells: Vec<u32>,
+    parity_partitions: Vec<SubgameParityPartition>,
+    subset_checks: Vec<SubgameSubsetReachability>,
+    endgame_start: usize,
+}
+
+/// Node budget for feasibility checks — bail out conservatively (assume
+/// feasible) if exceeded to avoid the subgame check becoming a bottleneck.
+const FEASIBILITY_NODE_BUDGET: u64 = 10_000;
+
+impl SubgameAxisPrune {
+    /// Empty prune data (no pieces).
+    pub fn empty() -> Self {
+        SubgameAxisPrune {
+            max_contrib_suffix: vec![u16x16::splat(0)],
+            remaining_cells: vec![0],
+            parity_partitions: vec![],
+            subset_checks: vec![],
+            endgame_start: 0,
+        }
+    }
+
+    /// Precompute pruning data from a SubgameGame with all pieces.
+    pub fn precompute(game: &SubgameGame) -> Self {
+        let n = game.pieces().len();
+
+        let max_contrib_suffix = SubgameSolver::build_max_contrib_suffix(game);
+
+        let mut remaining_cells = vec![0u32; n + 1];
+        for i in (0..n).rev() {
+            remaining_cells[i] = remaining_cells[i + 1] + game.pieces()[i].cell_count() as u32;
+        }
+
+        let parity_partitions = SubgameSolver::build_parity_partitions(game);
+        let subset_checks = SubgameSolver::build_subset_checks(game);
+
+        let mut endgame_start = n;
+        let pieces = game.pieces();
+        while endgame_start > 0
+            && pieces[endgame_start - 1].len() == 1
+            && pieces[endgame_start - 1].cell_count() == 1
+        {
+            endgame_start -= 1;
+        }
+
+        SubgameAxisPrune {
+            max_contrib_suffix,
+            remaining_cells,
+            parity_partitions,
+            subset_checks,
+            endgame_start,
+        }
+    }
+
+    /// Check if the subgame is feasible from `from_piece` onward with the
+    /// given board state. Returns `(feasible, nodes_visited)`.
+    pub fn check_feasible(
+        &self,
+        board: SubgameBoard,
+        from_piece: usize,
+        placements: &[Vec<(usize, u16x16)>],
+    ) -> (bool, u64) {
+        let rc = self.remaining_cells[from_piece];
+        let td = board.total_deficit();
+        let m = board.m() as u32;
+        if rc < td || (rc - td) % m != 0 {
+            return (false, 0);
+        }
+        if board.is_solved() {
+            return (true, 0);
+        }
+        let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[from_piece]);
+        if shortfall != u16x16::splat(0) {
+            return (false, 0);
+        }
+
+        let mut nodes = 0u64;
+        let feasible = self.backtrack(board, from_piece, placements, &mut nodes);
+        (feasible, nodes)
+    }
+
+    fn backtrack(
+        &self,
+        board: SubgameBoard,
+        depth: usize,
+        placements: &[Vec<(usize, u16x16)>],
+        nodes: &mut u64,
+    ) -> bool {
+        *nodes += 1;
+        if *nodes > FEASIBILITY_NODE_BUDGET {
+            return true; // conservatively assume feasible
+        }
+
+        let n = placements.len();
+        if depth >= n {
+            return board.is_solved();
+        }
+
+        // Total deficit check.
+        if self.remaining_cells[depth] < board.total_deficit() {
+            return false;
+        }
+
+        // Endgame.
+        if depth >= self.endgame_start {
+            let n_remaining = n - depth;
+            if n_remaining as u32 == board.total_deficit() {
+                let board_len = board.len() as usize;
+                let cells = board.cells().to_array();
+                for i in 0..board_len {
+                    if cells[i] > n_remaining as u16 {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        // Count-sat.
+        let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[depth]);
+        if shortfall != u16x16::splat(0) {
+            return false;
+        }
+
+        // Parity partitions.
+        {
+            let cells = board.cells().to_array();
+            let board_len = board.len() as usize;
+            let m = board.m() as u32;
+            for partition in &self.parity_partitions {
+                if !partition.check(&cells, board_len, depth, m) {
+                    return false;
+                }
+            }
+        }
+
+        // Subset satisfiability.
+        {
+            let cells = board.cells().to_array();
+            let m = board.m() as usize;
+            for check in &self.subset_checks {
+                if !check.check(&cells, m, depth) {
+                    return false;
+                }
+            }
+        }
+
+        // Try each placement (copy-make).
+        for &(_pos, shifted) in &placements[depth] {
+            let mut new_board = board;
+            new_board.apply_piece(shifted);
+            if self.backtrack(new_board, depth + 1, placements, nodes) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
