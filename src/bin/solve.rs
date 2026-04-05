@@ -84,9 +84,9 @@ fn main() {
     let elapsed = start.elapsed();
 
     if worker {
-        // Compact output for benchmark harnesses: nodes elapsed_ms solved
+        // Compact output for benchmark harnesses: nodes elapsed_ms solved sg_nodes
         let solved = result.solution.is_some();
-        println!("{} {} {}", result.nodes_visited, elapsed.as_millis(), solved);
+        println!("{} {} {} {}", result.nodes_visited, elapsed.as_millis(), solved, result.subgame_nodes_visited);
         return;
     }
 
