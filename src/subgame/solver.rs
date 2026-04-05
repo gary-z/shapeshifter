@@ -25,6 +25,8 @@ pub struct SolverStats {
     pub count_sat_prunes: u64,
     /// Number of branches pruned by parity partition check.
     pub parity_prunes: u64,
+    /// Number of branches pruned by subset satisfiability (mod-M reachability).
+    pub subset_sat_prunes: u64,
 }
 
 /// Configuration for subgame solver pruning techniques.
@@ -40,6 +42,8 @@ pub struct SubgamePruningConfig {
     /// Parity partition: split cells into even/odd groups, check if group
     /// deficits are reachable via suffix DP.
     pub parity: bool,
+    /// Subset satisfiability: mod-M reachability DP on small cell subsets.
+    pub subset_sat: bool,
 }
 
 impl Default for SubgamePruningConfig {
@@ -49,6 +53,7 @@ impl Default for SubgamePruningConfig {
             count_sat: true,
             single_cell_endgame: true,
             parity: true,
+            subset_sat: true,
         }
     }
 }
@@ -61,6 +66,7 @@ impl SubgamePruningConfig {
             count_sat: false,
             single_cell_endgame: false,
             parity: false,
+            subset_sat: false,
         }
     }
 
@@ -172,6 +178,121 @@ impl SubgameParityPartition {
     }
 }
 
+/// Mod-M reachability DP for a subset of 1D board cells.
+///
+/// Precomputes which mod-M configurations of the subset are achievable with
+/// remaining pieces. Cell values are reduced mod M before encoding, making
+/// this a relaxation that handles subgame values >= M.
+struct SubgameSubsetReachability {
+    /// Cell indices in the subset (0-indexed into the 1D board).
+    cells: Vec<usize>,
+    /// M^k where k = cells.len().
+    num_configs: usize,
+    /// Flat reachability table: `reachable[depth * num_configs + config]`.
+    /// 1 = reachable, 0 = unreachable. (n+1) layers.
+    reachable: Vec<u8>,
+    /// Earliest depth where some config is unreachable.
+    first_useful: usize,
+}
+
+impl SubgameSubsetReachability {
+    /// Encode the current board state for this subset using mod-M values.
+    #[inline(always)]
+    fn encode_config(&self, cells_arr: &[u16; 16], m: usize) -> usize {
+        let mut config = 0usize;
+        let mut multiplier = 1usize;
+        for &cell_idx in &self.cells {
+            let digit = (cells_arr[cell_idx] as usize) % m;
+            config += digit * multiplier;
+            multiplier *= m;
+        }
+        config
+    }
+
+    /// Check if the current board's subset config is reachable from `depth`.
+    #[inline(always)]
+    fn check(&self, cells_arr: &[u16; 16], m: usize, depth: usize) -> bool {
+        if depth < self.first_useful {
+            return true;
+        }
+        let config = self.encode_config(cells_arr, m);
+        self.reachable[depth * self.num_configs + config] != 0
+    }
+
+    /// Build a subset reachability DP for the given cell indices.
+    fn build(game: &SubgameGame, cells: Vec<usize>) -> Self {
+        let k = cells.len();
+        let m = game.board().m() as usize;
+        let n = game.pieces().len();
+        let num_configs = m.pow(k as u32);
+
+        // Apply a mod-M effect to a config: decrement each cell by effect[j] (mod M).
+        let apply_effect = |config: usize, effect: &[u8]| -> usize {
+            let mut result = config;
+            let mut multiplier = 1;
+            for i in 0..k {
+                if effect[i] > 0 {
+                    let digit = (result / multiplier) % m;
+                    let new_digit = (digit + m - effect[i] as usize) % m;
+                    result = result - digit * multiplier + new_digit * multiplier;
+                }
+                multiplier *= m;
+            }
+            result
+        };
+
+        // Per piece: enumerate unique mod-M effects on this subset.
+        let mut piece_effects: Vec<Vec<Vec<u8>>> = Vec::with_capacity(n);
+        for p in 0..n {
+            let mut effects_set: Vec<Vec<u8>> = Vec::new();
+            let placements = game.placements_for(p);
+            for &(_pos, shifted) in placements {
+                let arr = shifted.to_array();
+                let effect: Vec<u8> = cells.iter()
+                    .map(|&ci| (arr[ci] % m as u16) as u8)
+                    .collect();
+                if !effects_set.contains(&effect) {
+                    effects_set.push(effect);
+                }
+            }
+            piece_effects.push(effects_set);
+        }
+
+        // Backward suffix DP.
+        let total = (n + 1) * num_configs;
+        let mut reachable = vec![0u8; total];
+        // Base: after all pieces, only config 0 (all zeros mod M) is reachable.
+        reachable[n * num_configs] = 1;
+        for i in (0..n).rev() {
+            let next_base = (i + 1) * num_configs;
+            let cur_base = i * num_configs;
+            for config in 0..num_configs {
+                for effect in &piece_effects[i] {
+                    let new_config = apply_effect(config, effect);
+                    if reachable[next_base + new_config] != 0 {
+                        reachable[cur_base + config] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Find earliest depth where some config is unreachable.
+        let mut first_useful = n;
+        'outer: for i in 0..n {
+            let base = i * num_configs;
+            for config in 0..num_configs {
+                if reachable[base + config] == 0 {
+                    first_useful = i;
+                    break 'outer;
+                }
+            }
+        }
+
+        SubgameSubsetReachability { cells, num_configs, reachable, first_useful }
+    }
+}
+
 /// Subgame solver with backtracking and pruning.
 ///
 /// The solver returns the first solution found, or `Unsolvable` if none exists.
@@ -192,6 +313,8 @@ pub struct SubgameSolver {
     endgame_start: usize,
     /// Parity partitions for reachability pruning.
     parity_partitions: Vec<SubgameParityPartition>,
+    /// Subset satisfiability checks (mod-M reachability).
+    subset_checks: Vec<SubgameSubsetReachability>,
     /// Optional deadline for timeout support.
     deadline: Option<Instant>,
 }
@@ -225,6 +348,11 @@ impl SubgameSolver {
         } else {
             vec![]
         };
+        let subset_checks = if config.subset_sat {
+            Self::build_subset_checks(&game)
+        } else {
+            vec![]
+        };
         Self {
             game,
             solution: Vec::with_capacity(n),
@@ -233,6 +361,7 @@ impl SubgameSolver {
             max_contrib_suffix,
             endgame_start,
             parity_partitions,
+            subset_checks,
             deadline: None,
         }
     }
@@ -258,6 +387,69 @@ impl SubgameSolver {
         }
 
         partitions
+    }
+
+    /// Build subset reachability checks for the 1D board.
+    fn build_subset_checks(game: &SubgameGame) -> Vec<SubgameSubsetReachability> {
+        let m = game.board().m() as usize;
+        let board_len = game.board().len() as usize;
+
+        let k_max = match m {
+            2 => 14,
+            3 => 8,
+            4 => 5,
+            _ => 4,
+        };
+
+        let mut seen: Vec<Vec<usize>> = Vec::new();
+        let mut checks: Vec<SubgameSubsetReachability> = Vec::new();
+
+        let mut add = |cells: Vec<usize>| {
+            let k = cells.len();
+            if k < 2 || k > k_max || k > board_len {
+                return;
+            }
+            let mut sorted = cells.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            if sorted.len() != k { return; } // had duplicates
+            if *sorted.last().unwrap() >= board_len { return; }
+            if seen.contains(&sorted) { return; }
+            seen.push(sorted.clone());
+            checks.push(SubgameSubsetReachability::build(game, sorted));
+        };
+
+        // Full board for M=2 (or any M where board fits).
+        if board_len <= k_max {
+            add((0..board_len).collect());
+        }
+
+        // Sliding windows of k_max contiguous cells.
+        if board_len > k_max {
+            for start in 0..=(board_len - k_max) {
+                add((start..start + k_max).collect());
+            }
+        }
+
+        // For larger M, also add smaller windows for coverage.
+        if m >= 3 {
+            let k_small = k_max.min(board_len).saturating_sub(1).max(2);
+            if k_small < k_max && board_len > k_small {
+                for start in 0..=(board_len - k_small) {
+                    add((start..start + k_small).collect());
+                }
+            }
+        }
+
+        // Endpoint subsets: first and last few cells.
+        if board_len > k_max {
+            let half = k_max / 2;
+            let mut endpoint_cells: Vec<usize> = (0..half).collect();
+            endpoint_cells.extend((board_len - half)..board_len);
+            add(endpoint_cells);
+        }
+
+        checks
     }
 
     /// Precompute suffix sums of per-cell max contributions.
@@ -391,6 +583,18 @@ impl SubgameSolver {
             for partition in &self.parity_partitions {
                 if !partition.check(&cells, board_len, depth, m) {
                     self.stats.parity_prunes += 1;
+                    return false;
+                }
+            }
+        }
+
+        // --- Pruning: subset satisfiability (mod-M reachability) ---
+        if !self.subset_checks.is_empty() {
+            let cells = self.game.board().cells().to_array();
+            let m = self.game.board().m() as usize;
+            for check in &self.subset_checks {
+                if !check.check(&cells, m, depth) {
+                    self.stats.subset_sat_prunes += 1;
                     return false;
                 }
             }
