@@ -510,6 +510,87 @@ impl SubgameAxisPrune {
         }
     }
 
+    /// For each placement of piece `from_piece`, apply it to the board and
+    /// check feasibility using precomputed checks at depth `from_piece + 1`.
+    /// Returns a bitmask of valid 1D positions. No backtracking, no budget.
+    pub fn valid_positions(
+        &self,
+        board: &SubgameBoard,
+        from_piece: usize,
+        placements: &[Vec<(usize, u16x16)>],
+    ) -> u16 {
+        let n = placements.len();
+        if from_piece >= n { return u16::MAX; }
+        let next = from_piece + 1;
+
+        let mut valid = 0u16;
+        for &(pos, shifted) in &placements[from_piece] {
+            let mut new_board = *board;
+            new_board.apply_piece(shifted);
+
+            // Deficit check.
+            if next < self.remaining_cells.len() {
+                let rc = self.remaining_cells[next];
+                let td = new_board.total_deficit();
+                let m = new_board.m() as u32;
+                if rc < td || (rc - td) % m != 0 { continue; }
+            }
+            if new_board.is_solved() && next >= n {
+                valid |= 1 << pos;
+                continue;
+            }
+            // Count-sat (SIMD).
+            if next < self.max_contrib_suffix.len() {
+                let shortfall = new_board.cells().saturating_sub(self.max_contrib_suffix[next]);
+                if shortfall != u16x16::splat(0) { continue; }
+            }
+
+            // Prefix/suffix check.
+            if next < self.prefix_max.len() {
+                let cells = new_board.cells().to_array();
+                let bl = self.board_len;
+                let prefix_bounds = &self.prefix_max[next];
+                let suffix_bounds = &self.suffix_max[next];
+                let mut failed = false;
+                let mut prefix_deficit = 0u32;
+                let mut suffix_deficit = 0u32;
+                for k in 1..=bl {
+                    prefix_deficit += cells[k - 1] as u32;
+                    if prefix_deficit > prefix_bounds[k] { failed = true; break; }
+                    suffix_deficit += cells[bl - k] as u32;
+                    if suffix_deficit > suffix_bounds[k] { failed = true; break; }
+                }
+                if failed { continue; }
+            }
+
+            // Parity partitions.
+            {
+                let cells = new_board.cells().to_array();
+                let bl = self.board_len;
+                let m32 = new_board.m() as u32;
+                let mut ok = true;
+                for partition in &self.parity_partitions {
+                    if !partition.check(&cells, bl, next, m32) { ok = false; break; }
+                }
+                if !ok { continue; }
+            }
+
+            // Subset satisfiability.
+            {
+                let cells = new_board.cells().to_array();
+                let m_usize = new_board.m() as usize;
+                let mut ok = true;
+                for check in &self.subset_checks {
+                    if !check.check(&cells, m_usize, next) { ok = false; break; }
+                }
+                if !ok { continue; }
+            }
+
+            valid |= 1 << pos;
+        }
+        valid
+    }
+
     /// Check if the subgame is feasible from `from_piece` onward with the
     /// given board state. Returns `(feasible, nodes_visited)`.
     pub fn check_feasible(

@@ -32,13 +32,13 @@ pub struct SubgameData {
     col_shifted: Vec<Vec<u16x16>>,
     /// Precomputed placements for each piece in the row subgame:
     /// `row_placements[i]` = Vec of `(position, shifted_profile)`.
-    row_placements: Vec<Vec<(usize, u16x16)>>,
+    pub(crate) row_placements: Vec<Vec<(usize, u16x16)>>,
     /// Precomputed placements for each piece in the col subgame.
-    col_placements: Vec<Vec<(usize, u16x16)>>,
+    pub(crate) col_placements: Vec<Vec<(usize, u16x16)>>,
     /// Precomputed pruning data for row subgame feasibility checks.
-    row_prune: SubgameAxisPrune,
+    pub(crate) row_prune: SubgameAxisPrune,
     /// Precomputed pruning data for col subgame feasibility checks.
-    col_prune: SubgameAxisPrune,
+    pub(crate) col_prune: SubgameAxisPrune,
 }
 
 impl SubgameData {

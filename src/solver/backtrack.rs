@@ -78,6 +78,13 @@ macro_rules! define_backtrack {
 
             if !prune_node(board, data, piece_idx, config, &sg_state) { return false; }
 
+            // Subgame placement filter.
+            let (sg_valid_rows, sg_valid_cols) = if config.subgame {
+                data.subgame_prune.valid_positions(&sg_state, piece_idx)
+            } else {
+                (u16::MAX, u16::MAX)
+            };
+
             let locked_mask = if config.cell_locking {
                 board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
             } else {
@@ -109,6 +116,10 @@ macro_rules! define_backtrack {
                 let (row, col, mask) = placements[pl_idx];
 
                 if !(mask & locked_mask).is_zero() {
+                    continue;
+                }
+
+                if sg_valid_rows & (1 << row) == 0 || sg_valid_cols & (1 << col) == 0 {
                     continue;
                 }
 
@@ -244,6 +255,12 @@ fn build_search_frame(
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
 
+    let (sg_valid_rows, sg_valid_cols) = if config.subgame {
+        data.subgame_prune.valid_positions(&sg_state, piece_idx)
+    } else {
+        (u16::MAX, u16::MAX)
+    };
+
     let locked_mask = if config.cell_locking {
         board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
     } else {
@@ -271,6 +288,7 @@ fn build_search_frame(
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];
         if !(mask & locked_mask).is_zero() { continue; }
+        if sg_valid_rows & (1 << row) == 0 || sg_valid_cols & (1 << col) == 0 { continue; }
         if prev_placement < usize::MAX {
             if let Some(ref table) = data.skip_tables[piece_idx] {
                 let num_curr = placements.len();
