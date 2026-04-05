@@ -102,25 +102,17 @@ pub(crate) struct SolverData {
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) line_family_prune: prune::line_family::LineFamilyPrune,
+    pub(crate) parity_prune: prune::parity::ParityPrune,
+    pub(crate) subset_prune: prune::subset::SubsetPrune,
+    pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
+    pub(crate) subgame_prune: prune::subgame::SubgamePrune,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
     pub(crate) m: u8,
     pub(crate) h: u8,
     pub(crate) w: u8,
-    pub(crate) parity_partitions: Vec<ParityPartition>,
-    pub(crate) subset_checks: Vec<SubsetReachability>,
-    pub(crate) weight_tuple_checks: Vec<WeightTupleReachability>,
-    /// Progress weight for each depth: fraction of total naive search space
-    /// represented by one placement at that depth.
-    /// `progress_weights[d] = suffix_product[d+1] / suffix_product[0]`
     pub(crate) progress_weights: Vec<f64>,
-    /// Precomputed subgame data: row/col profiles, shifted profiles, initial
-    /// subgame boards, and feasibility checker data.
-    pub(crate) subgame_data: SubgameData,
-    /// Accumulated subgame nodes visited across all feasibility checks.
-    /// Uses AtomicU64 so it works in both serial and parallel paths.
-    pub(crate) subgame_nodes: std::sync::atomic::AtomicU64,
 }
 
 /// Main entry point: cancellation/pair-merge pipeline.
@@ -552,14 +544,12 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
-    let sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
 
     let found = backtrack::backtrack(
         &board,
-        &sg,
         &data,
         0,
-        usize::MAX, // no prev placement at root
+        usize::MAX,
         &mut sorted_solution,
         &nodes,
         config,
@@ -579,7 +569,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
-        subgame_nodes_visited: data.subgame_nodes.load(std::sync::atomic::Ordering::Relaxed),
+        subgame_nodes_visited: data.subgame_prune.total_nodes(),
         progress: 0.0,
     }
 }
@@ -662,12 +652,9 @@ fn solve_with_config_parallel(
 
     // Seed the work queue with a single root task.
     // Budget-based splitting will naturally generate work for idle threads.
-    let initial_sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
-
     let wq = backtrack::WorkQueue::new();
     wq.push(backtrack::StealableTask {
         board: board.clone(),
-        sg: initial_sg,
         prefix: Vec::new(),
         depth: 0,
         prev_placement: usize::MAX,
@@ -743,7 +730,6 @@ fn solve_with_config_parallel(
 
                     let found = backtrack::backtrack_stealing(
                         &task.board,
-                        &task.sg,
                         &data,
                         task.depth,
                         task.prev_placement,
@@ -791,7 +777,7 @@ fn solve_with_config_parallel(
     SolveResult {
         solution,
         nodes_visited,
-        subgame_nodes_visited: data.subgame_nodes.load(Ordering::Relaxed),
+        subgame_nodes_visited: data.subgame_prune.total_nodes(),
         progress: final_progress,
     }
 }

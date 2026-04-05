@@ -47,125 +47,7 @@ pub(crate) fn build_solver_data(
 
     let line_family_prune = super::prune::line_family::LineFamilyPrune::precompute(pieces, order, h, w, m);
 
-    // Precompute parity partition checks.
-    let build_partition = |group_fn: &dyn Fn(usize, usize) -> bool,
-                           num_offsets: usize,
-                           offset_fn: &dyn Fn(usize, usize, usize) -> bool|
-                           -> ParityPartition {
-        let mut mask = Bitboard::ZERO;
-        for r in 0..bh {
-            for c in 0..bw {
-                if group_fn(r, c) {
-                    mask.set_bit((r * 15 + c) as u32);
-                }
-            }
-        }
-
-        // Per piece: group-0 count at each offset.
-        let mut g0_counts: Vec<Vec<u32>> = Vec::with_capacity(n);
-        for i in 0..n {
-            let piece = &pieces[order[i]];
-            let mut counts = vec![0u32; num_offsets];
-            for off in 0..num_offsets {
-                for pr in 0..piece.height() as usize {
-                    for pc in 0..piece.width() as usize {
-                        if piece.shape().get_bit((pr * 15 + pc) as u32) && offset_fn(pr, pc, off) {
-                            counts[off] += 1;
-                        }
-                    }
-                }
-            }
-            g0_counts.push(counts);
-        }
-
-        // Suffix min/max.
-        let mut suffix_max = vec![0u32; n + 1];
-        let mut suffix_min = vec![0u32; n + 1];
-        for i in (0..n).rev() {
-            suffix_max[i] = suffix_max[i + 1] + *g0_counts[i].iter().max().unwrap();
-            suffix_min[i] = suffix_min[i + 1] + *g0_counts[i].iter().min().unwrap();
-        }
-
-        // Full DP.
-        let dp_size = suffix_max[0] as usize + 1;
-        let mut suffix_dp = vec![vec![false; dp_size]; n + 1];
-        suffix_dp[n][0] = true;
-        for i in (0..n).rev() {
-            for w in 0..dp_size {
-                if suffix_dp[i + 1][w] {
-                    for &g0 in &g0_counts[i] {
-                        let nw = w + g0 as usize;
-                        if nw < dp_size { suffix_dp[i][nw] = true; }
-                    }
-                }
-            }
-        }
-
-        ParityPartition { mask, suffix_max, suffix_min, suffix_dp }
-    };
-
-    // Mod-2 partitions (2 offsets each).
-    let mut partitions = Vec::new();
-    // Checkerboard: (r+c)%2. Offset = (r0+c0)%2.
-    partitions.push(build_partition(
-        &|r, c| (r + c) % 2 == 0,
-        2,
-        &|pr, pc, off| (pr + pc + off) % 2 == 0,
-    ));
-    // Even rows: r%2. Offset = r0%2.
-    partitions.push(build_partition(
-        &|r, _c| r % 2 == 0,
-        2,
-        &|pr, _pc, off| (pr + off) % 2 == 0,
-    ));
-    // Even cols: c%2. Offset = c0%2.
-    partitions.push(build_partition(
-        &|_r, c| c % 2 == 0,
-        2,
-        &|_pr, pc, off| (pc + off) % 2 == 0,
-    ));
-
-    // Mod-3 partitions (3 offsets each). Each group checked independently vs rest.
-    if bh >= 6 {
-        for target_group in 0..3usize {
-            partitions.push(build_partition(
-                &|r, _c| r % 3 == target_group,
-                3,
-                &|pr, _pc, off| (pr + off) % 3 == target_group,
-            ));
-        }
-    }
-    if bw >= 6 {
-        for target_group in 0..3usize {
-            partitions.push(build_partition(
-                &|_r, c| c % 3 == target_group,
-                3,
-                &|_pr, pc, off| (pc + off) % 3 == target_group,
-            ));
-        }
-    }
-
-    // Mod-3 diagonal partitions: (r+c)%3 groups. Captures diagonal mod-3 structure.
-    if bh >= 4 && bw >= 4 {
-        for target_group in 0..3usize {
-            partitions.push(build_partition(
-                &|r, c| (r + c) % 3 == target_group,
-                3,
-                &|pr, pc, off| (pr + pc + off) % 3 == target_group,
-            ));
-        }
-    }
-
-    // Mod-3 anti-diagonal partitions: (r+2*c)%3 groups (independent from (r+c)%3).
-    if bh >= 4 && bw >= 4 {
-        for target_group in 0..3usize {
-            partitions.push(build_partition(
-                &|r, c| (r + 2 * c) % 3 == target_group,
-                3,
-                &|pr, pc, off| (pr + 2 * pc + off) % 3 == target_group,
-            ));
-        }
-    }
+    let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
 
     // Precompute subset reachability for border regions.
     let max_subset_k: usize = match m {
@@ -662,25 +544,26 @@ pub(crate) fn build_solver_data(
 
     // Build subgame data: row/col profiles, shifted lookup tables, and
     // feasibility check data (placements, max_contrib_suffix, remaining_cells).
-    let subgame_data = SubgameData::build(board, pieces, order);
+    let subset_prune = super::prune::subset::SubsetPrune { checks: subset_checks };
+    let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
+    let subgame_prune = super::prune::subgame::SubgamePrune::precompute(board, pieces, order);
 
     SolverData {
         all_placements,
         total_deficit_prune,
         jaggedness_prune,
         line_family_prune,
+        parity_prune,
+        subset_prune,
+        weight_tuple_prune,
+        subgame_prune,
         suffix_coverage,
         skip_tables,
         single_cell_start,
         m,
         h,
         w,
-        parity_partitions: partitions,
-        subset_checks,
-        weight_tuple_checks,
         progress_weights,
-        subgame_data,
-        subgame_nodes: std::sync::atomic::AtomicU64::new(0),
     }
 }
 
