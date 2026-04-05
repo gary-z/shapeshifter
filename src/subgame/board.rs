@@ -105,6 +105,16 @@ impl SubgameBoard {
         true
     }
 
+    /// Apply a piece unconditionally, allowing underflow (wrapping u16).
+    /// Used to keep subgame state consistent when wrapping occurs in the
+    /// full game and underflow is expected and valid.
+    #[inline(always)]
+    pub fn apply_piece_wrapping(&mut self, shifted_profile: u16x16) {
+        self.cells -= shifted_profile;
+        let piece_total: u32 = shifted_profile.reduce_sum() as u32;
+        self.total_deficit = self.total_deficit.wrapping_sub(piece_total);
+    }
+
     /// Undo a piece placement: add the shifted profile back to the board cells.
     #[inline(always)]
     pub fn undo_piece(&mut self, shifted_profile: u16x16) {

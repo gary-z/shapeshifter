@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
+use crate::subgame::state::SubgameState;
 
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
@@ -52,6 +53,7 @@ macro_rules! define_backtrack {
     ($name:ident $(, abort: $abort_param:ident : $abort_ty:ty)?) => {
         pub(crate) fn $name(
             board: &Board,
+            sg: &SubgameState,
             data: &SolverData,
             piece_idx: usize,
             prev_placement: usize,
@@ -79,7 +81,7 @@ macro_rules! define_backtrack {
                 return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
             }
 
-            if !prune_node(board, data, piece_idx, config) { return false; }
+            if !prune_node(board, sg, data, piece_idx, config) { return false; }
 
             // Compute locked mask: cells at deficit 0 where remaining coverage < M (can't absorb overshoot).
             let locked_mask = if config.cell_locking {
@@ -91,7 +93,6 @@ macro_rules! define_backtrack {
             let placements = &data.all_placements[piece_idx];
 
             // Order placements by zero-deficit cells hit ascending using counting sort.
-            // Keys are small (0..=max_piece_area), so O(n) bucket sort beats O(n^2) insertion sort.
             let zero_plane = board.plane(0);
             let pl_len = placements.len();
             let mut order = [0u8; 196];
@@ -99,8 +100,7 @@ macro_rules! define_backtrack {
             for i in 0..pl_len {
                 keys[i] = (placements[i].2 & zero_plane).count_ones() as u8;
             }
-            // Counting sort: count occurrences, then build order from buckets.
-            let mut counts = [0u8; 26]; // max piece area is 25 (5x5)
+            let mut counts = [0u8; 26];
             for i in 0..pl_len { counts[keys[i] as usize] += 1; }
             let mut offsets = [0u8; 26];
             for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
@@ -110,19 +110,17 @@ macro_rules! define_backtrack {
                 offsets[k] += 1;
             }
 
-            // Copy-make: snapshot the board once, copy+apply per sibling (no undo).
-            // A 168-byte memcpy is cheaper than the bitboard manipulation in undo_piece.
+            // Copy-make: snapshot board and subgame state once, copy+apply per sibling.
             let board_snapshot = *board;
+            let sg_snapshot = *sg;
             for oi in 0..pl_len {
                 let pl_idx = order[oi] as usize;
                 let (row, col, mask) = placements[pl_idx];
 
-                // Skip placements that touch locked cells.
                 if !(mask & locked_mask).is_zero() {
                     continue;
                 }
 
-                // Skip pair combos with same net effect as a previously tried combo.
                 if prev_placement < usize::MAX {
                     if let Some(ref table) = data.skip_tables[piece_idx] {
                         let num_curr = placements.len();
@@ -134,6 +132,22 @@ macro_rules! define_backtrack {
 
                 let mut board = board_snapshot;
                 board.apply_piece(mask);
+
+                // Incrementally update subgame state (O(1) SIMD ops).
+                // Always update to keep state consistent for deeper depths.
+                // Only prune on underflow when no wrapping (remaining_bits == total_deficit).
+                let mut sg = sg_snapshot;
+                if config.subgame {
+                    let no_wrapping = data.remaining_bits[piece_idx] == board_snapshot.total_deficit();
+                    if no_wrapping {
+                        if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
+                            continue; // subgame underflow → prune
+                        }
+                    } else {
+                        sg.apply_piece_wrapping(&data.subgame_data, piece_idx, row, col);
+                    }
+                }
+
                 solution.push((row, col));
 
                 let next_prev = if piece_idx + 1 < data.all_placements.len()
@@ -146,6 +160,7 @@ macro_rules! define_backtrack {
 
                 if $name(
                     &board,
+                    &sg,
                     data,
                     piece_idx + 1,
                     next_prev,
@@ -180,6 +195,8 @@ use std::sync::atomic::AtomicUsize;
 struct SearchFrame {
     /// Board state BEFORE any placement at this level.
     board: Board,
+    /// Subgame state BEFORE any placement at this level.
+    sg: SubgameState,
     /// Which piece this frame places.
     piece_idx: usize,
     /// Pre-filtered, ordered placements: (original_pl_idx, row, col, mask).
@@ -191,6 +208,7 @@ struct SearchFrame {
 /// A stealable task: a search starting point at any depth.
 pub(crate) struct StealableTask {
     pub board: Board,
+    pub sg: SubgameState,
     pub prefix: Vec<(usize, usize)>,
     pub depth: usize,
     pub prev_placement: usize,
@@ -250,6 +268,7 @@ impl WorkQueue {
 /// Build a search frame: compute placement ordering, filter, and collect valid moves.
 fn build_search_frame(
     board: &Board,
+    sg: &SubgameState,
     data: &SolverData,
     piece_idx: usize,
     prev_placement: usize,
@@ -304,6 +323,7 @@ fn build_search_frame(
 
     SearchFrame {
         board: board.clone(),
+        sg: *sg,
         piece_idx,
         placements: filtered,
         cursor: 0,
@@ -346,6 +366,12 @@ fn split_work(
             let (pl_idx, row, col, mask) = frame.placements[ci];
             let mut board = frame.board.clone();
             board.apply_piece(mask);
+
+            let mut sg = frame.sg;
+            // Best-effort subgame update for donated tasks. If apply fails,
+            // the worker will discover infeasibility via prune_node anyway.
+            let _ = sg.apply_piece(&data.subgame_data, frame.piece_idx, row, col);
+
             let depth = frame.piece_idx + 1;
 
             let prefix_len = base_solution_len + si;
@@ -355,7 +381,7 @@ fn split_work(
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
 
             tasks.push(StealableTask {
-                board, prefix, depth,
+                board, sg, prefix, depth,
                 prev_placement: next_prev,
             });
         }
@@ -385,6 +411,7 @@ fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
 /// exist, donates remaining work at the shallowest stack level.
 pub(crate) fn backtrack_stealing(
     initial_board: &Board,
+    initial_sg: &SubgameState,
     data: &SolverData,
     start_depth: usize,
     initial_prev_placement: usize,
@@ -419,14 +446,14 @@ pub(crate) fn backtrack_stealing(
     }
 
     // Pruning at root.
-    if !prune_node(initial_board, data, start_depth, config) {
+    if !prune_node(initial_board, initial_sg, data, start_depth, config) {
         atomic_add_f64(progress, task_weight);
         return false;
     }
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     let first_frame = build_search_frame(
-        initial_board, data, start_depth, initial_prev_placement, config,
+        initial_board, initial_sg, data, start_depth, initial_prev_placement, config,
     );
     // Track progress: local accumulator flushed at budget boundaries.
     let mut progress_local: f64 = 0.0;
@@ -462,9 +489,26 @@ pub(crate) fn backtrack_stealing(
         frame.cursor += 1;
         let piece_idx = frame.piece_idx;
 
-        // Apply placement.
+        // Apply placement to board and subgame state.
         let mut board = frame.board.clone();
         board.apply_piece(mask);
+
+        let mut sg = frame.sg;
+        if config.subgame {
+            let no_wrapping = data.remaining_bits[piece_idx] == frame.board.total_deficit();
+            if no_wrapping {
+                if !sg.apply_piece(&data.subgame_data, piece_idx, row, col) {
+                    progress_local += data.progress_weights[piece_idx];
+                    let sol_depth = base_solution_len + stack.len() - 1;
+                    solution.truncate(sol_depth);
+                    solution.push((row, col));
+                    nodes.set(nodes.get() + 1);
+                    continue;
+                }
+            } else {
+                sg.apply_piece_wrapping(&data.subgame_data, piece_idx, row, col);
+            }
+        }
 
         // Update solution: truncate to this frame's depth, then push.
         let sol_depth = base_solution_len + stack.len() - 1;
@@ -505,7 +549,7 @@ pub(crate) fn backtrack_stealing(
         }
 
         // Pruning.
-        if !prune_node(&board, data, next_piece, config) {
+        if !prune_node(&board, &sg, data, next_piece, config) {
             progress_local += data.progress_weights[piece_idx];
             continue;
         }
@@ -514,7 +558,6 @@ pub(crate) fn backtrack_stealing(
         budget = budget.saturating_sub(1);
         if budget == 0 {
             budget = SPLIT_BUDGET;
-            // Flush local progress to shared counter.
             if progress_local > 0.0 {
                 atomic_add_f64(progress, progress_local);
                 progress_local = 0.0;
@@ -527,7 +570,7 @@ pub(crate) fn backtrack_stealing(
         // Push new frame for next depth.
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         let new_frame = build_search_frame(
-            &board, data, next_piece, next_prev, config,
+            &board, &sg, data, next_piece, next_prev, config,
         );
         // Account for placements filtered out when building this frame.
         let filtered_out = data.all_placements[next_piece].len() - new_frame.placements.len();

@@ -83,6 +83,22 @@ impl SubgameState {
         true
     }
 
+    /// Apply a piece unconditionally (allowing underflow wrapping).
+    /// Keeps state consistent when wrapping occurs in the full game.
+    #[inline(always)]
+    pub fn apply_piece_wrapping(
+        &mut self,
+        data: &SubgameData,
+        piece_idx: usize,
+        row: usize,
+        col: usize,
+    ) {
+        let row_shifted = data.row_shifted_at(piece_idx, row);
+        self.row_board.apply_piece_wrapping(row_shifted);
+        let col_shifted = data.col_shifted_at(piece_idx, col);
+        self.col_board.apply_piece_wrapping(col_shifted);
+    }
+
     /// Undo a piece placement on both subgame boards.
     ///
     /// Only needed if NOT using the copy-make pattern.

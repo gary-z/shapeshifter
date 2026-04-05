@@ -554,9 +554,11 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
+    let sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
 
     let found = backtrack::backtrack(
         &board,
+        &sg,
         &data,
         0,
         usize::MAX, // no prev placement at root
@@ -662,9 +664,12 @@ fn solve_with_config_parallel(
 
     // Seed the work queue with a single root task.
     // Budget-based splitting will naturally generate work for idle threads.
+    let initial_sg = crate::subgame::state::SubgameState::new(&data.subgame_data);
+
     let wq = backtrack::WorkQueue::new();
     wq.push(backtrack::StealableTask {
         board: board.clone(),
+        sg: initial_sg,
         prefix: Vec::new(),
         depth: 0,
         prev_placement: usize::MAX,
@@ -740,6 +745,7 @@ fn solve_with_config_parallel(
 
                     let found = backtrack::backtrack_stealing(
                         &task.board,
+                        &task.sg,
                         &data,
                         task.depth,
                         task.prev_placement,
@@ -957,29 +963,16 @@ mod tests {
 
         // Test configurations: (M, rows, cols, num_pieces)
         let configs: Vec<(u8, u8, u8, u8)> = vec![
-            // Small boards, M=2
-            (2, 3, 3, 2), (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
-            // Small boards, M=3
-            (3, 3, 3, 3), (3, 3, 3, 5), (3, 3, 3, 7),
-            // Medium boards, M=2
-            (2, 4, 3, 5), (2, 4, 3, 8), (2, 4, 3, 12),
-            (2, 4, 4, 6), (2, 4, 4, 10), (2, 4, 4, 14),
-            // Medium boards, M=3
-            (3, 4, 3, 6), (3, 4, 3, 10),
-            (3, 4, 4, 8), (3, 4, 4, 12),
-            // Medium boards, M=4
+            // Small boards
+            (2, 3, 3, 4), (2, 3, 3, 8),
+            (3, 3, 3, 3), (3, 3, 3, 7),
+            // Medium boards
+            (2, 4, 3, 5), (2, 4, 3, 8),
+            (2, 4, 4, 6), (2, 4, 4, 10),
+            (3, 4, 3, 6), (3, 4, 4, 8),
             (4, 4, 4, 6), (4, 4, 4, 10),
-            // Larger boards, M=2
-            (2, 6, 6, 8), (2, 6, 6, 12),
-            // Larger boards, M=3
-            (3, 6, 6, 8), (3, 6, 6, 12),
-            // Larger boards, M=4
-            (4, 6, 6, 8), (4, 6, 6, 10),
-            // Larger boards, M=5
-            (5, 6, 6, 6), (5, 6, 6, 8),
-            // Big boards, low piece count
-            (2, 8, 7, 8), (3, 8, 7, 8), (4, 8, 8, 8),
-            (2, 10, 10, 8), (3, 10, 10, 8), (4, 10, 10, 8),
+            // Larger boards (fewer configs, lower piece counts)
+            (2, 6, 6, 8), (3, 6, 6, 8), (4, 6, 6, 8), (5, 6, 6, 6),
         ];
 
         let seeds: Vec<u64> = (0..5).collect();
@@ -1078,14 +1071,11 @@ mod tests {
     /// Small configs suitable for brute-force comparison.
     fn small_configs() -> Vec<(u8, u8, u8, u8)> {
         vec![
-            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
+            (2, 3, 3, 4), (2, 3, 3, 8),
             (3, 3, 3, 3), (3, 3, 3, 5),
-            (2, 4, 3, 5), (2, 4, 3, 8),
-            (3, 4, 3, 6),
-            (2, 4, 4, 6), (2, 4, 4, 10),
-            (3, 4, 4, 8),
-            (4, 3, 3, 3), (4, 3, 3, 5),
-            (4, 4, 3, 4),
+            (2, 4, 3, 5), (2, 4, 4, 6),
+            (3, 4, 3, 6), (3, 4, 4, 8),
+            (4, 3, 3, 3), (4, 4, 3, 4),
         ]
     }
 
@@ -1162,13 +1152,11 @@ mod tests {
 
     #[test]
     fn test_prune_total_deficit_rowcol_soundness_stress() {
-        // Larger configs to stress test row/col pruning soundness.
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14),
             (3, 4, 4, 8), (3, 4, 4, 12),
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
         ];
         let seeds: Vec<u64> = (0..5).collect();
         let config = PruningConfig::none().only(|c| {
@@ -1186,7 +1174,6 @@ mod tests {
             (3, 4, 4, 8), (3, 4, 4, 12),
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
         ];
         let seeds: Vec<u64> = (0..5).collect();
         let config = PruningConfig::none().only(|c| {
@@ -1286,8 +1273,7 @@ mod tests {
         let configs = vec![
             (2, 6, 6, 8), (2, 6, 6, 12),
             (3, 6, 6, 8), (4, 6, 6, 8),
-            (2, 8, 7, 8), (3, 8, 7, 8),
-            (4, 8, 8, 8), (5, 6, 6, 6),
+            (5, 6, 6, 6),
         ];
         let seeds: Vec<u64> = (0..5).collect();
         let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);

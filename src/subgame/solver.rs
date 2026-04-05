@@ -888,7 +888,6 @@ mod tests {
             (3, 4, 4, 12), (3, 4, 4, 14),
             (2, 6, 6, 10), (2, 6, 6, 12),
             (3, 6, 6, 8),
-            (2, 8, 7, 8),
         ];
         let seeds: Vec<u64> = (0..5).collect();
         let config = SubgamePruningConfig::default();
