@@ -360,6 +360,13 @@ pub struct SubgameAxisPrune {
     /// `skip_tables[i]` = Some(table) if pieces i-1 and i have redundant
     /// orderings. `table[prev_pl * num_curr + curr_pl]` = true to skip.
     skip_tables: Vec<Option<Vec<bool>>>,
+    /// `prefix_max[depth][n]` = max total contribution to cells 0..n from
+    /// pieces depth..end. If prefix deficit > this, prune.
+    prefix_max: Vec<[u32; 16]>,
+    /// `suffix_max[depth][n]` = max total contribution to cells (N-n)..N-1
+    /// from pieces depth..end.
+    suffix_max: Vec<[u32; 16]>,
+    board_len: usize,
     endgame_start: usize,
     skip_deficit_check: bool,
 }
@@ -377,6 +384,9 @@ impl SubgameAxisPrune {
             parity_partitions: vec![],
             subset_checks: vec![],
             skip_tables: vec![],
+            prefix_max: vec![[0; 16]],
+            suffix_max: vec![[0; 16]],
+            board_len: 0,
             endgame_start: 0,
             skip_deficit_check: false,
         }
@@ -445,12 +455,56 @@ impl SubgameAxisPrune {
             if any_skips { Some(table) } else { None }
         }).collect();
 
+        // Build prefix/suffix max contribution tables.
+        // prefix_max[d][n] = max total contribution to cells 0..n from pieces d..end.
+        // suffix_max[d][n] = max total contribution to cells (board_len-n)..board_len-1.
+        let board_len = game.board().len() as usize;
+        let mut prefix_max = vec![[0u32; 16]; n + 1];
+        let mut suffix_max = vec![[0u32; 16]; n + 1];
+
+        // For each piece, compute max contribution to each prefix/suffix length.
+        for d in (0..n).rev() {
+            let placements = game.placements_for(d);
+            let mut piece_prefix_max = [0u32; 16];
+            let mut piece_suffix_max = [0u32; 16];
+
+            for &(_pos, shifted) in placements {
+                let arr = shifted.to_array();
+                // Prefix contribution: sum of arr[0..prefix_len]
+                let mut prefix_sum = 0u32;
+                for c in 0..board_len {
+                    prefix_sum += arr[c] as u32;
+                    let plen = c + 1; // prefix length 1..board_len
+                    if prefix_sum > piece_prefix_max[plen] {
+                        piece_prefix_max[plen] = prefix_sum;
+                    }
+                }
+                // Suffix contribution: sum of arr[board_len-suffix_len..board_len]
+                let mut suffix_sum = 0u32;
+                for c in (0..board_len).rev() {
+                    suffix_sum += arr[c] as u32;
+                    let slen = board_len - c; // suffix length 1..board_len
+                    if suffix_sum > piece_suffix_max[slen] {
+                        piece_suffix_max[slen] = suffix_sum;
+                    }
+                }
+            }
+
+            for k in 0..=board_len {
+                prefix_max[d][k] = prefix_max[d + 1][k] + piece_prefix_max[k];
+                suffix_max[d][k] = suffix_max[d + 1][k] + piece_suffix_max[k];
+            }
+        }
+
         SubgameAxisPrune {
             max_contrib_suffix,
             remaining_cells,
             parity_partitions,
             subset_checks,
             skip_tables,
+            prefix_max,
+            suffix_max,
+            board_len,
             endgame_start,
             skip_deficit_check: false,
         }
@@ -555,10 +609,30 @@ impl SubgameAxisPrune {
             }
         }
 
-        // Count-sat.
+        // Count-sat (per-cell).
         let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[depth]);
         if shortfall != u16x16::splat(0) {
             return false;
+        }
+
+        // Prefix/suffix satisfiability: can remaining pieces cover each prefix/suffix?
+        {
+            let cells = board.cells().to_array();
+            let bl = self.board_len;
+            let prefix_bounds = &self.prefix_max[depth];
+            let suffix_bounds = &self.suffix_max[depth];
+            let mut prefix_deficit = 0u32;
+            let mut suffix_deficit = 0u32;
+            for k in 1..=bl {
+                prefix_deficit += cells[k - 1] as u32;
+                if prefix_deficit > prefix_bounds[k] {
+                    return false;
+                }
+                suffix_deficit += cells[bl - k] as u32;
+                if suffix_deficit > suffix_bounds[k] {
+                    return false;
+                }
+            }
         }
 
         // Parity partitions.
@@ -1314,12 +1388,9 @@ mod tests {
             let (nodes_cs, res_cs) = solve_with(game, with_cs);
 
             assert_eq!(res_cs, SubgameSolveResult::Unsolvable);
-            // Count-sat prunes at root (before any backtrack node).
+            // Both should prune at root (count-sat or prefix check).
             assert!(nodes_cs <= 1, "count-sat should prune at root for N={n}, got {nodes_cs}");
-            assert!(
-                nodes_base >= n as u64,
-                "baseline should visit >= {n} nodes, got {nodes_base}",
-            );
+            assert!(nodes_base <= 1, "prefix check should prune at root for N={n}, got {nodes_base}");
         }
     }
 
