@@ -1,4 +1,5 @@
 use std::simd::{u16x16, cmp::SimdOrd, num::SimdUint};
+use std::time::Instant;
 
 use super::game::SubgameGame;
 
@@ -9,6 +10,8 @@ pub enum SubgameSolveResult {
     Solved(Vec<usize>),
     /// No solution exists.
     Unsolvable,
+    /// Solver exceeded its deadline without completing.
+    Timeout,
 }
 
 /// Statistics tracked during solving.
@@ -20,6 +23,8 @@ pub struct SolverStats {
     pub deficit_prunes: u64,
     /// Number of branches pruned by per-cell count satisfiability check.
     pub count_sat_prunes: u64,
+    /// Number of branches pruned by parity partition check.
+    pub parity_prunes: u64,
 }
 
 /// Configuration for subgame solver pruning techniques.
@@ -32,6 +37,9 @@ pub struct SubgamePruningConfig {
     pub count_sat: bool,
     /// Single-cell endgame: skip backtracking when all remaining pieces are [1].
     pub single_cell_endgame: bool,
+    /// Parity partition: split cells into even/odd groups, check if group
+    /// deficits are reachable via suffix DP.
+    pub parity: bool,
 }
 
 impl Default for SubgamePruningConfig {
@@ -40,6 +48,7 @@ impl Default for SubgamePruningConfig {
             total_deficit: true,
             count_sat: true,
             single_cell_endgame: true,
+            parity: true,
         }
     }
 }
@@ -51,6 +60,7 @@ impl SubgamePruningConfig {
             total_deficit: false,
             count_sat: false,
             single_cell_endgame: false,
+            parity: false,
         }
     }
 
@@ -58,6 +68,107 @@ impl SubgamePruningConfig {
     pub fn only(mut self, f: impl FnOnce(&mut Self)) -> Self {
         f(&mut self);
         self
+    }
+}
+
+/// A single parity partition for 1D subgame pruning.
+///
+/// Splits cells into two groups by a function of position index.
+/// Precomputes a suffix DP of reachable group-0 contribution totals.
+struct SubgameParityPartition {
+    /// Which cells are in group 0 (indexed by cell position).
+    group0: [bool; 16],
+    /// suffix_dp[depth] = bitset of reachable group-0 totals from pieces depth..n.
+    /// Indexed as suffix_dp[depth][total].
+    suffix_dp: Vec<Vec<bool>>,
+    /// suffix_max[depth] = max achievable group-0 total from pieces depth..n.
+    suffix_max: Vec<u32>,
+}
+
+impl SubgameParityPartition {
+    /// Build a partition from a group membership function and piece placements.
+    fn build(
+        game: &SubgameGame,
+        group_fn: impl Fn(usize) -> bool,
+    ) -> Self {
+        let board_len = game.board().len() as usize;
+        let n = game.pieces().len();
+
+        let mut group0 = [false; 16];
+        for i in 0..board_len {
+            group0[i] = group_fn(i);
+        }
+
+        // For each piece, collect distinct group-0 contribution values
+        // across all its valid placements.
+        let mut g0_options: Vec<Vec<u32>> = Vec::with_capacity(n);
+        for p in 0..n {
+            let placements = game.placements_for(p);
+            let mut vals: Vec<u32> = placements.iter().map(|&(_pos, shifted)| {
+                let arr = shifted.to_array();
+                let mut sum = 0u32;
+                for i in 0..board_len {
+                    if group0[i] {
+                        sum += arr[i] as u32;
+                    }
+                }
+                sum
+            }).collect();
+            vals.sort_unstable();
+            vals.dedup();
+            g0_options.push(vals);
+        }
+
+        // Compute suffix max.
+        let mut suffix_max = vec![0u32; n + 1];
+        for i in (0..n).rev() {
+            suffix_max[i] = suffix_max[i + 1] + g0_options[i].iter().copied().max().unwrap_or(0);
+        }
+
+        // Build suffix DP.
+        let dp_size = suffix_max[0] as usize + 1;
+        let mut suffix_dp = vec![vec![false; dp_size]; n + 1];
+        suffix_dp[n][0] = true;
+        for i in (0..n).rev() {
+            for v in 0..dp_size {
+                if suffix_dp[i + 1][v] {
+                    for &g0 in &g0_options[i] {
+                        let nv = v + g0 as usize;
+                        if nv < dp_size {
+                            suffix_dp[i][nv] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        SubgameParityPartition { group0, suffix_dp, suffix_max }
+    }
+
+    /// Check if the current board's group-0 deficit is reachable from `depth`.
+    #[inline(always)]
+    fn check(&self, cells: &[u16; 16], board_len: usize, depth: usize, m: u32) -> bool {
+        let g0_deficit: u32 = (0..board_len)
+            .filter(|&i| self.group0[i])
+            .map(|i| cells[i] as u32)
+            .sum();
+
+        // Quick bounds check.
+        if g0_deficit > self.suffix_max[depth] {
+            return false;
+        }
+
+        // DP check: is any reachable value v such that v >= g0_deficit
+        // and (v - g0_deficit) % M == 0?
+        let dp = &self.suffix_dp[depth];
+        let mut target = g0_deficit as usize;
+        while target < dp.len() {
+            if dp[target] {
+                return true;
+            }
+            target += m as usize;
+        }
+        false
     }
 }
 
@@ -79,6 +190,10 @@ pub struct SubgameSolver {
     /// Index where all remaining pieces are single-cell ([1] profile).
     /// At this depth, if total deficit matches we can return true immediately.
     endgame_start: usize,
+    /// Parity partitions for reachability pruning.
+    parity_partitions: Vec<SubgameParityPartition>,
+    /// Optional deadline for timeout support.
+    deadline: Option<Instant>,
 }
 
 impl SubgameSolver {
@@ -105,6 +220,11 @@ impl SubgameSolver {
         } else {
             n // never triggers
         };
+        let parity_partitions = if config.parity {
+            Self::build_parity_partitions(&game)
+        } else {
+            vec![]
+        };
         Self {
             game,
             solution: Vec::with_capacity(n),
@@ -112,7 +232,32 @@ impl SubgameSolver {
             config,
             max_contrib_suffix,
             endgame_start,
+            parity_partitions,
+            deadline: None,
         }
+    }
+
+    /// Set a deadline after which the solver will abort.
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    /// Build parity partitions for the 1D board.
+    fn build_parity_partitions(game: &SubgameGame) -> Vec<SubgameParityPartition> {
+        let board_len = game.board().len() as usize;
+        let mut partitions = Vec::new();
+
+        // Even/odd partition (always useful).
+        partitions.push(SubgameParityPartition::build(game, |i| i % 2 == 0));
+
+        // Mod-3 partitions (useful for boards >= 6 cells).
+        if board_len >= 6 {
+            partitions.push(SubgameParityPartition::build(game, |i| i % 3 == 0));
+            partitions.push(SubgameParityPartition::build(game, |i| i % 3 == 1));
+        }
+
+        partitions
     }
 
     /// Precompute suffix sums of per-cell max contributions.
@@ -171,6 +316,8 @@ impl SubgameSolver {
         let found = self.backtrack(0);
         if found {
             (SubgameSolveResult::Solved(self.solution.clone()), self.stats)
+        } else if self.deadline.map_or(false, |dl| Instant::now() >= dl) {
+            (SubgameSolveResult::Timeout, self.stats)
         } else {
             (SubgameSolveResult::Unsolvable, self.stats)
         }
@@ -181,6 +328,15 @@ impl SubgameSolver {
     /// `depth` is the index of the current piece to place.
     fn backtrack(&mut self, depth: usize) -> bool {
         self.stats.nodes_visited += 1;
+
+        // Periodic deadline check.
+        if self.stats.nodes_visited & 0xFFF == 0 {
+            if let Some(dl) = self.deadline {
+                if Instant::now() >= dl {
+                    return false;
+                }
+            }
+        }
 
         // Base case: all pieces placed.
         if depth >= self.game.pieces().len() {
@@ -225,6 +381,19 @@ impl SubgameSolver {
         if !self.check_count_sat(depth) {
             self.stats.count_sat_prunes += 1;
             return false;
+        }
+
+        // --- Pruning: parity partition reachability ---
+        if !self.parity_partitions.is_empty() {
+            let cells = self.game.board().cells().to_array();
+            let board_len = self.game.board().len() as usize;
+            let m = self.game.board().m() as u32;
+            for partition in &self.parity_partitions {
+                if !partition.check(&cells, board_len, depth, m) {
+                    self.stats.parity_prunes += 1;
+                    return false;
+                }
+            }
         }
 
         // Try each placement for the current piece.
@@ -520,8 +689,7 @@ mod tests {
                             failures += 1;
                         }
                     }
-                    // Subgame may be unsolvable (deficit mismatch from mod arithmetic).
-                    SubgameSolveResult::Unsolvable => {}
+                    SubgameSolveResult::Unsolvable | SubgameSolveResult::Timeout => {}
                 }
 
                 // Test column subgame.
@@ -534,7 +702,7 @@ mod tests {
                             failures += 1;
                         }
                     }
-                    SubgameSolveResult::Unsolvable => {}
+                    SubgameSolveResult::Unsolvable | SubgameSolveResult::Timeout => {}
                 }
             }
         }
