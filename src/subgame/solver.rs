@@ -200,6 +200,12 @@ struct SubgameSubsetReachability {
     /// placement sequences for pieces `depth..n`. Applies to ALL cells,
     /// not just subset cells.
     cell_thresholds: Vec<u16x16>,
+    /// Per-cell reachable residue bitmasks. `cell_residues[depth][c]` is a
+    /// bitmask where bit `r` is set iff residue `r` (mod M) appears in at
+    /// least one reachable config at `depth`. For cells NOT in this subset,
+    /// all bits are set (0xFF = unconstrained). For cells IN the subset,
+    /// only the residues that appear in reachable configs are set.
+    cell_residues: Vec<[u8; 16]>,
 }
 
 impl SubgameSubsetReachability {
@@ -296,6 +302,25 @@ impl SubgameSubsetReachability {
             }
         }
 
+        // Extract per-cell reachable residues from the DP.
+        // For each cell in the subset, scan reachable configs to find which
+        // mod-M digits appear. Non-subset cells get 0xFF (all allowed).
+        let mut cell_residues: Vec<[u8; 16]> = vec![[0xFFu8; 16]; n + 1];
+        for d in 0..=n {
+            let base = d * num_configs;
+            for (ci, &cell_idx) in cells.iter().enumerate() {
+                let mut residues = 0u8;
+                let mut power = m.pow(ci as u32);
+                for config in 0..num_configs {
+                    if reachable[base + config] != 0 {
+                        let digit = (config / m.pow(ci as u32)) % m;
+                        residues |= 1u8 << digit;
+                    }
+                }
+                cell_residues[d][cell_idx] = residues;
+            }
+        }
+
         // Compute per-cell thresholds from live placements.
         // A placement is "live" at depth d if it leads from at least one
         // reachable config to another reachable config at d+1.
@@ -343,7 +368,7 @@ impl SubgameSubsetReachability {
             .map(|arr| u16x16::from_array(arr))
             .collect();
 
-        SubgameSubsetReachability { cells, num_configs, reachable, first_useful, cell_thresholds }
+        SubgameSubsetReachability { cells, num_configs, reachable, first_useful, cell_thresholds, cell_residues }
     }
 }
 
@@ -357,6 +382,9 @@ pub struct SubgameAxisPrune {
     remaining_cells: Vec<u32>,
     parity_partitions: Vec<SubgameParityPartition>,
     subset_checks: Vec<SubgameSubsetReachability>,
+    /// Per-cell reachable residue bitmasks, intersected across all subsets.
+    /// `cell_residues[depth][c]` has bit `r` set iff residue `r` is feasible.
+    cell_residues: Vec<[u8; 16]>,
     endgame_start: usize,
     skip_deficit_check: bool,
 }
@@ -373,6 +401,7 @@ impl SubgameAxisPrune {
             remaining_cells: vec![0],
             parity_partitions: vec![],
             subset_checks: vec![],
+            cell_residues: vec![[0xFF; 16]],
             endgame_start: 0,
             skip_deficit_check: false,
         }
@@ -392,14 +421,15 @@ impl SubgameAxisPrune {
         let parity_partitions = Self::build_parity_partitions(game);
         let subset_checks = Self::build_subset_checks(game);
 
-        // Tighten max_contrib_suffix using subset cell thresholds.
-        // Each subset constrains which placements are feasible; the threshold
-        // is the max per-cell contribution from only "live" placements.
-        // Taking the element-wise min across subsets and count-sat gives the
-        // tightest upper bound per cell.
+        // Tighten max_contrib_suffix using subset cell thresholds, and
+        // intersect per-cell reachable residues across all subsets.
+        let mut cell_residues: Vec<[u8; 16]> = vec![[0xFFu8; 16]; n + 1];
         for check in &subset_checks {
             for d in 0..=n {
                 max_contrib_suffix[d] = max_contrib_suffix[d].simd_min(check.cell_thresholds[d]);
+                for c in 0..16 {
+                    cell_residues[d][c] &= check.cell_residues[d][c];
+                }
             }
         }
 
@@ -417,6 +447,7 @@ impl SubgameAxisPrune {
             remaining_cells,
             parity_partitions,
             subset_checks,
+            cell_residues,
             endgame_start,
             skip_deficit_check: false,
         }
@@ -520,10 +551,24 @@ impl SubgameAxisPrune {
             }
         }
 
-        // Count-sat.
+        // Count-sat (tightened by subset live-placement thresholds).
         let shortfall = board.cells().saturating_sub(self.max_contrib_suffix[depth]);
         if shortfall != u16x16::splat(0) {
             return false;
+        }
+
+        // Per-cell residue check: each cell's value mod M must be reachable.
+        {
+            let cells = board.cells().to_array();
+            let board_len = board.len() as usize;
+            let m = board.m() as usize;
+            let residues = &self.cell_residues[depth];
+            for c in 0..board_len {
+                let digit = (cells[c] as usize) % m;
+                if residues[c] & (1u8 << digit) == 0 {
+                    return false;
+                }
+            }
         }
 
         // Parity partitions.
@@ -714,6 +759,8 @@ impl SubgameSolver {
             }
             if !config.subset_sat {
                 a.subset_checks = vec![];
+                let n = game.pieces().len();
+                a.cell_residues = vec![[0xFFu8; 16]; n + 1];
             }
             if !config.single_cell_endgame {
                 a.endgame_start = game.pieces().len();
