@@ -1,7 +1,10 @@
-use std::time::{Duration, Instant};
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use rand::SeedableRng;
-use rayon::prelude::*;
+use wait_timeout::ChildExt;
 use shapeshifter::generate::generate_game;
 use shapeshifter::level::LevelSpec;
 use shapeshifter::subgame::game::SubgameGame;
@@ -9,21 +12,7 @@ use shapeshifter::subgame::generate::{
     board_col_deficits, board_row_deficits, piece_col_profile, piece_row_profile,
 };
 use shapeshifter::subgame::piece::SubgamePiece;
-use shapeshifter::subgame::solver::{SubgameSolver, SubgamePruningConfig, SubgameSolveResult, SolverStats};
-
-fn print_usage() {
-    eprintln!(
-        "Usage: bench_subgame [OPTIONS]\n\n\
-         Benchmark the subgame solver on projected subgames from full 2D games.\n\n\
-         Options:\n  \
-           --start LEVEL    Start level (default: 1)\n  \
-           --end LEVEL      End level (default: 20)\n  \
-           --games-per N    Games per level (default: 10)\n  \
-           --timeout SECS   Timeout per solve in seconds (default: no limit)\n  \
-           --seed SEED      Base random seed (default: 0)\n  \
-           -h, --help       Show this help"
-    );
-}
+use shapeshifter::subgame::solver::{SubgameSolver, SubgamePruningConfig, SubgameSolveResult};
 
 use rand::RngExt;
 
@@ -89,212 +78,304 @@ fn generate_subgames(
     Some((row_sg, col_sg))
 }
 
-struct BenchTask {
-    level: u32,
+/// Find a no-wrapping subgame for the given level spec and game index.
+fn find_subgames(
+    spec: &LevelSpec,
     game_idx: u32,
-    board_desc: String,
-    label: &'static str,
-    subgame: SubgameGame,
-}
-
-struct BenchResult {
-    level: u32,
-    game_idx: u32,
-    board_desc: String,
-    label: &'static str,
-    base_nodes: u64,
-    opt_nodes: u64,
-    elapsed_secs: f64,
-    timed_out: bool,
-}
-
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-
-    let mut start_level: u32 = 1;
-    let mut end_level: u32 = 20;
-    let mut games_per: u32 = 10;
-    let mut base_seed: u64 = 0;
-    let mut timeout_secs: Option<f64> = None;
-
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--start" => {
-                i += 1;
-                start_level = args[i].parse().expect("invalid start level");
+    base_seed: u64,
+) -> Option<(SubgameGame, SubgameGame, u64, usize)> {
+    for skip in 1..spec.shapes as usize {
+        for trial in 0..20u64 {
+            let seed = base_seed + spec.level as u64 * 10000 + game_idx as u64 * 100 + trial;
+            if let Some(sg) = generate_subgames(spec, seed, skip) {
+                return Some((sg.0, sg.1, seed, skip));
             }
-            "--end" => {
-                i += 1;
-                end_level = args[i].parse().expect("invalid end level");
-            }
-            "--games-per" => {
-                i += 1;
-                games_per = args[i].parse().expect("invalid games-per");
-            }
-            "--timeout" => {
-                i += 1;
-                timeout_secs = Some(args[i].parse().expect("invalid timeout"));
-            }
-            "--seed" => {
-                i += 1;
-                base_seed = args[i].parse().expect("invalid seed");
-            }
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            other => {
-                eprintln!("Unknown option: {}", other);
-                print_usage();
-                std::process::exit(1);
-            }
-        }
-        i += 1;
-    }
-
-    let timeout = timeout_secs.map(|s| Duration::from_secs_f64(s));
-
-    // Build all tasks first.
-    let levels = shapeshifter::level::load_levels();
-    let mut tasks: Vec<BenchTask> = Vec::new();
-
-    for spec in &levels {
-        if spec.level < start_level || spec.level > end_level {
-            continue;
-        }
-        let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
-
-        for g in 0..games_per {
-            let mut found = None;
-            'search: for skip in 1..spec.shapes as usize {
-                for trial in 0..20u64 {
-                    let seed = base_seed + spec.level as u64 * 10000 + g as u64 * 100 + trial;
-                    if let Some(sg) = generate_subgames(spec, seed, skip) {
-                        found = Some(sg);
-                        break 'search;
-                    }
-                }
-            }
-            let (row_sg, col_sg) = match found {
-                Some(sg) => sg,
-                None => continue,
-            };
-
-            tasks.push(BenchTask {
-                level: spec.level, game_idx: g, board_desc: board_desc.clone(),
-                label: "row", subgame: row_sg,
-            });
-            tasks.push(BenchTask {
-                level: spec.level, game_idx: g, board_desc: board_desc.clone(),
-                label: "col", subgame: col_sg,
-            });
         }
     }
+    None
+}
 
-    let n_tasks = tasks.len();
-    let n_workers = rayon::current_num_threads();
-    let timeout_str = timeout_secs.map_or("none".to_string(), |s| format!("{}s", s));
-    eprintln!(
-        "Benchmarking {} tasks across {} workers (timeout: {})",
-        n_tasks, n_workers, timeout_str,
-    );
+// --- Worker mode: solve a single subgame task ---
+
+fn run_worker(level: u32, game_idx: u32, axis: &str, seed: u64, skip: usize) {
+    let spec = shapeshifter::level::get_level(level).expect("invalid level");
+
+    let (row_sg, col_sg) = generate_subgames(&spec, seed, skip)
+        .expect("failed to regenerate subgame");
+
+    let sg = match axis {
+        "row" => row_sg,
+        "col" => col_sg,
+        _ => panic!("invalid axis"),
+    };
 
     let baseline_config = SubgamePruningConfig::none().only(|c| {
         c.total_deficit = true;
     });
 
-    // Run all tasks in parallel.
-    let mut results: Vec<BenchResult> = tasks
-        .into_par_iter()
-        .map(|task| {
-            // Each solve gets its own deadline so it actually aborts.
-            let base_deadline = timeout.map(|t| Instant::now() + t);
-            let mut solver = SubgameSolver::with_config(task.subgame.clone(), baseline_config);
-            if let Some(dl) = base_deadline { solver = solver.with_deadline(dl); }
-            let start = Instant::now();
-            let (base_result, base_stats) = solver.solve();
-            let base_elapsed = start.elapsed();
-            let base_to = matches!(base_result, SubgameSolveResult::Timeout);
+    let solver = SubgameSolver::with_config(sg.clone(), baseline_config);
+    let (_, base_stats) = solver.solve();
 
-            let opt_deadline = timeout.map(|t| Instant::now() + t);
-            let mut solver = SubgameSolver::new(task.subgame);
-            if let Some(dl) = opt_deadline { solver = solver.with_deadline(dl); }
-            let start2 = Instant::now();
-            let (opt_result, opt_stats) = solver.solve();
-            let opt_elapsed = start2.elapsed();
-            let opt_to = matches!(opt_result, SubgameSolveResult::Timeout);
+    let solver = SubgameSolver::new(sg);
+    let (_, opt_stats) = solver.solve();
 
-            BenchResult {
-                level: task.level,
-                game_idx: task.game_idx,
-                board_desc: task.board_desc,
-                label: task.label,
-                base_nodes: base_stats.nodes_visited,
-                opt_nodes: opt_stats.nodes_visited,
-                elapsed_secs: (base_elapsed + opt_elapsed).as_secs_f64(),
-                timed_out: base_to || opt_to,
-            }
-        })
-        .collect();
+    // Output: base_nodes opt_nodes
+    println!("{} {}", base_stats.nodes_visited, opt_stats.nodes_visited);
+}
 
-    // Sort by level, game, label for consistent output.
-    results.sort_by(|a, b| {
-        a.level.cmp(&b.level)
-            .then(a.game_idx.cmp(&b.game_idx))
-            .then(a.label.cmp(&b.label))
-    });
+// --- Bench mode: spawn worker subprocesses ---
 
-    // Print results.
-    println!(
-        "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>8} {:>8}",
-        "Level", "Game", "Board", "Type", "Base", "Opt", "Speedup", "Time"
-    );
-    println!("{}", "-".repeat(68));
+struct Task {
+    level: u32,
+    game_idx: u32,
+    board_desc: String,
+    label: &'static str,
+    seed: u64,
+    skip: usize,
+}
 
-    let mut total_base_nodes: u64 = 0;
-    let mut total_opt_nodes: u64 = 0;
-    let mut total_games: u32 = 0;
-    let mut total_timeouts: u32 = 0;
+struct TaskResult {
+    level: u32,
+    game_idx: u32,
+    board_desc: String,
+    label: &'static str,
+    base_nodes: Option<u64>,
+    opt_nodes: Option<u64>,
+    status: String,
+}
 
-    for r in &results {
-        if r.timed_out {
-            total_timeouts += 1;
-            println!(
-                "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>8} {:>7.1}s",
-                r.level, r.game_idx, r.board_desc, r.label,
-                "-", "-", "TIMEOUT", r.elapsed_secs,
-            );
-        } else {
-            total_base_nodes += r.base_nodes;
-            total_opt_nodes += r.opt_nodes;
-            total_games += 1;
+fn run_task(
+    task: &Task,
+    exe_path: &std::path::Path,
+    timeout_secs: u64,
+) -> TaskResult {
+    let mut cmd = Command::new(exe_path);
+    cmd.arg("--worker")
+        .arg(task.level.to_string())
+        .arg(task.game_idx.to_string())
+        .arg(task.label)
+        .arg(task.seed.to_string())
+        .arg(task.skip.to_string());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
 
-            let speedup = if r.opt_nodes > 0 {
-                r.base_nodes as f64 / r.opt_nodes as f64
-            } else if r.base_nodes > 0 {
-                f64::INFINITY
-            } else {
-                1.0
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to spawn worker: {}", e);
+            return TaskResult {
+                level: task.level, game_idx: task.game_idx,
+                board_desc: task.board_desc.clone(), label: task.label,
+                base_nodes: None, opt_nodes: None, status: "ERROR".into(),
             };
+        }
+    };
 
-            println!(
-                "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>7.1}x {:>7.1}s",
-                r.level, r.game_idx, r.board_desc, r.label,
-                r.base_nodes, r.opt_nodes, speedup, r.elapsed_secs,
-            );
+    let timeout = Duration::from_secs(timeout_secs);
+    let wait_result = child.wait_timeout(timeout);
+    let stdout_pipe = child.stdout.take();
+
+    match wait_result {
+        Ok(Some(status)) if status.success() => {
+            if let Some(mut pipe) = stdout_pipe {
+                use std::io::Read;
+                let mut stdout = String::new();
+                let _ = pipe.read_to_string(&mut stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        return TaskResult {
+                            level: task.level, game_idx: task.game_idx,
+                            board_desc: task.board_desc.clone(), label: task.label,
+                            base_nodes: parts[0].parse().ok(),
+                            opt_nodes: parts[1].parse().ok(),
+                            status: "OK".into(),
+                        };
+                    }
+                }
+            }
+            TaskResult {
+                level: task.level, game_idx: task.game_idx,
+                board_desc: task.board_desc.clone(), label: task.label,
+                base_nodes: None, opt_nodes: None, status: "ERROR".into(),
+            }
+        }
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            TaskResult {
+                level: task.level, game_idx: task.game_idx,
+                board_desc: task.board_desc.clone(), label: task.label,
+                base_nodes: None, opt_nodes: None, status: "TIMEOUT".into(),
+            }
+        }
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            TaskResult {
+                level: task.level, game_idx: task.game_idx,
+                board_desc: task.board_desc.clone(), label: task.label,
+                base_nodes: None, opt_nodes: None, status: "ERROR".into(),
+            }
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: bench_subgame [OPTIONS]\n\n\
+         Benchmark the subgame solver on projected subgames from full 2D games.\n\n\
+         Options:\n  \
+           --start LEVEL    Start level (default: 1)\n  \
+           --end LEVEL      End level (default: 20)\n  \
+           --games-per N    Games per level (default: 10)\n  \
+           --timeout SECS   Timeout per task in seconds (default: 30)\n  \
+           --seed SEED      Base random seed (default: 0)\n  \
+           -h, --help       Show this help"
+    );
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Worker mode: bench_subgame --worker <level> <game_idx> <axis> <seed> <skip>
+    if args.len() >= 7 && args[1] == "--worker" {
+        let level: u32 = args[2].parse().expect("invalid level");
+        let game_idx: u32 = args[3].parse().expect("invalid game_idx");
+        let axis = &args[4];
+        let seed: u64 = args[5].parse().expect("invalid seed");
+        let skip: usize = args[6].parse().expect("invalid skip");
+        run_worker(level, game_idx, axis, seed, skip);
+        return;
+    }
+
+    // Bench mode.
+    let mut start_level: u32 = 1;
+    let mut end_level: u32 = 20;
+    let mut games_per: u32 = 10;
+    let mut base_seed: u64 = 0;
+    let mut timeout_secs: u64 = 30;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--start" => { i += 1; start_level = args[i].parse().expect("invalid start level"); }
+            "--end" => { i += 1; end_level = args[i].parse().expect("invalid end level"); }
+            "--games-per" => { i += 1; games_per = args[i].parse().expect("invalid games-per"); }
+            "--timeout" => { i += 1; timeout_secs = args[i].parse().expect("invalid timeout"); }
+            "--seed" => { i += 1; base_seed = args[i].parse().expect("invalid seed"); }
+            "-h" | "--help" => { print_usage(); std::process::exit(0); }
+            other => { eprintln!("Unknown option: {}", other); print_usage(); std::process::exit(1); }
+        }
+        i += 1;
+    }
+
+    let exe_path = std::env::current_exe().unwrap();
+
+    // Build tasks.
+    let levels = shapeshifter::level::load_levels();
+    let mut tasks: Vec<Task> = Vec::new();
+
+    for spec in &levels {
+        if spec.level < start_level || spec.level > end_level { continue; }
+        let board_desc = format!("{}x{}/M{}", spec.rows, spec.columns, spec.shifts);
+
+        for g in 0..games_per {
+            if let Some((_, _, seed, skip)) = find_subgames(spec, g, base_seed) {
+                tasks.push(Task {
+                    level: spec.level, game_idx: g, board_desc: board_desc.clone(),
+                    label: "row", seed, skip,
+                });
+                tasks.push(Task {
+                    level: spec.level, game_idx: g, board_desc: board_desc.clone(),
+                    label: "col", seed, skip,
+                });
+            }
         }
     }
 
-    let node_ratio = if total_opt_nodes > 0 {
-        total_base_nodes as f64 / total_opt_nodes as f64
-    } else {
-        f64::INFINITY
-    };
+    let n_tasks = tasks.len();
+    let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    eprintln!(
+        "Benchmarking {} tasks, {} workers, {}s timeout",
+        n_tasks, n_workers, timeout_secs,
+    );
 
-    println!("\n--- Summary ---");
-    println!("Games:            {} ({} timed out)", total_games + total_timeouts, total_timeouts);
-    println!("Baseline:         {} nodes", total_base_nodes);
-    println!("Optimized:        {} nodes", total_opt_nodes);
-    println!("Node reduction:   {:.2}x", node_ratio);
+    // Run tasks in parallel via thread pool + subprocess spawning.
+    let (result_tx, result_rx) = mpsc::channel();
+    let task_iter = std::sync::Mutex::new(tasks.into_iter());
+
+    std::thread::scope(|scope| {
+        for _ in 0..n_workers {
+            let result_tx = result_tx.clone();
+            let task_iter = &task_iter;
+            let exe_path = &exe_path;
+            scope.spawn(move || {
+                loop {
+                    let task = {
+                        let mut iter = task_iter.lock().unwrap();
+                        iter.next()
+                    };
+                    let task = match task {
+                        Some(t) => t,
+                        None => break,
+                    };
+                    let r = run_task(&task, exe_path, timeout_secs);
+                    let _ = result_tx.send(r);
+                }
+            });
+        }
+        drop(result_tx);
+
+        // Print results as they arrive.
+        println!(
+            "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>8}",
+            "Level", "Game", "Board", "Type", "Base", "Opt", "Speedup"
+        );
+        println!("{}", "-".repeat(60));
+
+        let mut total_base: u64 = 0;
+        let mut total_opt: u64 = 0;
+        let mut n_ok: u32 = 0;
+        let mut n_timeout: u32 = 0;
+        let mut results: Vec<TaskResult> = Vec::new();
+
+        for r in result_rx {
+            match r.status.as_str() {
+                "OK" => {
+                    let base = r.base_nodes.unwrap_or(0);
+                    let opt = r.opt_nodes.unwrap_or(0);
+                    total_base += base;
+                    total_opt += opt;
+                    n_ok += 1;
+                    let speedup = if opt > 0 { base as f64 / opt as f64 } else { f64::INFINITY };
+                    println!(
+                        "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>7.1}x",
+                        r.level, r.game_idx, r.board_desc, r.label, base, opt, speedup,
+                    );
+                }
+                "TIMEOUT" => {
+                    n_timeout += 1;
+                    println!(
+                        "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>8}",
+                        r.level, r.game_idx, r.board_desc, r.label, "-", "-", "TIMEOUT",
+                    );
+                }
+                _ => {
+                    println!(
+                        "{:<6} {:<4} {:<10} {:<5} {:>10} {:>10} {:>8}",
+                        r.level, r.game_idx, r.board_desc, r.label, "-", "-", "ERROR",
+                    );
+                }
+            }
+            let _ = std::io::stdout().flush();
+            results.push(r);
+        }
+
+        let ratio = if total_opt > 0 { total_base as f64 / total_opt as f64 } else { f64::INFINITY };
+        println!("\n--- Summary ---");
+        println!("Games:            {} ({} timed out)", n_ok + n_timeout, n_timeout);
+        println!("Baseline:         {} nodes", total_base);
+        println!("Optimized:        {} nodes", total_opt);
+        println!("Node reduction:   {:.2}x", ratio);
+    });
 }
