@@ -60,7 +60,8 @@ fn sort_placements(
 }
 
 /// Try to solve remaining pieces when they're all 1x1.
-/// Each cell at deficit d needs d more hits to reach 0. Total hits must equal number of pieces.
+/// Each cell at deficit d needs d more hits to reach 0. Extra pieces beyond
+/// the deficit can be absorbed by placing M pieces on a single cell (wrapping).
 /// Returns true and fills solution if solvable.
 pub(crate) fn solve_single_cells(
     board: &Board,
@@ -70,14 +71,17 @@ pub(crate) fn solve_single_cells(
     num_pieces: usize,
     solution: &mut Vec<(usize, usize)>,
 ) -> bool {
-    // Count total deficit remaining and verify it matches available pieces.
+    // Count total deficit remaining.
     let mut needed = 0u32;
     for d in 1..m {
         needed += d as u32 * board.plane(d).count_ones();
     }
-    if needed as usize != num_pieces {
+    // Extra pieces beyond deficit must be a multiple of M (wrapping).
+    let n = num_pieces as u32;
+    if n < needed || (n - needed) % m as u32 != 0 {
         return false;
     }
+    let extra_wraps = (n - needed) / m as u32;
 
     // Assign pieces to cells: for each non-zero cell, emit (deficit) placements.
     let base_len = solution.len();
@@ -89,6 +93,13 @@ pub(crate) fn solve_single_cells(
                     solution.push((r, c));
                 }
             }
+        }
+    }
+
+    // Place extra wrapping pieces: M pieces on cell (0,0) per wrap.
+    for _ in 0..extra_wraps {
+        for _ in 0..m {
+            solution.push((0, 0));
         }
     }
 
