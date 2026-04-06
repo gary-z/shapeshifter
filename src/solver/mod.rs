@@ -106,6 +106,7 @@ pub(crate) struct SolverData {
     pub(crate) subset_prune: prune::subset::SubsetPrune,
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
     pub(crate) subgame_prune: prune::subgame::SubgamePrune,
+    pub(crate) hit_count_threshold: u8,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
@@ -547,6 +548,7 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
 
     let found = backtrack::backtrack(
         &board,
+        prune::hit_count::HitCounter::new(),
         &data,
         0,
         usize::MAX,
@@ -655,6 +657,7 @@ fn solve_with_config_parallel(
     let wq = backtrack::WorkQueue::new();
     wq.push(backtrack::StealableTask {
         board: board.clone(),
+        hits: prune::hit_count::HitCounter::new(),
         prefix: Vec::new(),
         depth: 0,
         prev_placement: usize::MAX,
@@ -730,6 +733,7 @@ fn solve_with_config_parallel(
 
                     let found = backtrack::backtrack_stealing(
                         &task.board,
+                        task.hits,
                         &data,
                         task.depth,
                         task.prev_placement,

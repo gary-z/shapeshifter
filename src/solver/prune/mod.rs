@@ -7,6 +7,7 @@
 //! TODO: After completing the main solver refactor, apply the same pattern to
 //! the subgame solver's pruning (total_deficit, count_sat, endgame checks).
 
+pub(crate) mod hit_count;
 pub(crate) mod jaggedness;
 pub(crate) mod line_family;
 pub(crate) mod parity;

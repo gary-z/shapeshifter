@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
+use super::prune::hit_count::HitCounter;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
@@ -100,6 +101,7 @@ macro_rules! define_backtrack {
     ($name:ident $(, abort: $abort_param:ident : $abort_ty:ty)?) => {
         pub(crate) fn $name(
             board: &Board,
+            hits: HitCounter,
             data: &SolverData,
             piece_idx: usize,
             prev_placement: usize,
@@ -159,6 +161,14 @@ macro_rules! define_backtrack {
 
                 let mut board = board_snapshot;
                 board.apply_piece(mask);
+
+                // Copy-make: copy hit counter and increment.
+                let mut new_hits = hits;
+                new_hits.apply_piece(mask);
+                if data.hit_count_threshold > 0 && new_hits.any_cell_gte(data.hit_count_threshold) {
+                    continue;
+                }
+
                 solution.push((row, col));
 
                 let next_prev = if piece_idx + 1 < data.all_placements.len()
@@ -171,6 +181,7 @@ macro_rules! define_backtrack {
 
                 if $name(
                     &board,
+                    new_hits,
                     data,
                     piece_idx + 1,
                     next_prev,
@@ -203,6 +214,7 @@ use std::sync::atomic::AtomicUsize;
 
 struct SearchFrame {
     board: Board,
+    hits: HitCounter,
     piece_idx: usize,
     placements: Vec<(usize, usize, usize, Bitboard)>,
     cursor: usize,
@@ -210,6 +222,7 @@ struct SearchFrame {
 
 pub(crate) struct StealableTask {
     pub board: Board,
+    pub hits: HitCounter,
     pub prefix: Vec<(usize, usize)>,
     pub depth: usize,
     pub prev_placement: usize,
@@ -261,6 +274,7 @@ impl WorkQueue {
 
 fn build_search_frame(
     board: &Board,
+    hits: HitCounter,
     data: &SolverData,
     piece_idx: usize,
     prev_placement: usize,
@@ -292,7 +306,7 @@ fn build_search_frame(
         filtered.push((pl_idx, row, col, mask));
     }
 
-    SearchFrame { board: board.clone(), piece_idx, placements: filtered, cursor: 0 }
+    SearchFrame { board: board.clone(), hits, piece_idx, placements: filtered, cursor: 0 }
 }
 
 #[inline]
@@ -315,12 +329,14 @@ fn split_work(
             let (pl_idx, row, col, mask) = frame.placements[ci];
             let mut board = frame.board.clone();
             board.apply_piece(mask);
+            let mut hits = frame.hits;
+            hits.apply_piece(mask);
             let depth = frame.piece_idx + 1;
             let prefix_len = base_solution_len + si;
             let mut prefix = solution_prefix[..prefix_len].to_vec();
             prefix.push((row, col));
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
-            tasks.push(StealableTask { board, prefix, depth, prev_placement: next_prev });
+            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
         }
         frame.cursor = frame.placements.len();
         wq.push_many(tasks);
@@ -343,6 +359,7 @@ fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
 
 pub(crate) fn backtrack_stealing(
     initial_board: &Board,
+    initial_hits: HitCounter,
     data: &SolverData,
     start_depth: usize,
     initial_prev_placement: usize,
@@ -381,7 +398,7 @@ pub(crate) fn backtrack_stealing(
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     let first_frame = build_search_frame(
-        initial_board, data, start_depth, initial_prev_placement, config,
+        initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
     );
     let mut progress_local: f64 = 0.0;
     let filtered_out = data.all_placements[start_depth].len() - first_frame.placements.len();
@@ -407,6 +424,15 @@ pub(crate) fn backtrack_stealing(
 
         let mut board = frame.board.clone();
         board.apply_piece(mask);
+
+        // Copy-make: copy hit counter and increment.
+        let mut new_hits = frame.hits;
+        new_hits.apply_piece(mask);
+        if data.hit_count_threshold > 0 && new_hits.any_cell_gte(data.hit_count_threshold) {
+            progress_local += data.progress_weights[piece_idx];
+            nodes.set(nodes.get() + 1);
+            continue;
+        }
 
         let sol_depth = base_solution_len + stack.len() - 1;
         solution.truncate(sol_depth);
@@ -462,7 +488,7 @@ pub(crate) fn backtrack_stealing(
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         let new_frame = build_search_frame(
-            &board, data, next_piece, next_prev, config,
+            &board, new_hits, data, next_piece, next_prev, config,
         );
         let filtered_out = data.all_placements[next_piece].len() - new_frame.placements.len();
         progress_local += filtered_out as f64 * data.progress_weights[next_piece];
