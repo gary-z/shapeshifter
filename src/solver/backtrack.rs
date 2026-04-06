@@ -7,6 +7,48 @@ use crate::core::board::Board;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
+/// Sort placements by: primary = fewer zero-deficit cells hit,
+/// secondary = higher expected-need score (per-depth).
+/// Returns the sorted order in `order[0..pl_len]`.
+fn sort_placements(
+    placements: &[(usize, usize, Bitboard)],
+    zero_plane: Bitboard,
+    need_scores: &[u8],
+    order: &mut [u8; 196],
+) {
+    let pl_len = placements.len();
+    let mut keys = [0u16; 196];
+    for i in 0..pl_len {
+        let zeros = (placements[i].2 & zero_plane).count_ones() as u16;
+        let need = need_scores.get(i).copied().unwrap_or(0) as u16;
+        keys[i] = zeros * 256 + (255 - need);
+    }
+    let mut counts = [0u8; 26];
+    for i in 0..pl_len { counts[(keys[i] >> 8) as usize] += 1; }
+    let mut offsets = [0u8; 26];
+    for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
+    for i in 0..pl_len {
+        let k = (keys[i] >> 8) as usize;
+        order[offsets[k] as usize] = i as u8;
+        offsets[k] += 1;
+    }
+    let mut start = 0usize;
+    for b in 0..26 {
+        let end = if b < 25 { offsets[b] as usize } else { pl_len };
+        for i in start + 1..end {
+            let val = order[i];
+            let ki = keys[val as usize];
+            let mut j = i;
+            while j > start && keys[order[j - 1] as usize] > ki {
+                order[j] = order[j - 1];
+                j -= 1;
+            }
+            order[j] = val;
+        }
+        start = end;
+    }
+}
+
 /// Try to solve remaining pieces when they're all 1x1.
 /// Each cell at deficit d needs d more hits to reach 0. Total hits must equal number of pieces.
 /// Returns true and fills solution if solvable.
@@ -84,22 +126,9 @@ macro_rules! define_backtrack {
 
             let placements = &data.all_placements[piece_idx];
 
-            let zero_plane = board.plane(0);
             let pl_len = placements.len();
             let mut order = [0u8; 196];
-            let mut keys = [0u8; 196];
-            for i in 0..pl_len {
-                keys[i] = (placements[i].2 & zero_plane).count_ones() as u8;
-            }
-            let mut counts = [0u8; 26];
-            for i in 0..pl_len { counts[keys[i] as usize] += 1; }
-            let mut offsets = [0u8; 26];
-            for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
-            for i in 0..pl_len {
-                let k = keys[i] as usize;
-                order[offsets[k] as usize] = i as u8;
-                offsets[k] += 1;
-            }
+            sort_placements(placements, board.plane(0), &data.placement_need[piece_idx], &mut order);
 
             let board_snapshot = *board;
             for oi in 0..pl_len {
@@ -237,21 +266,8 @@ fn build_search_frame(
         Bitboard::ZERO
     };
 
-    let zero_plane = board.plane(0);
     let mut order = [0u8; 196];
-    let mut keys = [0u8; 196];
-    for i in 0..pl_len {
-        keys[i] = (placements[i].2 & zero_plane).count_ones() as u8;
-    }
-    let mut counts = [0u8; 26];
-    for i in 0..pl_len { counts[keys[i] as usize] += 1; }
-    let mut offsets = [0u8; 26];
-    for i in 1..26 { offsets[i] = offsets[i - 1] + counts[i - 1]; }
-    for i in 0..pl_len {
-        let k = keys[i] as usize;
-        order[offsets[k] as usize] = i as u8;
-        offsets[k] += 1;
-    }
+    sort_placements(placements, board.plane(0), &data.placement_need[piece_idx], &mut order);
 
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
