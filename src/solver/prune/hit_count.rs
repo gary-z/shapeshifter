@@ -70,28 +70,25 @@ impl HitCounter {
     }
 }
 
-/// Run Monte Carlo to find the max per-cell hit count across random solutions.
-/// Returns `max_observed + 1` as a conservative hard-prune threshold,
-/// or 0 if pruning should be disabled (too few placements to be meaningful).
-pub(crate) fn precompute_threshold(
+/// Run Monte Carlo to find per-cell hit count distribution across random solutions.
+/// Returns thresholds at percentiles [50, 75, 90, 95, max+1] for progressive solving.
+/// Returns empty vec if pruning should be disabled.
+pub(crate) fn precompute_thresholds(
     all_placements: &[Vec<(usize, usize, Bitboard)>],
-) -> u8 {
+) -> Vec<u8> {
     let n = all_placements.len();
-    if n == 0 { return 0; }
-
-    // Check all pieces have at least one placement.
-    if all_placements.iter().any(|p| p.is_empty()) { return 0; }
+    if n == 0 { return vec![]; }
+    if all_placements.iter().any(|p| p.is_empty()) { return vec![]; }
 
     let num_trials = 10_000;
     let mut rng = rand::rng();
-    let mut max_observed: u8 = 0;
+    let mut trial_maxes = Vec::with_capacity(num_trials);
 
     for _ in 0..num_trials {
         let mut cell_hits = [0u8; 225];
         for placements in all_placements {
             let idx = rng.random_range(0..placements.len());
             let mask = placements[idx].2;
-            // Iterate set bits.
             let mut m = mask;
             while !m.is_zero() {
                 let bit = m.lowest_set_bit();
@@ -100,12 +97,23 @@ pub(crate) fn precompute_threshold(
             }
         }
         let trial_max = cell_hits.iter().copied().max().unwrap_or(0);
-        if trial_max > max_observed {
-            max_observed = trial_max;
-        }
+        trial_maxes.push(trial_max);
     }
 
-    // Threshold: prune if any cell hits exceed max observed.
-    // Adding 1 for safety margin (actual solution is one sample we didn't see).
-    max_observed.saturating_add(1).min(31)
+    trial_maxes.sort_unstable();
+
+    // Percentile thresholds: each is the value at that percentile + 1 for safety.
+    let percentiles = [50, 75, 90, 95];
+    let mut thresholds: Vec<u8> = percentiles.iter().map(|&p| {
+        let idx = (num_trials * p / 100).min(num_trials - 1);
+        trial_maxes[idx].saturating_add(1).min(31)
+    }).collect();
+
+    // Final: max observed + 1.
+    let max_observed = *trial_maxes.last().unwrap();
+    thresholds.push(max_observed.saturating_add(1).min(31));
+
+    // Deduplicate consecutive equal thresholds.
+    thresholds.dedup();
+    thresholds
 }

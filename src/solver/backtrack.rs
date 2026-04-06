@@ -176,7 +176,7 @@ macro_rules! define_backtrack {
                 // Copy-make: copy hit counter and increment.
                 let mut new_hits = hits;
                 new_hits.apply_piece(mask);
-                if data.hit_count_threshold > 0 && new_hits.any_cell_gte(data.hit_count_threshold) {
+                if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
                     continue;
                 }
 
@@ -439,7 +439,7 @@ pub(crate) fn backtrack_stealing(
         // Copy-make: copy hit counter and increment.
         let mut new_hits = frame.hits;
         new_hits.apply_piece(mask);
-        if data.hit_count_threshold > 0 && new_hits.any_cell_gte(data.hit_count_threshold) {
+        if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
             progress_local += data.progress_weights[piece_idx];
             nodes.set(nodes.get() + 1);
             continue;

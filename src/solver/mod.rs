@@ -103,7 +103,8 @@ pub(crate) struct SolverData {
     pub(crate) subset_prune: prune::subset::SubsetPrune,
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
     pub(crate) subgame_prune: prune::subgame::SubgamePrune,
-    pub(crate) hit_count_threshold: u8,
+    pub(crate) hit_count_threshold: std::sync::atomic::AtomicU8,
+    pub(crate) hit_count_thresholds: Vec<u8>,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
@@ -113,27 +114,47 @@ pub(crate) struct SolverData {
     pub(crate) progress_weights: Vec<f64>,
 }
 
-/// Main entry point.
+/// Main entry point. Tries progressively looser hit-count thresholds
+/// (p50, p75, p90, p95, max+1), reusing precomputed data across attempts.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool, subgame: bool) -> SolveResult {
     let mut config = PruningConfig::default();
     config.subgame = subgame;
-    if parallel {
-        solve_with_config_parallel(game, &config, exhaustive)
-    } else {
-        solve_with_config(game, &config)
+
+    let (board, order, data) = prepare_solver(game, &config);
+    let thresholds = data.hit_count_thresholds.clone();
+
+    let mut total_nodes = 0u64;
+    let mut last_progress = 0.0;
+    for &threshold in &thresholds {
+        data.hit_count_threshold.store(threshold, Ordering::Relaxed);
+        let result = if parallel {
+            run_parallel(&board, &order, &data, &config, exhaustive)
+        } else {
+            run_serial(&board, &order, &data, &config)
+        };
+        total_nodes += result.nodes_visited;
+        last_progress = result.progress;
+        if result.solution.is_some() {
+            return SolveResult { nodes_visited: total_nodes, ..result };
+        }
+    }
+
+    SolveResult {
+        solution: None,
+        nodes_visited: total_nodes,
+        subgame_nodes_visited: data.subgame_prune.total_nodes(),
+        progress: last_progress,
     }
 }
 
-
-/// Backtracking solver with configurable pruning (serial).
-pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
+/// Build sorted placements, skip tables, and all precomputed pruning data.
+fn prepare_solver(game: &Game, config: &PruningConfig) -> (crate::core::board::Board, Vec<usize>, SolverData) {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
     let w = board.width();
+    let n = pieces.len();
 
-    // Build (original_index, placements) and sort: fewer placements first.
-    // Secondary sort by shape to group duplicates together.
     let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
@@ -151,18 +172,8 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
         indexed.into_iter().map(|(_, p)| p).collect();
 
-    let n = pieces.len();
-
-    // Precompute pair skip tables for ALL consecutive piece pairs.
-    // For each (prev_placement, curr_placement) pair, the key
-    // (mask_a & mask_b, mask_a ^ mask_b) fully determines the combined board
-    // effect.  If two combos share a key, the second is redundant and skipped.
-    // This subsumes duplicate-piece symmetry breaking: for identical pieces
-    // (a, b) and (b, a) always collide because & and ^ are commutative.
     let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
-        if i == 0 {
-            return None;
-        }
+        if i == 0 { return None; }
         let prev_pl = &all_placements[i - 1];
         let curr_pl = &all_placements[i];
         let num_prev = prev_pl.len();
@@ -184,33 +195,35 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
         if any_skips { Some(table) } else { None }
     }).collect();
 
-    // Find where trailing 1x1 pieces start (they're sorted last = most placements).
     let single_cell_start = (0..n)
         .rposition(|i| pieces[order[i]].cell_count() != 1)
         .map(|i| i + 1)
         .unwrap_or(0);
 
     let m = board.m();
-
     let data = precompute::build_solver_data(
-        &board,
-        pieces,
-        &order,
-        all_placements,
-        skip_tables,
-        single_cell_start,
-        h,
-        w,
-        m,
+        &board, pieces, &order, all_placements, skip_tables,
+        single_cell_start, h, w, m,
     );
 
+    (board, order, data)
+}
+
+/// Serial backtrack with pre-built data.
+fn run_serial(
+    board: &crate::core::board::Board,
+    order: &[usize],
+    data: &SolverData,
+    config: &PruningConfig,
+) -> SolveResult {
+    let n = data.all_placements.len();
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
 
     let found = backtrack::backtrack(
-        &board,
+        board,
         prune::hit_count::HitCounter::new(),
-        &data,
+        data,
         0,
         usize::MAX,
         &mut sorted_solution,
@@ -219,7 +232,6 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     );
 
     let solution = if found {
-        // Map solution back to original piece order.
         let mut solution = vec![(0, 0); n];
         for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
             solution[order[sorted_idx]] = (row, col);
@@ -237,84 +249,22 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     }
 }
 
-fn solve_with_config_parallel(
-    game: &Game, config: &PruningConfig, exhaustive: bool,
+/// Kept for tests that call it directly.
+pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
+    let (board, order, data) = prepare_solver(game, config);
+    run_serial(&board, &order, &data, config)
+}
+
+/// Parallel backtrack with pre-built data.
+fn run_parallel(
+    board: &crate::core::board::Board,
+    order: &[usize],
+    data: &SolverData,
+    config: &PruningConfig,
+    exhaustive: bool,
 ) -> SolveResult {
-    eprintln!("parallel: n={} area={}", game.pieces().len(), game.board().height() as usize * game.board().width() as usize);
-    let board = game.board().clone();
-    let pieces = game.pieces();
-    let h = board.height();
-    let w = board.width();
+    let n = data.all_placements.len();
 
-    // Build (original_index, placements) and sort: fewer placements first.
-    let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
-        .collect();
-    indexed.sort_by(|(i, a_pl), (j, b_pl)| {
-        a_pl.len()
-            .cmp(&b_pl.len())
-            .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
-            .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
-            .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
-    });
-
-    let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-    let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
-        indexed.into_iter().map(|(_, p)| p).collect();
-
-    let n = pieces.len();
-
-    let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
-        if i == 0 {
-            return None;
-        }
-        let prev_pl = &all_placements[i - 1];
-        let curr_pl = &all_placements[i];
-        let num_prev = prev_pl.len();
-        let num_curr = curr_pl.len();
-        let mut table = vec![false; num_prev * num_curr];
-        let mut seen = std::collections::HashSet::new();
-        let mut any_skips = false;
-        for a in 0..num_prev {
-            let mask_a = prev_pl[a].2;
-            for b in 0..num_curr {
-                let mask_b = curr_pl[b].2;
-                let key = (mask_a & mask_b, mask_a ^ mask_b);
-                if !seen.insert(key) {
-                    table[a * num_curr + b] = true;
-                    any_skips = true;
-                }
-            }
-        }
-        if any_skips { Some(table) } else { None }
-    }).collect();
-
-    let single_cell_start = (0..n)
-        .rposition(|i| pieces[order[i]].cell_count() != 1)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-
-    let m = board.m();
-
-    // Build solver data first -- we need it for pruning during combo enumeration.
-    let t0 = std::time::Instant::now();
-    let data = precompute::build_solver_data(
-        &board,
-        pieces,
-        &order,
-        all_placements,
-        skip_tables,
-        single_cell_start,
-        h,
-        w,
-        m,
-    );
-    eprintln!("precompute: {:.3?}", t0.elapsed());
-
-    // Seed the work queue with a single root task.
-    // Budget-based splitting will naturally generate work for idle threads.
     let wq = backtrack::WorkQueue::new();
     wq.push(backtrack::StealableTask {
         board: board.clone(),
@@ -336,7 +286,6 @@ fn solve_with_config_parallel(
     let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
     let workers_alive = std::sync::atomic::AtomicUsize::new(num_threads);
 
-    // Compute total naive search space for display.
     let total_space: f64 = data.all_placements.iter()
         .map(|p| p.len() as f64)
         .product();
@@ -345,7 +294,6 @@ fn solve_with_config_parallel(
     let solve_start = std::time::Instant::now();
 
     std::thread::scope(|s| {
-        // Spawn progress reporter thread.
         s.spawn(|| {
             let bar_width = 30;
             loop {
@@ -364,7 +312,7 @@ fn solve_with_config_parallel(
                 let nodes_str = format_count(nodes_so_far);
                 eprint!("\r\x1b[K[{}] {:.1}%  {}  {:.1}s", bar, pct, nodes_str, elapsed);
             }
-            eprint!("\r\x1b[K"); // clear progress line
+            eprint!("\r\x1b[K");
         });
 
         for _ in 0..num_threads {
@@ -375,7 +323,6 @@ fn solve_with_config_parallel(
                 loop {
                     if abort.load(Ordering::Relaxed) { break; }
 
-                    // Try non-blocking pop first, then blocking wait.
                     let task = wq.pop().or_else(|| {
                         idle_count.fetch_add(1, Ordering::Relaxed);
                         let t = wq.wait_for_task(&abort, &active_count);
@@ -384,7 +331,7 @@ fn solve_with_config_parallel(
                     });
                     let task = match task {
                         Some(t) => t,
-                        None => break, // terminated
+                        None => break,
                     };
                     active_count.fetch_add(1, Ordering::SeqCst);
 
@@ -395,7 +342,7 @@ fn solve_with_config_parallel(
                     let found = backtrack::backtrack_stealing(
                         &task.board,
                         task.hits,
-                        &data,
+                        data,
                         task.depth,
                         task.prev_placement,
                         &mut solution,

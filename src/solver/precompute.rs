@@ -547,7 +547,8 @@ pub(crate) fn build_solver_data(
     let subset_prune = super::prune::subset::SubsetPrune { checks: subset_checks };
     let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
     let subgame_prune = super::prune::subgame::SubgamePrune::precompute(board, pieces, order);
-    let hit_count_threshold = super::prune::hit_count::precompute_threshold(&all_placements);
+    let hit_count_thresholds = super::prune::hit_count::precompute_thresholds(&all_placements);
+    let hit_count_threshold_val = hit_count_thresholds.last().copied().unwrap_or(0);
 
     SolverData {
         all_placements,
@@ -558,7 +559,8 @@ pub(crate) fn build_solver_data(
         subset_prune,
         weight_tuple_prune,
         subgame_prune,
-        hit_count_threshold,
+        hit_count_threshold: std::sync::atomic::AtomicU8::new(hit_count_threshold_val),
+        hit_count_thresholds,
         suffix_coverage,
         skip_tables,
         single_cell_start,
