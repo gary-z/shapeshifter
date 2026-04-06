@@ -106,7 +106,6 @@ pub(crate) struct SolverData {
     pub(crate) subset_prune: prune::subset::SubsetPrune,
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
     pub(crate) subgame_prune: prune::subgame::SubgamePrune,
-    pub(crate) region_budget_prune: prune::region_budget::RegionBudgetPrune,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,

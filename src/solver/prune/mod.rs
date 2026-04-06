@@ -10,7 +10,6 @@
 pub(crate) mod jaggedness;
 pub(crate) mod line_family;
 pub(crate) mod parity;
-pub(crate) mod region_budget;
 pub(crate) mod subgame;
 pub(crate) mod subset;
 pub(crate) mod total_deficit;
