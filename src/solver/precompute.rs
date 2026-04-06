@@ -547,6 +547,9 @@ pub(crate) fn build_solver_data(
     let subset_prune = super::prune::subset::SubsetPrune { checks: subset_checks };
     let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
     let subgame_prune = super::prune::subgame::SubgamePrune::precompute(board, pieces, order);
+    let region_budget_prune = super::prune::region_budget::RegionBudgetPrune::precompute(
+        board, pieces, order, &all_placements, h, w, m,
+    );
 
     SolverData {
         all_placements,
@@ -557,6 +560,7 @@ pub(crate) fn build_solver_data(
         subset_prune,
         weight_tuple_prune,
         subgame_prune,
+        region_budget_prune,
         suffix_coverage,
         skip_tables,
         single_cell_start,
