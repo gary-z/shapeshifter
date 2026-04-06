@@ -116,6 +116,82 @@ def solve_ilp(puzzle_path):
             prob += gh == lpSum(group_hits)
             prob += gh == (group_target % modulo) + modulo * gm
 
+    # --- Row subgame constraints ---
+    # For each row, total piece-cell hits must cover the row's total deficit mod M.
+    for r in range(rows):
+        row_deficit = sum(board[r][c] for c in range(cols))
+        row_hits = []
+        for i, piece in enumerate(pieces):
+            ph, pw = len(piece), len(piece[0])
+            for j, (pr, pc) in enumerate(placements[i]):
+                # How many cells of this piece land in row r?
+                if pr <= r < pr + ph:
+                    count = sum(1 for dc in range(pw) if piece[r - pr][dc] == 1)
+                    if count > 0:
+                        row_hits.append(count * use[i][j])
+        if row_hits:
+            max_val = n * 25
+            rh = LpVariable(f"rh_{r}", 0, max_val, cat="Integer")
+            rm = LpVariable(f"rm_{r}", 0, max_val // modulo + 1, cat="Integer")
+            prob += rh == lpSum(row_hits)
+            prob += rh - row_deficit == rm * modulo
+
+    # --- Column subgame constraints ---
+    for c in range(cols):
+        col_deficit = sum(board[r][c] for r in range(rows))
+        col_hits = []
+        for i, piece in enumerate(pieces):
+            ph, pw = len(piece), len(piece[0])
+            for j, (pr, pc) in enumerate(placements[i]):
+                if pc <= c < pc + pw:
+                    count = sum(1 for dr in range(ph) if piece[dr][c - pc] == 1)
+                    if count > 0:
+                        col_hits.append(count * use[i][j])
+        if col_hits:
+            max_val = n * 25
+            ch = LpVariable(f"ch_{c}", 0, max_val, cat="Integer")
+            cm = LpVariable(f"cm_{c}", 0, max_val // modulo + 1, cat="Integer")
+            prob += ch == lpSum(col_hits)
+            prob += ch - col_deficit == cm * modulo
+
+    # --- Diagonal subgame constraints (disabled — too many aux variables for CBC) ---
+    if False:
+      for d in range(rows + cols - 1):
+        diag_deficit = sum(board[r][c] for r in range(rows) for c in range(cols) if r - c + cols - 1 == d)
+        diag_hits = []
+        for i, piece in enumerate(pieces):
+            ph, pw = len(piece), len(piece[0])
+            for j, (pr, pc) in enumerate(placements[i]):
+                count = sum(1 for dr in range(ph) for dc in range(pw)
+                           if piece[dr][dc] == 1 and (pr + dr) - (pc + dc) + cols - 1 == d)
+                if count > 0:
+                    diag_hits.append(count * use[i][j])
+        if diag_hits:
+            max_val = n * 25
+            dh = LpVariable(f"dh_{d}", 0, max_val, cat="Integer")
+            dm = LpVariable(f"dm_{d}", 0, max_val // modulo + 1, cat="Integer")
+            prob += dh == lpSum(diag_hits)
+            prob += dh - diag_deficit == dm * modulo
+
+    # --- Anti-diagonal subgame constraints (disabled) ---
+    if False:
+      for d in range(rows + cols - 1):
+        adiag_deficit = sum(board[r][c] for r in range(rows) for c in range(cols) if r + c == d)
+        adiag_hits = []
+        for i, piece in enumerate(pieces):
+            ph, pw = len(piece), len(piece[0])
+            for j, (pr, pc) in enumerate(placements[i]):
+                count = sum(1 for dr in range(ph) for dc in range(pw)
+                           if piece[dr][dc] == 1 and (pr + dr) + (pc + dc) == d)
+                if count > 0:
+                    adiag_hits.append(count * use[i][j])
+        if adiag_hits:
+            max_val = n * 25
+            ah = LpVariable(f"ah_{d}", 0, max_val, cat="Integer")
+            am = LpVariable(f"am_{d}", 0, max_val // modulo + 1, cat="Integer")
+            prob += ah == lpSum(adiag_hits)
+            prob += ah - adiag_deficit == am * modulo
+
     # Solve.
     start = _time.time()
     solver = PULP_CBC_CMD(msg=0, threads=32)
