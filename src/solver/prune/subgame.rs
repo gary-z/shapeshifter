@@ -1,15 +1,12 @@
-//! Subgame pruning via placement filtering.
+//! Subgame pruning.
 //!
-//! For the current piece, tries each 1D placement on both the row and column
-//! subgames. Returns bitmasks of valid row/col positions. The 2D backtracker
-//! skips placements at invalid (row, col) combinations.
-//!
-//! Sound with wrapping — the subgame wrapping model mirrors the full game's
-//! modular arithmetic (see subgame/DESIGN.md proof).
+//! Projects the 2D board into 1D row and column subgames. If either
+//! subgame is infeasible, the full game is provably unsolvable.
+//! Only sound when remaining_piece_cells == total_deficit (no wrapping).
 
 use crate::core::board::Board;
 use crate::subgame::data::SubgameData;
-use crate::subgame::state::SubgameState;
+use crate::subgame::generate::{board_row_deficits, board_col_deficits};
 
 /// Subgame pruning data.
 pub(crate) struct SubgamePrune {
@@ -26,28 +23,18 @@ impl SubgamePrune {
         }
     }
 
-    /// Get valid row and column positions for the piece at `piece_idx`.
-    /// Uses precomputed checks (no backtracking, no budget).
-    /// Returns (valid_rows, valid_cols) bitmasks.
+    /// Check subgame feasibility. Returns false to prune.
+    /// Only sound when remaining_bits == total_deficit (no wrapping).
     #[inline(always)]
-    pub fn valid_positions(
-        &self,
-        sg_state: &SubgameState,
-        piece_idx: usize,
-    ) -> (u16, u16) {
-        let valid_rows = self.data.row_prune.valid_positions(
-            sg_state.row_board(), piece_idx, &self.data.row_placements,
-        );
-        if valid_rows == 0 {
-            return (0, 0); // no valid rows → skip column check entirely
+    pub fn try_prune(&self, board: &Board, piece_idx: usize, remaining_bits: u32) -> bool {
+        if remaining_bits != board.total_deficit() {
+            return true; // wrapping possible — can't prune
         }
-        let valid_cols = self.data.col_prune.valid_positions(
-            sg_state.col_board(), piece_idx, &self.data.col_placements,
-        );
-        if valid_cols == 0 {
-            return (0, 0);
-        }
-        (valid_rows, valid_cols)
+        let row_board = board_row_deficits(board);
+        let col_board = board_col_deficits(board);
+        let (feasible, sg_nodes) = self.data.check_feasible(row_board, col_board, piece_idx);
+        self.nodes.fetch_add(sg_nodes, std::sync::atomic::Ordering::Relaxed);
+        feasible
     }
 
     /// Total subgame nodes visited across all checks.
@@ -63,17 +50,29 @@ mod tests {
     use crate::core::piece::Piece;
 
     #[test]
-    fn test_valid_positions_feasible() {
+    fn test_try_prune_solved_board() {
+        let board = Board::new_solved(3, 3, 2);
+        let p = Piece::from_grid(&[&[true]]);
+        let pieces = vec![p];
+        let order = vec![0];
+        let sp = SubgamePrune::precompute(&board, &pieces, &order);
+        // Solved board, 1 remaining piece cell, deficit=0, remaining_bits=1 != 0
+        // → wrapping guard fires, returns true (skip check)
+        assert!(sp.try_prune(&board, 0, 1));
+    }
+
+    #[test]
+    fn test_try_prune_no_wrapping() {
+        // 3x3 M=2, all cells at deficit 1 → total_deficit=9
+        // 9 pieces of 1 cell each → remaining_bits=9=total_deficit, no wrapping
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
         let p = Piece::from_grid(&[&[true]]);
         let pieces: Vec<Piece> = (0..9).map(|_| p.clone()).collect();
         let order: Vec<usize> = (0..9).collect();
         let sp = SubgamePrune::precompute(&board, &pieces, &order);
-        let sg = SubgameState::new(&sp.data);
-        let (vr, vc) = sp.valid_positions(&sg, 0);
-        // All positions should be valid for 1x1 piece on uniform board
-        assert!(vr != 0);
-        assert!(vc != 0);
+
+        // Should be feasible — place one piece per cell
+        assert!(sp.try_prune(&board, 0, 9));
     }
 }
