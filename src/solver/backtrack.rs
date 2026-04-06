@@ -8,21 +8,30 @@ use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
 /// Sort placements by: primary = fewer zero-deficit cells hit,
-/// secondary = higher expected-need score (per-depth).
-/// Returns the sorted order in `order[0..pl_len]`.
+/// secondary = higher total deficit of covered cells.
+/// Both computed cheaply via bitboard popcount.
 fn sort_placements(
+    board: &Board,
+    m: u8,
     placements: &[(usize, usize, Bitboard)],
-    zero_plane: Bitboard,
-    need_scores: &[u8],
     order: &mut [u8; 196],
 ) {
     let pl_len = placements.len();
+    let zero_plane = board.plane(0);
     let mut keys = [0u16; 196];
     for i in 0..pl_len {
-        let zeros = (placements[i].2 & zero_plane).count_ones() as u16;
-        let need = need_scores.get(i).copied().unwrap_or(0) as u16;
-        keys[i] = zeros * 256 + (255 - need);
+        let mask = placements[i].2;
+        let zeros = (mask & zero_plane).count_ones() as u16;
+        // Sum of deficit values for covered cells: sum_d(d * popcount(mask & plane[d]))
+        let mut deficit_sum = 0u16;
+        for d in 1..m {
+            deficit_sum += d as u16 * (mask & board.plane(d)).count_ones() as u16;
+        }
+        // Primary: fewer zeros (lower = better). Secondary: higher deficit sum (lower key = better).
+        // Composite: zeros * 256 + (255 - deficit_sum.min(255))
+        keys[i] = zeros * 256 + (255 - deficit_sum.min(255));
     }
+    // Counting sort on primary (zeros), insertion sort within buckets.
     let mut counts = [0u8; 26];
     for i in 0..pl_len { counts[(keys[i] >> 8) as usize] += 1; }
     let mut offsets = [0u8; 26];
@@ -128,7 +137,7 @@ macro_rules! define_backtrack {
 
             let pl_len = placements.len();
             let mut order = [0u8; 196];
-            sort_placements(placements, board.plane(0), &data.placement_need[piece_idx], &mut order);
+            sort_placements(board, data.m, placements, &mut order);
 
             let board_snapshot = *board;
             for oi in 0..pl_len {
@@ -267,7 +276,7 @@ fn build_search_frame(
     };
 
     let mut order = [0u8; 196];
-    sort_placements(placements, board.plane(0), &data.placement_need[piece_idx], &mut order);
+    sort_placements(board, data.m, placements, &mut order);
 
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {

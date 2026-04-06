@@ -548,67 +548,6 @@ pub(crate) fn build_solver_data(
     let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
     let subgame_prune = super::prune::subgame::SubgamePrune::precompute(board, pieces, order);
 
-    // Compute per-cell per-depth expected hits from remaining pieces (suffix).
-    // expected_suffix[d][cell] = E[hits on cell from pieces d..n] under uniform placement.
-    // Then score each placement at depth d by the remaining expected need.
-    let placement_need = {
-        let area = bh * bw;
-        let m_f = m as f64;
-
-        // Per-piece contribution: for each cell, probability of being hit by piece i.
-        let mut piece_contrib = vec![vec![0.0f64; area]; n];
-        for i in 0..n {
-            let n_pl = all_placements[i].len() as f64;
-            if n_pl == 0.0 { continue; }
-            let piece = &pieces[order[i]];
-            let ph = piece.height() as usize;
-            let pw = piece.width() as usize;
-            for &(pr, pc, _) in &all_placements[i] {
-                for dr in 0..ph {
-                    for dc in 0..pw {
-                        if piece.shape().get_bit((dr * 15 + dc) as u32) {
-                            piece_contrib[i][(pr + dr) * bw + (pc + dc)] += 1.0 / n_pl;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Build suffix expected hits: expected_suffix[d] = sum of piece_contrib[d..n].
-        let mut suffix_expected = vec![vec![0.0f64; area]; n + 1];
-        for d in (0..n).rev() {
-            for c in 0..area {
-                suffix_expected[d][c] = suffix_expected[d + 1][c] + piece_contrib[d][c];
-            }
-        }
-
-        // For each depth d and each placement of piece d, compute need score:
-        // For each covered cell: remaining_need = likely_total_from_remaining - current_value
-        // likely_total = v + round((E_suffix - v) / M) * M, clamped >= v.
-        // Placement score = sum of likely_total for covered cells.
-        all_placements.iter().enumerate().map(|(d, pls)| {
-            let piece = &pieces[order[d]];
-            let ph = piece.height() as usize;
-            let pw = piece.width() as usize;
-            pls.iter().map(|&(pr, pc, _)| {
-                let mut score = 0u32;
-                for dr in 0..ph {
-                    for dc in 0..pw {
-                        if piece.shape().get_bit((dr * 15 + dc) as u32) {
-                            let idx = (pr + dr) * bw + (pc + dc);
-                            let v = board.get(pr + dr, pc + dc) as f64;
-                            let e = suffix_expected[d][idx];
-                            let k = ((e - v) / m_f).round().max(0.0);
-                            let likely = v + k * m_f;
-                            score += likely as u32;
-                        }
-                    }
-                }
-                score.min(255) as u8
-            }).collect::<Vec<u8>>()
-        }).collect::<Vec<Vec<u8>>>()
-    };
-
     SolverData {
         all_placements,
         total_deficit_prune,
@@ -618,7 +557,6 @@ pub(crate) fn build_solver_data(
         subset_prune,
         weight_tuple_prune,
         subgame_prune,
-        placement_need,
         suffix_coverage,
         skip_tables,
         single_cell_start,
