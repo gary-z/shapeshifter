@@ -38,9 +38,15 @@ impl SubgamePrune {
         let valid_rows = self.data.row_prune.valid_positions(
             sg_state.row_board(), piece_idx, &self.data.row_placements,
         );
+        if valid_rows == 0 {
+            return (0, 0); // no valid rows → skip column check entirely
+        }
         let valid_cols = self.data.col_prune.valid_positions(
             sg_state.col_board(), piece_idx, &self.data.col_placements,
         );
+        if valid_cols == 0 {
+            return (0, 0);
+        }
         (valid_rows, valid_cols)
     }
 

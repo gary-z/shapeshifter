@@ -80,7 +80,9 @@ macro_rules! define_backtrack {
 
             // Subgame placement filter.
             let (sg_valid_rows, sg_valid_cols) = if config.subgame {
-                data.subgame_prune.valid_positions(&sg_state, piece_idx)
+                let v = data.subgame_prune.valid_positions(&sg_state, piece_idx);
+                if v.0 == 0 || v.1 == 0 { return false; } // no valid placements
+                v
             } else {
                 (u16::MAX, u16::MAX)
             };
@@ -256,7 +258,11 @@ fn build_search_frame(
     let pl_len = placements.len();
 
     let (sg_valid_rows, sg_valid_cols) = if config.subgame {
-        data.subgame_prune.valid_positions(&sg_state, piece_idx)
+        let v = data.subgame_prune.valid_positions(&sg_state, piece_idx);
+        if v.0 == 0 || v.1 == 0 {
+            return SearchFrame { board: board.clone(), sg_state, piece_idx, placements: vec![], cursor: 0 };
+        }
+        v
     } else {
         (u16::MAX, u16::MAX)
     };
