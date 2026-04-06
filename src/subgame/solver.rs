@@ -352,11 +352,26 @@ impl SubgameSubsetReachability {
 /// Built once during solver precomputation. Provides fast feasibility checks
 /// that use all subgame pruning techniques (count-sat, parity, subset SAT,
 /// endgame) without per-call precomputation overhead.
+/// Precomputed exact feasibility for states reachable from the initial board.
+/// Built by BFS-ing the subgame tree during precomputation.
+struct FeasibilityTable {
+    /// Per-depth maps: board_key → feasible.
+    tables: Vec<std::collections::HashMap<[u16; 16], bool>>,
+}
+
+impl FeasibilityTable {
+    fn empty() -> Self {
+        Self { tables: vec![] }
+    }
+}
+
 pub struct SubgameAxisPrune {
     max_contrib_suffix: Vec<u16x16>,
     remaining_cells: Vec<u32>,
     parity_partitions: Vec<SubgameParityPartition>,
     subset_checks: Vec<SubgameSubsetReachability>,
+    /// Exact feasibility for states reachable from initial board.
+    feasibility_table: FeasibilityTable,
     /// `skip_tables[i]` = Some(table) if pieces i-1 and i have redundant
     /// orderings. `table[prev_pl * num_curr + curr_pl]` = true to skip.
     skip_tables: Vec<Option<Vec<bool>>>,
@@ -383,6 +398,7 @@ impl SubgameAxisPrune {
             remaining_cells: vec![0],
             parity_partitions: vec![],
             subset_checks: vec![],
+            feasibility_table: FeasibilityTable::empty(),
             skip_tables: vec![],
             prefix_max: vec![[0; 16]],
             suffix_max: vec![[0; 16]],
@@ -496,18 +512,87 @@ impl SubgameAxisPrune {
             }
         }
 
-        SubgameAxisPrune {
+        let mut result = SubgameAxisPrune {
             max_contrib_suffix,
             remaining_cells,
             parity_partitions,
             subset_checks,
+            feasibility_table: FeasibilityTable::empty(),
             skip_tables,
             prefix_max,
             suffix_max,
             board_len,
             endgame_start,
             skip_deficit_check: false,
+        };
+
+        result.feasibility_table = result.build_feasibility_table(game);
+        result
+    }
+
+    /// BFS the subgame tree from the initial board, solving each unique state.
+    fn build_feasibility_table(&self, game: &SubgameGame) -> FeasibilityTable {
+        use std::collections::{HashMap, HashSet};
+
+        let n = game.pieces().len();
+        let bl = self.board_len;
+        const STATE_CAP: usize = 100_000; // max states per depth
+
+        let board_key = |b: &SubgameBoard| -> [u16; 16] {
+            b.cells().to_array()
+        };
+
+        let mut tables: Vec<HashMap<[u16; 16], bool>> = Vec::with_capacity(n + 1);
+
+        // Depth 0: initial state is feasible by construction.
+        let mut depth0 = HashMap::new();
+        depth0.insert(board_key(game.board()), true);
+        tables.push(depth0);
+
+        let mut current_states: HashSet<[u16; 16]> = HashSet::new();
+        current_states.insert(board_key(game.board()));
+
+        let placements: Vec<Vec<(usize, u16x16)>> = (0..n)
+            .map(|i| game.placements_for(i).to_vec())
+            .collect();
+
+        for d in 0..n {
+            let mut next_states: HashSet<[u16; 16]> = HashSet::new();
+            let mut capped = false;
+
+            for state_key in &current_states {
+                let board = SubgameBoard::from_cells(&state_key[..bl], game.board().m());
+                for &(_pos, shifted) in &placements[d] {
+                    let mut new_board = board;
+                    new_board.apply_piece(shifted);
+                    let key = board_key(&new_board);
+                    next_states.insert(key);
+                    if next_states.len() > STATE_CAP {
+                        capped = true;
+                        break;
+                    }
+                }
+                if capped { break; }
+            }
+
+            if capped {
+                // Too many states — stop BFS. Remaining depths have no table.
+                break;
+            }
+
+            // Solve each unique state at depth d+1.
+            let mut depth_table = HashMap::with_capacity(next_states.len());
+            for key in &next_states {
+                let board = SubgameBoard::from_cells(&key[..bl], game.board().m());
+                let (feasible, _nodes) = self.check_feasible(board, d + 1, &placements);
+                depth_table.insert(key.clone(), feasible);
+            }
+
+            tables.push(depth_table);
+            current_states = next_states;
         }
+
+        FeasibilityTable { tables }
     }
 
     /// For each placement of piece `from_piece`, apply it to the board and
@@ -539,6 +624,18 @@ impl SubgameAxisPrune {
                 valid |= 1 << pos;
                 continue;
             }
+
+            // Feasibility table lookup: exact result from precomputed BFS.
+            if next < self.feasibility_table.tables.len() {
+                let key = new_board.cells().to_array();
+                if let Some(&feasible) = self.feasibility_table.tables[next].get(&key) {
+                    if feasible {
+                        valid |= 1 << pos;
+                    }
+                    continue; // exact answer, skip all other checks
+                }
+            }
+
             // Count-sat (SIMD, cheap).
             if next < self.max_contrib_suffix.len() {
                 let shortfall = new_board.cells().saturating_sub(self.max_contrib_suffix[next]);
