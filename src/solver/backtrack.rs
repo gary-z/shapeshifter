@@ -121,8 +121,6 @@ macro_rules! define_backtrack {
             config: &PruningConfig,
             $($abort_param: $abort_ty,)?
         ) -> bool {
-            nodes.set(nodes.get() + 1);
-
             $(
                 if nodes.get() & 1023 == 0 && $abort_param.load(Ordering::Relaxed) {
                     return false;
@@ -144,18 +142,21 @@ macro_rules! define_backtrack {
             let pl_len = placements.len();
             let mut order = [0u8; 196];
             sort_placements(board, data.m, placements, &mut order);
-            let (locked_mask, zero_plane, no_wrap) = filter_state(board, data, piece_idx, config);
+            let fs = filter_state(board, data, piece_idx, config);
 
             for oi in 0..pl_len {
                 let pl_idx = order[oi] as usize;
                 let (row, col, mask) = placements[pl_idx];
+                nodes.set(nodes.get() + 1);
 
-                if !filter_placement(board, data, piece_idx, pl_idx, mask, prev_placement,
-                    locked_mask, zero_plane, no_wrap) { continue; }
+                if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
+                    continue;
+                }
 
                 let mut board = *board;
                 board.apply_piece(mask);
 
+                // Hit-count update + check (inlined — cross-module call not reliably inlined).
                 let mut new_hits = hits;
                 new_hits.apply_piece(mask);
                 if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
@@ -205,6 +206,8 @@ struct SearchFrame {
     piece_idx: usize,
     placements: Vec<(usize, usize, usize, Bitboard)>,
     cursor: usize,
+    /// Placements filtered out by pre-placement checks (counted as nodes).
+    filtered_out: usize,
 }
 
 pub(crate) struct StealableTask {
@@ -273,19 +276,20 @@ fn build_search_frame(
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
 
-    let (locked_mask, zero_plane, no_wrap) = filter_state(board, data, piece_idx, config);
+    let fs = filter_state(board, data, piece_idx, config);
 
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];
-        if !filter_placement(board, data, piece_idx, pl_idx, mask, prev_placement, locked_mask, zero_plane, no_wrap) {
+        if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
             continue;
         }
         filtered.push((pl_idx, row, col, mask));
     }
 
-    SearchFrame { board: board.clone(), hits, piece_idx, placements: filtered, cursor: 0 }
+    let filtered_out = pl_len - filtered.len();
+    SearchFrame { board: board.clone(), hits, piece_idx, placements: filtered, cursor: 0, filtered_out }
 }
 
 #[inline]
@@ -380,8 +384,8 @@ pub(crate) fn backtrack_stealing(
         initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
     );
     let mut progress_local: f64 = 0.0;
-    let filtered_out = data.all_placements[start_depth].len() - first_frame.placements.len();
-    progress_local += filtered_out as f64 * data.progress_weights[start_depth];
+    progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
+    nodes.set(nodes.get() + first_frame.filtered_out as u64);
     stack.push(first_frame);
 
     let mut budget = SPLIT_BUDGET;
@@ -469,8 +473,8 @@ pub(crate) fn backtrack_stealing(
         let new_frame = build_search_frame(
             &board, new_hits, data, next_piece, next_prev, config,
         );
-        let filtered_out = data.all_placements[next_piece].len() - new_frame.placements.len();
-        progress_local += filtered_out as f64 * data.progress_weights[next_piece];
+        progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
+        nodes.set(nodes.get() + new_frame.filtered_out as u64);
         stack.push(new_frame);
     }
 

@@ -36,25 +36,23 @@ pub(crate) use super::prune::weight_tuple::WeightTupleReachability;
 
 /// Check if a placement should be skipped before applying it.
 /// Returns true if the placement is valid (keep it), false to skip.
-/// Checks: cell locking, wrapping impossibility, skip tables.
+/// Checks: cell locking, zero-hit budget (generalizes wrapping filter), skip tables.
 #[inline(always)]
 pub(crate) fn filter_placement(
-    board: &Board,
     data: &SolverData,
     piece_idx: usize,
     pl_idx: usize,
     mask: Bitboard,
     prev_placement: usize,
-    locked_mask: Bitboard,
-    zero_plane: Bitboard,
-    no_wrap: bool,
+    fs: &FilterState,
 ) -> bool {
     // Cell locking: skip placements that hit locked zero cells.
-    if !(mask & locked_mask).is_zero() { return false; }
+    if !(mask & fs.locked_mask).is_zero() { return false; }
 
-    // Wrapping impossibility: when remaining_bits == deficit, hitting a zero
-    // cell must wrap → deficit increases → guaranteed prune at next depth.
-    if no_wrap && !(mask & zero_plane).is_zero() { return false; }
+    // Zero-hit budget: if this placement hits more zero cells than the child
+    // can afford (would make child_deficit > child_remaining_bits), skip.
+    // Subsumes the wrapping filter (max_zeros_hit=0 when remaining_bits==deficit).
+    if (mask & fs.zero_plane).count_ones() > fs.max_zeros_hit { return false; }
 
     // Skip table: deduplicate equivalent consecutive placement pairs.
     if prev_placement < usize::MAX {
@@ -67,6 +65,16 @@ pub(crate) fn filter_placement(
     true
 }
 
+/// Per-node filter state, constant across all placements at this node.
+pub(crate) struct FilterState {
+    pub locked_mask: Bitboard,
+    pub zero_plane: Bitboard,
+    /// Max zero cells a placement can hit without making the child's deficit
+    /// exceed its remaining budget. Generalizes the wrapping filter:
+    /// when max_zeros_hit=0, no zero cell can be touched at all.
+    pub max_zeros_hit: u32,
+}
+
 /// Compute filter state that's constant across all placements at a node.
 #[inline(always)]
 pub(crate) fn filter_state(
@@ -74,15 +82,23 @@ pub(crate) fn filter_state(
     data: &SolverData,
     piece_idx: usize,
     config: &super::PruningConfig,
-) -> (Bitboard, Bitboard, bool) {
+) -> FilterState {
     let locked_mask = if config.cell_locking {
         board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
     } else {
         Bitboard::ZERO
     };
     let zero_plane = board.plane(0);
-    let no_wrap = data.total_deficit_prune.remaining_bits(piece_idx) == board.total_deficit();
-    (locked_mask, zero_plane, no_wrap)
+    // Max zeros a placement can hit: (remaining_bits - deficit) / M.
+    // Any placement exceeding this will fail the child's total_deficit check.
+    let rb = data.total_deficit_prune.remaining_bits(piece_idx);
+    let deficit = board.total_deficit();
+    let max_zeros_hit = if rb >= deficit {
+        (rb - deficit) / data.m as u32
+    } else {
+        0
+    };
+    FilterState { locked_mask, zero_plane, max_zeros_hit }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +138,9 @@ pub(crate) fn prune_node(
 ) -> bool {
     let rb = data.total_deficit_prune.remaining_bits(piece_idx);
 
+    // Note: total_deficit lower bound is also enforced by filter_placement's zero-hit
+    // budget (which guarantees the child won't exceed remaining_bits). This check is
+    // redundant for children of filtered parents but serves as a safety net.
     if config.total_deficit_global && !data.total_deficit_prune.try_prune(board, piece_idx) { return false; }
     if config.jaggedness && !data.jaggedness_prune.try_prune(board, piece_idx, data.m) { return false; }
     if config.total_deficit_rowcol && !data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m) { return false; }
