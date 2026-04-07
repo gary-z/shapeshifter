@@ -104,24 +104,9 @@ pub(crate) fn filter_state(
 // Phase 3: check_placement — after apply_piece
 // ---------------------------------------------------------------------------
 
-/// Update incremental state and check placement-level constraints.
-/// Returns the updated HitCounter, or None to prune this placement.
-/// Counts as a node visited either way.
-#[inline(always)]
-pub(crate) fn check_placement(
-    hits: HitCounter,
-    mask: Bitboard,
-    data: &SolverData,
-) -> Option<HitCounter> {
-    let mut new_hits = hits;
-    new_hits.apply_piece(mask);
-    let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
-    let t = data.mc_levels[idx].hit_count;
-    if t > 0 && new_hits.any_cell_gte(t) {
-        return None;
-    }
-    Some(new_hits)
-}
+// Phase 3 (check_placement) is inlined in the backtracker for performance.
+// It updates the HitCounter and checks the depth-aware hit count threshold
+// from mc_levels[mc_level_idx].max_hits_at_depth[piece_idx + 1].
 
 // ---------------------------------------------------------------------------
 // Phase 4: prune_node — per-node feasibility check

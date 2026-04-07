@@ -161,7 +161,7 @@ macro_rules! define_backtrack {
                 new_hits.apply_piece(mask);
                 if {
                     let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
-                    let t = data.mc_levels[idx].hit_count;
+                    let t = data.mc_levels[idx].max_hits_at_depth[piece_idx + 1];
                     t > 0 && new_hits.any_cell_gte(t)
                 } {
                     continue;
@@ -417,7 +417,7 @@ pub(crate) fn backtrack_stealing(
         new_hits.apply_piece(mask);
         if {
                     let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
-                    let t = data.mc_levels[idx].hit_count;
+                    let t = data.mc_levels[idx].max_hits_at_depth[piece_idx + 1];
                     t > 0 && new_hits.any_cell_gte(t)
                 } {
             progress_local += data.progress_weights[piece_idx];

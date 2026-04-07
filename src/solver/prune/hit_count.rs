@@ -76,8 +76,10 @@ impl HitCounter {
 /// Both hit-count and deficit bounds are computed jointly from the same
 /// subset of MC trials, so the stated confidence is exact.
 pub(crate) struct McLevel {
-    /// Max cell hit count allowed (prune when any cell >= this).
-    pub hit_count: u8,
+    /// Max cell hit count allowed at each depth k (index 0..=N).
+    /// Depth-aware: at depth 5 with 5 pieces placed, typical max hits is ~3,
+    /// much tighter than the global max of ~6-10.
+    pub max_hits_at_depth: Vec<u8>,
     /// Max total deficit allowed at each depth k (index 0..=N).
     pub max_deficit_at_depth: Vec<u32>,
 }
@@ -95,7 +97,7 @@ pub(crate) fn precompute_mc(
 ) -> Vec<McLevel> {
     let n = all_placements.len();
     if n == 0 || all_placements.iter().any(|p| p.is_empty()) {
-        return vec![McLevel { hit_count: 0, max_deficit_at_depth: vec![u32::MAX; n + 1] }];
+        return vec![McLevel { max_hits_at_depth: vec![0; n + 1], max_deficit_at_depth: vec![u32::MAX; n + 1] }];
     }
 
     // Precompute initial cell values for deficit tracking.
@@ -113,9 +115,9 @@ pub(crate) fn precompute_mc(
     let initial_deficit = board.total_deficit();
     let m32 = m as u32;
 
-    // Per-trial results: (max_cell_hits, deficit_trajectory).
+    // Per-trial results.
     struct TrialResult {
-        max_hits: u8,
+        max_hits_at_depth: Vec<u8>,  // max cell hit count at each depth
         deficit_at_depth: Vec<u32>,
     }
     let mut trials: Vec<TrialResult> = Vec::with_capacity(num_trials);
@@ -124,7 +126,10 @@ pub(crate) fn precompute_mc(
         let mut cell_hits = [0u8; 225];
         let mut deficit = initial_deficit;
         let mut deficit_at_depth = Vec::with_capacity(n + 1);
+        let mut max_hits_at_depth = Vec::with_capacity(n + 1);
+        let mut running_max_hits: u8 = 0;
         deficit_at_depth.push(deficit);
+        max_hits_at_depth.push(0);
 
         for placements in all_placements.iter() {
             let idx = rng.random_range(0..placements.len());
@@ -137,59 +142,69 @@ pub(crate) fn precompute_mc(
                 let current = (initial_value[bit] as u32 + m32 * 32 - cell_hits[bit] as u32) % m32;
                 if current == 0 { zeros_hit += 1; }
                 cell_hits[bit] = cell_hits[bit].saturating_add(1);
+                if cell_hits[bit] > running_max_hits {
+                    running_max_hits = cell_hits[bit];
+                }
                 bits.clear_bit(bit as u32);
             }
 
             deficit = deficit + m32 * zeros_hit - mask.count_ones();
             deficit_at_depth.push(deficit);
+            max_hits_at_depth.push(running_max_hits);
         }
 
-        let max_hits = cell_hits.iter().copied().max().unwrap_or(0);
-        trials.push(TrialResult { max_hits, deficit_at_depth });
+        trials.push(TrialResult { max_hits_at_depth, deficit_at_depth });
     }
 
-    // Sort trials by max_hits (ascending) for percentile subsetting.
-    trials.sort_unstable_by_key(|t| t.max_hits);
+    // Sort trials by final max_hits (ascending) for percentile subsetting.
+    trials.sort_unstable_by_key(|t| *t.max_hits_at_depth.last().unwrap());
 
     // For each percentile: take the bottom P% of trials,
-    // compute hit_count threshold and per-depth deficit bounds from that subset.
+    // compute per-depth hit and deficit bounds from that subset.
     let percentiles = [50usize, 75, 90, 95];
     let mut levels: Vec<McLevel> = Vec::new();
 
-    for &pct in &percentiles {
-        let count = (num_trials * pct / 100).max(1);
-        let subset = &trials[..count];
-
-        let hit_count = subset.last().unwrap().max_hits.saturating_add(1).min(31);
+    let build_level = |subset: &[TrialResult]| -> McLevel {
+        let mut max_hits = vec![0u8; n + 1];
         let mut max_deficit = vec![0u32; n + 1];
         for trial in subset {
+            for (k, &h) in trial.max_hits_at_depth.iter().enumerate() {
+                if h > max_hits[k] { max_hits[k] = h; }
+            }
             for (k, &d) in trial.deficit_at_depth.iter().enumerate() {
                 if d > max_deficit[k] { max_deficit[k] = d; }
             }
         }
+        // +1 safety margin on hit counts (same rationale as before).
+        for h in &mut max_hits {
+            *h = h.saturating_add(1).min(31);
+        }
+        McLevel { max_hits_at_depth: max_hits, max_deficit_at_depth: max_deficit }
+    };
 
-        let level = McLevel { hit_count, max_deficit_at_depth: max_deficit };
-        // Skip if identical to previous level.
-        if levels.last().map_or(true, |prev: &McLevel| prev.hit_count != level.hit_count) {
+    for &pct in &percentiles {
+        let count = (num_trials * pct / 100).max(1);
+        let level = build_level(&trials[..count]);
+        let final_hit = *level.max_hits_at_depth.last().unwrap();
+        if levels.last().map_or(true, |prev: &McLevel|
+            *prev.max_hits_at_depth.last().unwrap() != final_hit
+        ) {
             levels.push(level);
         }
     }
 
-    // Final: all trials (max observed + 1).
-    let hit_count = trials.last().unwrap().max_hits.saturating_add(1).min(31);
-    let mut max_deficit = vec![0u32; n + 1];
-    for trial in &trials {
-        for (k, &d) in trial.deficit_at_depth.iter().enumerate() {
-            if d > max_deficit[k] { max_deficit[k] = d; }
-        }
-    }
-    let final_level = McLevel { hit_count, max_deficit_at_depth: max_deficit };
-    if levels.last().map_or(true, |prev| prev.hit_count != final_level.hit_count) {
+    // Final: all trials.
+    let final_level = build_level(&trials);
+    let final_hit = *final_level.max_hits_at_depth.last().unwrap();
+    if levels.last().map_or(true, |prev|
+        *prev.max_hits_at_depth.last().unwrap() != final_hit
+    ) {
         levels.push(final_level);
     }
 
-    debug_assert!(levels.windows(2).all(|w| w[0].hit_count < w[1].hit_count),
-        "levels should have strictly increasing hit_count");
+    debug_assert!(levels.windows(2).all(|w|
+        w[0].max_hits_at_depth.last() < w[1].max_hits_at_depth.last()),
+        "levels should have strictly increasing final hit_count");
 
     levels
 }
