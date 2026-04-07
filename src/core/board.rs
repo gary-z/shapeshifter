@@ -140,28 +140,24 @@ impl Board {
     /// Apply a piece placement: decrement the deficit of each covered cell by 1 (mod M).
     /// A cell at deficit 0 wraps to M-1 (overshoot penalty).
     /// Each plane rotates: cells at deficit d move to deficit (d-1) mod M.
+    /// `piece_cells` is the popcount of `piece_mask` (precomputed to avoid per-call SIMD popcount).
     #[inline(always)]
-    pub fn apply_piece(&mut self, piece_mask: Bitboard) {
+    pub fn apply_piece_fast(&mut self, piece_mask: Bitboard, piece_cells: u32) {
         if self.m == 2 {
-            // M=2 fast path: toggling deficit 0↔1 is just XOR on both planes.
+            // M=2 fast path: XOR toggle + recompute deficit.
             self.planes[0] = self.planes[0] ^ piece_mask;
             self.planes[1] = self.planes[1] ^ piece_mask;
-            // For M=2, total_deficit = popcount(planes[1]).
             self.total_deficit = self.planes[1].count_ones();
             return;
         }
 
         let m = self.m as u32;
-        // Incremental total_deficit update:
-        // Cells at deficit 0 wrap to M-1 (penalty M-1); all others decrease deficit by 1.
-        // delta = M * popcount(plane[0] & mask) - popcount(mask)
+        // Incremental total_deficit: cells at 0 wrap to M-1 (cost M), all others -1.
         let zeros_hit = (self.planes[0] & piece_mask).count_ones();
-        self.total_deficit = self.total_deficit + m * zeros_hit - piece_mask.count_ones();
+        self.total_deficit = self.total_deficit + m * zeros_hit - piece_cells;
 
         let m = m as usize;
-        // Hoist the NOT outside the loop: compute the keep-mask once.
         let keep_mask = !piece_mask;
-        // Rotate down: deficit d → deficit d-1, with deficit 0 wrapping to M-1.
         let bottom = self.planes[0] & piece_mask;
         let mut i = 0;
         while i < m - 1 {
@@ -170,6 +166,12 @@ impl Board {
             i += 1;
         }
         self.planes[m - 1] = (self.planes[m - 1] & keep_mask) | bottom;
+    }
+
+    /// Apply a piece placement (convenience: computes piece_cells from mask).
+    #[inline(always)]
+    pub fn apply_piece(&mut self, piece_mask: Bitboard) {
+        self.apply_piece_fast(piece_mask, piece_mask.count_ones());
     }
 
     /// Undo a piece placement: restore the deficit of each covered cell (reverse of apply_piece).
