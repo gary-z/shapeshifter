@@ -103,8 +103,9 @@ pub(crate) struct SolverData {
     pub(crate) subset_prune: prune::subset::SubsetPrune,
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
     pub(crate) subgame_prune: prune::subgame::SubgamePrune,
-    pub(crate) hit_count_threshold: std::sync::atomic::AtomicU8,
-    pub(crate) hit_count_thresholds: Vec<u8>,
+    pub(crate) hit_count: prune::hit_count::HitCountData,
+    /// Current threshold level index into hit_count.levels, set by pipeline.
+    pub(crate) hit_count_level_idx: std::sync::atomic::AtomicUsize,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
@@ -121,12 +122,12 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool, subgame: bool) -> So
     config.subgame = subgame;
 
     let (board, order, data) = prepare_solver(game, &config);
-    let thresholds = data.hit_count_thresholds.clone();
+    let num_levels = data.hit_count.levels.len();
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
-    for &threshold in &thresholds {
-        data.hit_count_threshold.store(threshold, Ordering::Relaxed);
+    for level_idx in 0..num_levels.max(1) {
+        data.hit_count_level_idx.store(level_idx, Ordering::Relaxed);
         let result = if parallel {
             run_parallel(&board, &order, &data, &config, exhaustive)
         } else {
