@@ -24,7 +24,6 @@ struct TaskResult {
     board_desc: String,
     nodes: Option<u64>,
     elapsed_ms: Option<u64>,
-    sg_nodes: Option<u64>,
     status: String,
 }
 
@@ -47,7 +46,6 @@ fn run_task(
     timeout_secs: u64,
     parallel: bool,
     exhaustive: bool,
-    subgame: bool,
 ) -> TaskResult {
     let mut cmd = Command::new(solver_path);
     cmd.arg("--worker");
@@ -56,9 +54,6 @@ fn run_task(
     }
     if exhaustive {
         cmd.arg("--exhaustive");
-    }
-    if subgame {
-        cmd.arg("--subgame");
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -75,7 +70,6 @@ fn run_task(
                 board_desc: task.board_desc.clone(),
                 nodes: None,
                 elapsed_ms: None,
-                sg_nodes: None,
                 status: "ERROR".to_string(),
             };
         }
@@ -101,7 +95,6 @@ fn run_task(
                         let nodes = parts[0].parse().ok();
                         let elapsed_ms = parts[1].parse().ok();
                         let solved = parts[2] == "true";
-                        let sg_nodes = parts.get(3).and_then(|s| s.parse().ok());
                         return TaskResult {
                             level: task.level,
                             game_idx: task.game_idx,
@@ -109,7 +102,6 @@ fn run_task(
                             board_desc: task.board_desc.clone(),
                             nodes,
                             elapsed_ms,
-                            sg_nodes,
                             status: if solved { "OK" } else { "FAIL" }.to_string(),
                         };
                     }
@@ -122,7 +114,6 @@ fn run_task(
                 board_desc: task.board_desc.clone(),
                 nodes: None,
                 elapsed_ms: None,
-                sg_nodes: None,
                 status: "ERROR".to_string(),
             }
         }
@@ -136,7 +127,6 @@ fn run_task(
                 board_desc: task.board_desc.clone(),
                 nodes: None,
                 elapsed_ms: None,
-                sg_nodes: None,
                 status: "TIMEOUT".to_string(),
             }
         }
@@ -150,7 +140,6 @@ fn run_task(
                 board_desc: task.board_desc.clone(),
                 nodes: None,
                 elapsed_ms: None,
-                sg_nodes: None,
                 status: "ERROR".to_string(),
             }
         }
@@ -236,7 +225,6 @@ fn run_bench(
     max_parallel: usize,
     parallel: bool,
     exhaustive: bool,
-    subgame: bool,
     show_nodes_per_sec: bool,
 ) {
     let total = tasks.len();
@@ -261,7 +249,7 @@ fn run_bench(
                         None => break,
                     };
 
-                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive, subgame);
+                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive);
                     let _ = result_tx.send(r);
                 }
             });
@@ -277,10 +265,10 @@ fn run_bench(
             println!("{}", "-".repeat(80));
         } else {
             println!(
-                "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:>12} {:<8}",
-                "Level", "Game", "Pcs", "Board", "Nodes", "SG Nodes", "Time", "Result"
+                "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:<8}",
+                "Level", "Game", "Pcs", "Board", "Nodes", "Time", "Result"
             );
-            println!("{}", "-".repeat(80));
+            println!("{}", "-".repeat(70));
         }
 
         let mut results: Vec<TaskResult> = Vec::with_capacity(total);
@@ -313,10 +301,9 @@ fn run_bench(
                     r.status,
                 );
             } else {
-                let sg_str = r.sg_nodes.map(|n| n.to_string()).unwrap_or("-".to_string());
                 println!(
-                    "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:>12} {:<8}",
-                    r.level, r.game_idx, r.n_pieces, r.board_desc, nodes_str, sg_str, time_str, r.status,
+                    "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:<8}",
+                    r.level, r.game_idx, r.n_pieces, r.board_desc, nodes_str, time_str, r.status,
                 );
             }
 
@@ -372,7 +359,6 @@ fn print_usage() {
          Options:\n  \
            --parallel       Use parallel solver (each game gets all cores)\n  \
            --exhaustive     Explore full search tree (no early termination)\n  \
-           --subgame        Enable subgame pruning\n  \
            --timeout SECS   Timeout per game (default: 5 for simulated, 60 for historical)\n  \
            --games-per N    Games per level for simulated mode (default: 5)\n  \
            -h, --help       Show this help"
@@ -391,7 +377,6 @@ fn main() {
     let mut positional = Vec::new();
     let mut parallel = false;
     let mut exhaustive = false;
-    let mut subgame = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
 
@@ -400,7 +385,6 @@ fn main() {
         match args[i].as_str() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
-            "--subgame" => subgame = true,
             "--timeout" => {
                 i += 1;
                 timeout_secs = Some(args[i].parse().expect("invalid timeout"));
@@ -471,7 +455,6 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
-                subgame,
                 exhaustive,
             );
         }
@@ -505,7 +488,6 @@ fn main() {
                 max_parallel,
                 parallel,
                 exhaustive,
-                subgame,
                 false,
             );
         }

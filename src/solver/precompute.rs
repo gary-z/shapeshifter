@@ -2,15 +2,13 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 use crate::core::coverage::precompute_suffix_coverage;
 use crate::core::piece::Piece;
-use crate::subgame::data::SubgameData;
-
 use super::pruning::*;
 use super::SolverData;
 
 /// Build all precomputed data needed by the backtracking solver.
 ///
 /// This includes: suffix sums, line family construction, jaggedness masks,
-/// parity partitions, subset reachability, and subgame data.
+/// parity partitions, and subset reachability.
 pub(crate) fn build_solver_data(
     board: &Board,
     pieces: &[Piece],
@@ -542,11 +540,8 @@ pub(crate) fn build_solver_data(
         .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
         .collect();
 
-    // Build subgame data: row/col profiles, shifted lookup tables, and
-    // feasibility check data (placements, max_contrib_suffix, remaining_cells).
     let subset_prune = super::prune::subset::SubsetPrune { checks: subset_checks };
     let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
-    let subgame_prune = super::prune::subgame::SubgamePrune::precompute(board, pieces, order);
     let hit_count_thresholds = super::prune::hit_count::precompute_thresholds(&all_placements);
     let hit_count_threshold_val = hit_count_thresholds.last().copied().unwrap_or(0);
 
@@ -558,7 +553,6 @@ pub(crate) fn build_solver_data(
         parity_prune,
         subset_prune,
         weight_tuple_prune,
-        subgame_prune,
         hit_count_threshold: std::sync::atomic::AtomicU8::new(hit_count_threshold_val),
         hit_count_thresholds,
         suffix_coverage,

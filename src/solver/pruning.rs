@@ -148,6 +148,5 @@ pub(crate) fn prune_node(
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, data.m, rb) { return false; }
     if config.total_deficit_global && !data.subset_prune.try_prune(board, piece_idx) { return false; }
     if config.total_deficit_global && !data.weight_tuple_prune.try_prune(board, piece_idx) { return false; }
-    if config.subgame && !data.subgame_prune.try_prune(board, piece_idx, rb) { return false; }
     true
 }

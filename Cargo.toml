@@ -21,4 +21,3 @@ strip = true
 
 [features]
 debug_pruning = []
-bench_subgame_construct = []

@@ -31,8 +31,6 @@ pub type Solution = Vec<(usize, usize)>;
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
-    /// Total nodes visited in subgame feasibility checks.
-    pub subgame_nodes_visited: u64,
     /// Final progress fraction (0.0–1.0) of naive search space explored.
     /// Only meaningful for parallel solves; 0.0 for serial.
     pub progress: f64,
@@ -49,8 +47,6 @@ pub struct PruningConfig {
     pub jaggedness: bool,
     pub cell_locking: bool,
     pub single_cell_endgame: bool,
-    /// Subgame pruning: check row/col subgame feasibility via backtracking.
-    pub subgame: bool,
 }
 
 impl Default for PruningConfig {
@@ -64,7 +60,6 @@ impl Default for PruningConfig {
             jaggedness: true,
             cell_locking: true,
             single_cell_endgame: true,
-            subgame: false,
         }
     }
 }
@@ -81,7 +76,6 @@ impl PruningConfig {
             jaggedness: false,
             cell_locking: false,
             single_cell_endgame: false,
-            subgame: false,
         }
     }
 
@@ -102,7 +96,6 @@ pub(crate) struct SolverData {
     pub(crate) parity_prune: prune::parity::ParityPrune,
     pub(crate) subset_prune: prune::subset::SubsetPrune,
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
-    pub(crate) subgame_prune: prune::subgame::SubgamePrune,
     pub(crate) hit_count_threshold: std::sync::atomic::AtomicU8,
     pub(crate) hit_count_thresholds: Vec<u8>,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
@@ -116,9 +109,8 @@ pub(crate) struct SolverData {
 
 /// Main entry point. Tries progressively looser hit-count thresholds
 /// (p50, p75, p90, p95, max+1), reusing precomputed data across attempts.
-pub fn solve(game: &Game, parallel: bool, exhaustive: bool, subgame: bool) -> SolveResult {
-    let mut config = PruningConfig::default();
-    config.subgame = subgame;
+pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
+    let config = PruningConfig::default();
 
     let (board, order, data) = prepare_solver(game, &config);
     let thresholds = data.hit_count_thresholds.clone();
@@ -142,7 +134,6 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool, subgame: bool) -> So
     SolveResult {
         solution: None,
         nodes_visited: total_nodes,
-        subgame_nodes_visited: data.subgame_prune.total_nodes(),
         progress: last_progress,
     }
 }
@@ -244,7 +235,6 @@ fn run_serial(
     SolveResult {
         solution,
         nodes_visited: nodes.get(),
-        subgame_nodes_visited: data.subgame_prune.total_nodes(),
         progress: 0.0,
     }
 }
@@ -389,7 +379,6 @@ fn run_parallel(
     SolveResult {
         solution,
         nodes_visited,
-        subgame_nodes_visited: data.subgame_prune.total_nodes(),
         progress: final_progress,
     }
 }
@@ -416,7 +405,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 1);
         assert_eq!(sol[0], (0, 0));
         verify_solution(&game, &sol);
@@ -428,7 +417,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -439,7 +428,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game, false, false, false).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -449,7 +438,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 9);
         verify_solution(&game, &sol);
     }
@@ -461,7 +450,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 3);
         verify_solution(&game, &sol);
     }
@@ -473,7 +462,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game, false, false, false).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -484,7 +473,7 @@ mod tests {
         let big = Piece::from_grid(&[&[true, true], &[true, false]]); // L-shape, 3 cells
         let small = Piece::from_grid(&[&[true]]); // 1x1
         let game = Game::new(board, vec![big, small]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -493,7 +482,7 @@ mod tests {
     fn test_generated_game_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
         let game = crate::generate::generate_for_level(1, &mut rng).unwrap();
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), game.pieces().len());
         verify_solution(&game, &sol);
     }
@@ -502,7 +491,7 @@ mod tests {
     fn test_generated_level_5_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(123);
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         verify_solution(&game, &sol);
     }
 
@@ -513,7 +502,7 @@ mod tests {
         assert_eq!(board.total_deficit(), 9);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game, false, false, false).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -523,7 +512,7 @@ mod tests {
         let p0 = Piece::from_grid(&[&[true]]);
         let p1 = Piece::from_grid(&[&[true, true]]);
         let game = Game::new(board, vec![p0, p1]);
-        let sol = solve(&game, false, false, false).solution.unwrap();
+        let sol = solve(&game, false, false).solution.unwrap();
         assert_eq!(sol.len(), 2);
         verify_solution(&game, &sol);
     }
@@ -534,7 +523,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
         let game = Game::new(board, vec![piece]);
-        assert!(solve(&game, false, false, false).solution.is_none());
+        assert!(solve(&game, false, false).solution.is_none());
     }
 
     #[test]
@@ -542,7 +531,7 @@ mod tests {
         for level in [1, 5, 10, 20, 25, 30] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
             let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
-            let result = solve(&game, false, false, false);
+            let result = solve(&game, false, false);
             assert!(result.solution.is_some(), "level {level} should be solvable");
             verify_solution(&game, &result.solution.unwrap());
         }
@@ -587,7 +576,7 @@ mod tests {
                     let mut rng =
                         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                     let game = generate_game(&spec, &mut rng);
-                    let result = solve(&game, false, false, false);
+                    let result = solve(&game, false, false);
                     match result.solution {
                         None => Some(format!(
                             "FAIL: no solution found for M={} {}x{} pieces={} seed={}",
@@ -946,7 +935,7 @@ mod tests {
         let p1x2 = Piece::from_grid(&[&[true, true]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p1x2, p1x1, p1x1, p1x1]);
-        let result = solve(&game, false, false, false);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "pair-merge game should solve");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -966,7 +955,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game, false, false, false);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -985,7 +974,7 @@ mod tests {
         let p_l = Piece::from_grid(&[&[true, true], &[true, false]]);
         let p1x1 = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![p_l, p1x1, p1x1]);
-        let result = solve(&game, false, false, false);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some());
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -1006,7 +995,7 @@ mod tests {
                 };
                 let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
                 let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game, false, false, false);
+                let result = solve(&game, false, false);
                 if let Some(ref sol) = result.solution {
                     verify_solution(&game, sol);
                 }
@@ -1021,7 +1010,7 @@ mod tests {
         let board = Board::new_solved(3, 3, 2);
         let p = Piece::from_grid(&[&[true, true], &[true, false]]);
         let game = Game::new(board, vec![p, p, p, p]);
-        let result = solve(&game, false, false, false);
+        let result = solve(&game, false, false);
         assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
         verify_solution(&game, result.solution.as_ref().unwrap());
     }
@@ -1046,7 +1035,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "trivial_1_piece");
     }
@@ -1058,7 +1047,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "two_pieces");
     }
@@ -1070,7 +1059,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_none());
         assert_progress_complete(&result, "no_solution");
     }
@@ -1083,7 +1072,7 @@ mod tests {
         let big = Piece::from_grid(&[&[true, true], &[true, false]]);
         let small = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![big, small]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "multi_cell_pieces");
     }
@@ -1095,7 +1084,7 @@ mod tests {
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "m3");
     }
@@ -1107,7 +1096,7 @@ mod tests {
         for (level, seed) in [(1, 42u64), (2, 99), (3, 7), (5, 123)] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
             let game = generate_for_level(level, &mut rng).unwrap();
-            let result = solve(&game, true, true, false);
+            let result = solve(&game, true, true);
             assert!(result.solution.is_some(), "level {} seed {} unsolved", level, seed);
             assert_progress_complete(&result, &format!("generated_level_{}_seed_{}", level, seed));
         }
@@ -1120,7 +1109,7 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "all_single_cells");
     }
@@ -1132,88 +1121,9 @@ mod tests {
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true, true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let result = solve(&game, true, true, false);
+        let result = solve(&game, true, true);
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "duplicate_pieces");
-    }
-
-    #[test]
-    fn test_solve_with_subgame_pruning() {
-        // Solve a non-trivial puzzle with subgame pruning enabled.
-        // 4x4, M=2, board with some 1s.
-        let grid: &[&[u8]] = &[
-            &[1, 1, 0, 0],
-            &[1, 0, 1, 0],
-            &[0, 1, 0, 1],
-            &[0, 0, 1, 1],
-        ];
-        let board = Board::from_grid(grid, 2);
-        // 8 deficits → 8 single-cell pieces
-        let piece = Piece::from_grid(&[&[true]]);
-        let game = Game::new(board, vec![piece; 8]);
-
-        // With subgame pruning
-        let mut config_with = PruningConfig::default();
-        config_with.subgame = true;
-        let result_with = solve_with_config(&game, &config_with);
-        assert!(result_with.solution.is_some(), "should solve with subgame pruning");
-        verify_solution(&game, result_with.solution.as_ref().unwrap());
-
-        // Without subgame pruning (default)
-        let config_without = PruningConfig::default();
-        assert!(!config_without.subgame);
-        let result_without = solve_with_config(&game, &config_without);
-        assert!(result_without.solution.is_some(), "should solve without subgame pruning");
-        verify_solution(&game, result_without.solution.as_ref().unwrap());
-    }
-
-    #[test]
-    fn test_solve_with_subgame_pruning_multipiece() {
-        // L-shaped pieces on a 4x4 M=2 board.
-        let grid: &[&[u8]] = &[
-            &[1, 1, 1, 0],
-            &[1, 0, 0, 0],
-            &[0, 0, 0, 1],
-            &[0, 1, 1, 1],
-        ];
-        let board = Board::from_grid(grid, 2);
-        let l_piece = Piece::from_grid(&[&[true, true], &[true, false]]);
-        let r_piece = Piece::from_grid(&[&[false, true], &[true, true]]);
-        let p1 = Piece::from_grid(&[&[true]]);
-        let p2 = Piece::from_grid(&[&[true]]);
-        let game = Game::new(board, vec![l_piece, r_piece, p1, p2]);
-
-        let mut config = PruningConfig::default();
-        config.subgame = true;
-        let result = solve_with_config(&game, &config);
-        assert!(result.solution.is_some(), "should find a solution");
-        verify_solution(&game, result.solution.as_ref().unwrap());
-    }
-
-    #[test]
-    fn test_subgame_nodes_counted() {
-        // Verify subgame_nodes_visited is nonzero when subgame pruning is active.
-        // Use multi-cell pieces to force actual backtracking (not single_cell_endgame).
-        // 4x4 M=2: all 1s in top two rows → deficit=8, four dominoes = 8 cells.
-        let grid: &[&[u8]] = &[
-            &[1, 1, 1, 1],
-            &[1, 1, 1, 1],
-            &[0, 0, 0, 0],
-            &[0, 0, 0, 0],
-        ];
-        let board = Board::from_grid(grid, 2);
-        let domino_h = Piece::from_grid(&[&[true, true]]);
-        let domino_v = Piece::from_grid(&[&[true], &[true]]);
-        // Mix of horizontal and vertical dominoes to prevent all being identical
-        let game = Game::new(board, vec![domino_h, domino_h, domino_v, domino_v]);
-
-        let mut config = PruningConfig::default();
-        config.subgame = true;
-        let result = solve_with_config(&game, &config);
-        assert!(result.solution.is_some(), "should be solvable");
-        verify_solution(&game, result.solution.as_ref().unwrap());
-        // Subgame solver should have been invoked at least once during backtracking.
-        assert!(result.subgame_nodes_visited > 0, "expected subgame nodes > 0, got {}", result.subgame_nodes_visited);
     }
 
 }

@@ -15,7 +15,6 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
-    let mut subgame = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,7 +30,6 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
-            "--subgame" => subgame = true,
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: solve [puzzle.json] [OPTIONS]\n\n\
@@ -39,7 +37,6 @@ fn main() {
                      Options:\n  \
                        --parallel        Use parallel solver (all cores)\n  \
                        --exhaustive      Explore full search tree\n  \
-                       --subgame         Enable subgame pruning\n  \
                        --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
@@ -80,13 +77,12 @@ fn main() {
     }
 
     let start = Instant::now();
-    let result = solver::solve(&game, parallel, exhaustive, subgame);
+    let result = solver::solve(&game, parallel, exhaustive);
     let elapsed = start.elapsed();
 
     if worker {
-        // Compact output for benchmark harnesses: nodes elapsed_ms solved sg_nodes
         let solved = result.solution.is_some();
-        println!("{} {} {} {}", result.nodes_visited, elapsed.as_millis(), solved, result.subgame_nodes_visited);
+        println!("{} {} {}", result.nodes_visited, elapsed.as_millis(), solved);
         return;
     }
 
