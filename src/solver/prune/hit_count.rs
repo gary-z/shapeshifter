@@ -104,7 +104,11 @@ pub(crate) fn precompute_thresholds(
 
     trial_maxes.sort_unstable();
 
-    // Percentile thresholds: each is the value at that percentile + 1 for safety.
+    // Percentile thresholds: value at percentile + 1.
+    // threshold T prunes when any cell has hits >= T, allowing hits <= T-1.
+    // Adding 1 converts "p50 value = V" to "allow hits <= V", covering ≥ p50
+    // of the MC distribution. This ensures each pipeline level almost always
+    // contains the solution, so failed attempts rarely waste time.
     let percentiles = [50, 75, 90, 95];
     let mut thresholds: Vec<u8> = percentiles.iter().map(|&p| {
         let idx = (num_trials * p / 100).min(num_trials - 1);

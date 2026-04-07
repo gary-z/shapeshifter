@@ -1215,4 +1215,5 @@ mod tests {
         // Subgame solver should have been invoked at least once during backtracking.
         assert!(result.subgame_nodes_visited > 0, "expected subgame nodes > 0, got {}", result.subgame_nodes_visited);
     }
+
 }
