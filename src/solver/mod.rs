@@ -98,6 +98,8 @@ pub(crate) struct SolverData {
     pub(crate) weight_tuple_prune: prune::weight_tuple::WeightTuplePrune,
     pub(crate) hit_count_threshold: std::sync::atomic::AtomicU8,
     pub(crate) hit_count_thresholds: Vec<u8>,
+    /// MC-derived max total deficit at each depth. Index k = after placing k pieces.
+    pub(crate) max_deficit_at_depth: Vec<u32>,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,

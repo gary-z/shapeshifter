@@ -72,54 +72,90 @@ impl HitCounter {
     }
 }
 
-/// Run Monte Carlo to find per-cell hit count distribution across random solutions.
-/// Returns thresholds at percentiles [50, 75, 90, 95, max+1] for progressive solving.
-/// Returns empty vec if pruning should be disabled.
-pub(crate) fn precompute_thresholds(
-    all_placements: &[Vec<(usize, usize, Bitboard)>],
-) -> Vec<u8> {
-    let n = all_placements.len();
-    if n == 0 { return vec![]; }
-    if all_placements.iter().any(|p| p.is_empty()) { return vec![]; }
+/// Results of Monte Carlo precomputation.
+pub(crate) struct McResults {
+    /// Progressive hit-count thresholds [p50+1, p75+1, p90+1, p95+1, max+1].
+    pub hit_count_thresholds: Vec<u8>,
+    /// Max total deficit observed at each depth (after placing k pieces).
+    /// Index k = after placing pieces 0..k-1. Length = n+1.
+    pub max_deficit_at_depth: Vec<u32>,
+}
 
-    let num_trials = 10_000;
+/// Run Monte Carlo to find per-cell hit count distribution and per-depth
+/// deficit bounds across random solutions.
+pub(crate) fn precompute_mc(
+    board: &crate::core::board::Board,
+    all_placements: &[Vec<(usize, usize, Bitboard)>],
+    m: u8,
+) -> McResults {
+    let n = all_placements.len();
+    if n == 0 || all_placements.iter().any(|p| p.is_empty()) {
+        return McResults {
+            hit_count_thresholds: vec![],
+            max_deficit_at_depth: vec![0; n + 1],
+        };
+    }
+
+    // Precompute initial cell values for deficit tracking.
+    let h = board.height() as usize;
+    let w = board.width() as usize;
+    let mut initial_value = [0u8; 225];
+    for r in 0..h {
+        for c in 0..w {
+            initial_value[r * 15 + c] = board.get(r, c);
+        }
+    }
+
+    let num_trials: usize = 10_000;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5348_4150_4553_4849);
     let mut trial_maxes = Vec::with_capacity(num_trials);
+    let mut max_deficit = vec![0u32; n + 1];
+    let initial_deficit = board.total_deficit();
+    let m32 = m as u32;
 
     for _ in 0..num_trials {
         let mut cell_hits = [0u8; 225];
-        for placements in all_placements {
+        let mut deficit = initial_deficit;
+
+        if deficit > max_deficit[0] { max_deficit[0] = deficit; }
+
+        for (k, placements) in all_placements.iter().enumerate() {
             let idx = rng.random_range(0..placements.len());
             let mask = placements[idx].2;
-            let mut m = mask;
-            while !m.is_zero() {
-                let bit = m.lowest_set_bit();
-                cell_hits[bit as usize] = cell_hits[bit as usize].saturating_add(1);
-                m.clear_bit(bit);
+
+            // For each cell in the mask: count zeros_hit and update cell_hits.
+            let mut bits = mask;
+            let mut zeros_hit = 0u32;
+            while !bits.is_zero() {
+                let bit = bits.lowest_set_bit() as usize;
+                // Current cell value = (initial - hits_so_far) mod M.
+                let current = (initial_value[bit] as u32 + m32 * 32 - cell_hits[bit] as u32) % m32;
+                if current == 0 { zeros_hit += 1; }
+                cell_hits[bit] = cell_hits[bit].saturating_add(1);
+                bits.clear_bit(bit as u32);
             }
+
+            // Deficit update: M * zeros_hit - piece_cells.
+            deficit = deficit + m32 * zeros_hit - mask.count_ones();
+            let depth = k + 1;
+            if deficit > max_deficit[depth] { max_deficit[depth] = deficit; }
         }
+
         let trial_max = cell_hits.iter().copied().max().unwrap_or(0);
         trial_maxes.push(trial_max);
     }
 
     trial_maxes.sort_unstable();
 
-    // Percentile thresholds: value at percentile + 1.
-    // threshold T prunes when any cell has hits >= T, allowing hits <= T-1.
-    // Adding 1 converts "p50 value = V" to "allow hits <= V", covering ≥ p50
-    // of the MC distribution. This ensures each pipeline level almost always
-    // contains the solution, so failed attempts rarely waste time.
     let percentiles = [50, 75, 90, 95];
     let mut thresholds: Vec<u8> = percentiles.iter().map(|&p| {
         let idx = (num_trials * p / 100).min(num_trials - 1);
         trial_maxes[idx].saturating_add(1).min(31)
     }).collect();
 
-    // Final: max observed + 1.
     let max_observed = *trial_maxes.last().unwrap();
     thresholds.push(max_observed.saturating_add(1).min(31));
-
-    // Deduplicate consecutive equal thresholds.
     thresholds.dedup();
-    thresholds
+
+    McResults { hit_count_thresholds: thresholds, max_deficit_at_depth: max_deficit }
 }

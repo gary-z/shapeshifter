@@ -16,10 +16,9 @@
 //! 4. **prune_node** — per-node feasibility check at start of recursion.
 //!    Chains all prune techniques in cost-effectiveness order.
 //!
-//! TODO: Add depth-dependent total deficit upper bound (MC precompute).
-//!       Currently only lower-bounded; MC can establish max typical deficit at each depth.
 //! TODO: Add cumulative wrap count bound (MC precompute).
 //!       Track total wraps during search; MC bounds wraps at each depth.
+//!       (Equivalent to the deficit upper bound but tracked incrementally.)
 
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
@@ -142,6 +141,8 @@ pub(crate) fn prune_node(
     // budget (which guarantees the child won't exceed remaining_bits). This check is
     // redundant for children of filtered parents but serves as a safety net.
     if config.total_deficit_global && !data.total_deficit_prune.try_prune(board, piece_idx) { return false; }
+    // MC upper bound: deficit shouldn't be higher than any random solution at this depth.
+    if board.total_deficit() > data.max_deficit_at_depth[piece_idx] { return false; }
     if config.jaggedness && !data.jaggedness_prune.try_prune(board, piece_idx, data.m) { return false; }
     if config.total_deficit_rowcol && !data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m) { return false; }
     if config.total_deficit_diagonal && !data.line_family_prune.try_prune_diagonal(board, piece_idx, data.m) { return false; }
