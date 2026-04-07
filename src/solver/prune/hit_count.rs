@@ -10,7 +10,7 @@
 //! The struct is Copy so we use copy-make (no undo needed).
 
 use crate::core::bitboard::Bitboard;
-use rand::RngExt;
+use rand::{RngExt, SeedableRng};
 
 /// Number of binary planes (5 bits → counts 0–31).
 const NUM_PLANES: usize = 5;
@@ -44,10 +44,12 @@ impl HitCounter {
     /// Returns true if any cell's hit count >= threshold.
     #[inline(always)]
     pub fn any_cell_gte(&self, threshold: u8) -> bool {
+        if threshold == 0 { return false; }
+
         // Fast path: if no cell has any bit set at or above the MSB of threshold,
         // then no cell can reach threshold. This skips the full comparison at
         // early depths when all counts are small.
-        let msb = 7 - threshold.leading_zeros() as usize; // highest bit in threshold
+        let msb = 7 - threshold.leading_zeros() as usize;
         let mut high_any = Bitboard::ZERO;
         for b in msb..NUM_PLANES {
             high_any = high_any | self.planes[b];
@@ -81,7 +83,7 @@ pub(crate) fn precompute_thresholds(
     if all_placements.iter().any(|p| p.is_empty()) { return vec![]; }
 
     let num_trials = 10_000;
-    let mut rng = rand::rng();
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5348_4150_4553_4849);
     let mut trial_maxes = Vec::with_capacity(num_trials);
 
     for _ in 0..num_trials {
