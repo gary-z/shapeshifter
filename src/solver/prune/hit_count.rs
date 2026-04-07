@@ -155,7 +155,11 @@ pub(crate) fn precompute_mc(
 
     let max_observed = *trial_maxes.last().unwrap();
     thresholds.push(max_observed.saturating_add(1).min(31));
+    // Ensure strictly increasing: dedup removes consecutive equals,
+    // and the sorted percentile input guarantees non-decreasing order.
     thresholds.dedup();
+    debug_assert!(thresholds.windows(2).all(|w| w[0] < w[1]),
+        "thresholds should be strictly increasing after dedup: {:?}", thresholds);
 
     McResults { hit_count_thresholds: thresholds, max_deficit_at_depth: max_deficit }
 }
