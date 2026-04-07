@@ -140,37 +140,10 @@ macro_rules! define_backtrack {
 
             if !prune_node(board, data, piece_idx, config) { return false; }
 
-            let locked_mask = if config.cell_locking {
-                board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
-            } else {
-                Bitboard::ZERO
-            };
+            let frame = build_search_frame(board, hits, data, piece_idx, prev_placement, config);
 
-            let placements = &data.all_placements[piece_idx];
-
-            let pl_len = placements.len();
-            let mut order = [0u8; 196];
-            sort_placements(board, data.m, placements, &mut order);
-
-            let board_snapshot = *board;
-            for oi in 0..pl_len {
-                let pl_idx = order[oi] as usize;
-                let (row, col, mask) = placements[pl_idx];
-
-                if !(mask & locked_mask).is_zero() {
-                    continue;
-                }
-
-                if prev_placement < usize::MAX {
-                    if let Some(ref table) = data.skip_tables[piece_idx] {
-                        let num_curr = placements.len();
-                        if table[prev_placement * num_curr + pl_idx] {
-                            continue;
-                        }
-                    }
-                }
-
-                let mut board = board_snapshot;
+            for &(pl_idx, row, col, mask) in &frame.placements {
+                let mut board = *board;
                 board.apply_piece(mask);
 
                 // Copy-make: copy hit counter and increment.
@@ -182,13 +155,7 @@ macro_rules! define_backtrack {
 
                 solution.push((row, col));
 
-                let next_prev = if piece_idx + 1 < data.all_placements.len()
-                    && data.skip_tables[piece_idx + 1].is_some()
-                {
-                    pl_idx
-                } else {
-                    usize::MAX
-                };
+                let next_prev = next_prev_placement(data, piece_idx, pl_idx);
 
                 if $name(
                     &board,
@@ -303,11 +270,15 @@ fn build_search_frame(
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
 
+    let zero_plane = board.plane(0);
+    let no_wrap = data.total_deficit_prune.remaining_bits(piece_idx) == board.total_deficit();
+
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];
         if !(mask & locked_mask).is_zero() { continue; }
+        if no_wrap && !(mask & zero_plane).is_zero() { continue; }
         if prev_placement < usize::MAX {
             if let Some(ref table) = data.skip_tables[piece_idx] {
                 let num_curr = placements.len();
