@@ -131,7 +131,15 @@ pub(crate) fn prune_node(
     // Uses the current pipeline level's deficit bounds (tighter at lower percentiles).
     let mc_idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
     if board.total_deficit() > data.mc_levels[mc_idx].max_deficit_at_depth[piece_idx] { return false; }
-    if config.jaggedness && !data.jaggedness_prune.try_prune(board, piece_idx, data.m) { return false; }
+    // MC jaggedness upper bound (progressive levels only — final level uses u32::MAX
+    // because jaggedness is non-monotonic and 1M MC trials don't cover all valid states).
+    if config.jaggedness {
+        let j = board.split_jaggedness(data.jaggedness_prune.h_mask(), data.jaggedness_prune.v_mask());
+        let total_jagg = j.circular_h + j.circular_v;
+        if total_jagg > data.mc_levels[mc_idx].max_jagg_at_depth[piece_idx] { return false; }
+        // Deterministic jaggedness lower bound (existing, always sound).
+        if !data.jaggedness_prune.try_prune_with_jagg(&j, piece_idx, data.m) { return false; }
+    }
     if config.total_deficit_rowcol && !data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m) { return false; }
     if config.total_deficit_diagonal && !data.line_family_prune.try_prune_diagonal(board, piece_idx, data.m) { return false; }
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, data.m, rb) { return false; }

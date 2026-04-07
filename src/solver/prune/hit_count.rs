@@ -73,15 +73,15 @@ impl HitCounter {
 }
 
 /// One level of the progressive MC threshold pipeline.
-/// Both hit-count and deficit bounds are computed jointly from the same
-/// subset of MC trials, so the stated confidence is exact.
+/// All bounds are computed jointly from the same subset of MC trials,
+/// so the stated confidence is exact.
 pub(crate) struct McLevel {
     /// Max cell hit count allowed at each depth k (index 0..=N).
-    /// Depth-aware: at depth 5 with 5 pieces placed, typical max hits is ~3,
-    /// much tighter than the global max of ~6-10.
     pub max_hits_at_depth: Vec<u8>,
     /// Max total deficit allowed at each depth k (index 0..=N).
     pub max_deficit_at_depth: Vec<u32>,
+    /// Max total jaggedness (H + V mismatched adjacent pairs) at each depth k.
+    pub max_jagg_at_depth: Vec<u32>,
 }
 
 /// Run Monte Carlo to find joint hit-count and deficit bounds at
@@ -97,7 +97,11 @@ pub(crate) fn precompute_mc(
 ) -> Vec<McLevel> {
     let n = all_placements.len();
     if n == 0 || all_placements.iter().any(|p| p.is_empty()) {
-        return vec![McLevel { max_hits_at_depth: vec![0; n + 1], max_deficit_at_depth: vec![u32::MAX; n + 1] }];
+        return vec![McLevel {
+            max_hits_at_depth: vec![0; n + 1],
+            max_deficit_at_depth: vec![u32::MAX; n + 1],
+            max_jagg_at_depth: vec![u32::MAX; n + 1],
+        }];
     }
 
     // Precompute initial cell values for deficit tracking.
@@ -110,28 +114,51 @@ pub(crate) fn precompute_mc(
         }
     }
 
-    let num_trials: usize = 10_000;
+    let num_trials: usize = 100_000;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5348_4150_4553_4849);
     let initial_deficit = board.total_deficit();
     let m32 = m as u32;
 
-    // Per-trial results.
-    struct TrialResult {
-        max_hits_at_depth: Vec<u8>,  // max cell hit count at each depth
-        deficit_at_depth: Vec<u32>,
+    // Bucket trials by final max_hits value (0..32) to avoid storing all trials.
+    // For each bucket, track per-depth max values and trial count.
+    const MAX_BUCKETS: usize = 32;
+    let mut bucket_count = [0u32; MAX_BUCKETS];
+    let mut bucket_max_hits = vec![[0u8; MAX_BUCKETS]; n + 1];   // [depth][bucket]
+    let mut bucket_max_deficit = vec![[0u32; MAX_BUCKETS]; n + 1]; // [depth][bucket]
+    let mut bucket_max_jagg = vec![[0u32; MAX_BUCKETS]; n + 1];   // [depth][bucket]
+
+    // Precompute board jaggedness masks.
+    let mut jagg_h_mask = Bitboard::ZERO;
+    let mut jagg_v_mask = Bitboard::ZERO;
+    for r in 0..h {
+        for c in 0..w {
+            let bit = (r * 15 + c) as u32;
+            if c + 1 < w { jagg_h_mask.set_bit(bit); }
+            if r + 1 < h { jagg_v_mask.set_bit(bit); }
+        }
     }
-    let mut trials: Vec<TrialResult> = Vec::with_capacity(num_trials);
 
     for _ in 0..num_trials {
         let mut cell_hits = [0u8; 225];
         let mut deficit = initial_deficit;
-        let mut deficit_at_depth = Vec::with_capacity(n + 1);
-        let mut max_hits_at_depth = Vec::with_capacity(n + 1);
         let mut running_max_hits: u8 = 0;
-        deficit_at_depth.push(deficit);
-        max_hits_at_depth.push(0);
 
-        for placements in all_placements.iter() {
+        // Simulate board for jaggedness: track cell values.
+        let mut cell_value = [0u8; 225];
+        cell_value[..225].copy_from_slice(&initial_value[..225]);
+
+        // Depth 0 jaggedness.
+        let jagg0 = board.split_jaggedness(jagg_h_mask, jagg_v_mask);
+        let jagg0_total = jagg0.circular_h + jagg0.circular_v;
+
+        // We'll store final max_hits as bucket key, accumulate per-depth maxes.
+        let mut depth_max_hits = [0u8; 37]; // max 36 pieces + 1
+        let mut depth_deficit = [0u32; 37];
+        let mut depth_jagg = [0u32; 37];
+        depth_deficit[0] = deficit;
+        depth_jagg[0] = jagg0_total;
+
+        for (k, placements) in all_placements.iter().enumerate() {
             let idx = rng.random_range(0..placements.len());
             let mask = placements[idx].2;
 
@@ -139,8 +166,9 @@ pub(crate) fn precompute_mc(
             let mut zeros_hit = 0u32;
             while !bits.is_zero() {
                 let bit = bits.lowest_set_bit() as usize;
-                let current = (initial_value[bit] as u32 + m32 * 32 - cell_hits[bit] as u32) % m32;
-                if current == 0 { zeros_hit += 1; }
+                let old_val = cell_value[bit];
+                if old_val == 0 { zeros_hit += 1; }
+                cell_value[bit] = if old_val == 0 { m - 1 } else { old_val - 1 };
                 cell_hits[bit] = cell_hits[bit].saturating_add(1);
                 if cell_hits[bit] > running_max_hits {
                     running_max_hits = cell_hits[bit];
@@ -149,42 +177,70 @@ pub(crate) fn precompute_mc(
             }
 
             deficit = deficit + m32 * zeros_hit - mask.count_ones();
-            deficit_at_depth.push(deficit);
-            max_hits_at_depth.push(running_max_hits);
+            depth_deficit[k + 1] = deficit;
+            depth_max_hits[k + 1] = running_max_hits;
+
+            // Compute jaggedness from cell_value array.
+            let mut jagg: u32 = 0;
+            for r in 0..h {
+                for c in 0..w {
+                    let v = cell_value[r * 15 + c];
+                    if c + 1 < w && cell_value[r * 15 + c + 1] != v { jagg += 1; }
+                    if r + 1 < h && cell_value[(r + 1) * 15 + c] != v { jagg += 1; }
+                }
+            }
+            depth_jagg[k + 1] = jagg;
         }
 
-        trials.push(TrialResult { max_hits_at_depth, deficit_at_depth });
+        let bucket = running_max_hits.min(MAX_BUCKETS as u8 - 1) as usize;
+        bucket_count[bucket] += 1;
+        for k in 0..=n {
+            if depth_max_hits[k] > bucket_max_hits[k][bucket] {
+                bucket_max_hits[k][bucket] = depth_max_hits[k];
+            }
+            if depth_deficit[k] > bucket_max_deficit[k][bucket] {
+                bucket_max_deficit[k][bucket] = depth_deficit[k];
+            }
+            if depth_jagg[k] > bucket_max_jagg[k][bucket] {
+                bucket_max_jagg[k][bucket] = depth_jagg[k];
+            }
+        }
     }
 
-    // Sort trials by final max_hits (ascending) for percentile subsetting.
-    trials.sort_unstable_by_key(|t| *t.max_hits_at_depth.last().unwrap());
-
-    // For each percentile: take the bottom P% of trials,
-    // compute per-depth hit and deficit bounds from that subset.
+    // Build levels from bucket accumulations.
+    // For percentile P: take buckets 0..b where cumulative count >= P% of trials.
+    // Per-depth maxes are the max across included buckets.
     let percentiles = [50usize, 75, 90, 95];
     let mut levels: Vec<McLevel> = Vec::new();
 
-    let build_level = |subset: &[TrialResult]| -> McLevel {
+    let build_level = |up_to_bucket: usize| -> McLevel {
         let mut max_hits = vec![0u8; n + 1];
         let mut max_deficit = vec![0u32; n + 1];
-        for trial in subset {
-            for (k, &h) in trial.max_hits_at_depth.iter().enumerate() {
-                if h > max_hits[k] { max_hits[k] = h; }
-            }
-            for (k, &d) in trial.deficit_at_depth.iter().enumerate() {
-                if d > max_deficit[k] { max_deficit[k] = d; }
+        let mut max_jagg = vec![0u32; n + 1];
+        for k in 0..=n {
+            for b in 0..=up_to_bucket {
+                if bucket_count[b] == 0 { continue; }
+                if bucket_max_hits[k][b] > max_hits[k] { max_hits[k] = bucket_max_hits[k][b]; }
+                if bucket_max_deficit[k][b] > max_deficit[k] { max_deficit[k] = bucket_max_deficit[k][b]; }
+                if bucket_max_jagg[k][b] > max_jagg[k] { max_jagg[k] = bucket_max_jagg[k][b]; }
             }
         }
-        // +1 safety margin on hit counts (same rationale as before).
+        // +1 safety margin on hit counts.
         for h in &mut max_hits {
             *h = h.saturating_add(1).min(31);
         }
-        McLevel { max_hits_at_depth: max_hits, max_deficit_at_depth: max_deficit }
+        McLevel { max_hits_at_depth: max_hits, max_deficit_at_depth: max_deficit, max_jagg_at_depth: max_jagg }
     };
 
     for &pct in &percentiles {
-        let count = (num_trials * pct / 100).max(1);
-        let level = build_level(&trials[..count]);
+        let needed = (num_trials * pct / 100) as u32;
+        let mut cumulative = 0u32;
+        let mut up_to = 0;
+        for b in 0..MAX_BUCKETS {
+            cumulative += bucket_count[b];
+            if cumulative >= needed { up_to = b; break; }
+        }
+        let level = build_level(up_to);
         let final_hit = *level.max_hits_at_depth.last().unwrap();
         if levels.last().map_or(true, |prev: &McLevel|
             *prev.max_hits_at_depth.last().unwrap() != final_hit
@@ -193,13 +249,19 @@ pub(crate) fn precompute_mc(
         }
     }
 
-    // Final: all trials.
-    let final_level = build_level(&trials);
+    // Final: all buckets. Jaggedness set to u32::MAX (disabled) since it's
+    // non-monotonic and MC can't guarantee coverage of all valid states.
+    let mut final_level = build_level(MAX_BUCKETS - 1);
+    for j in &mut final_level.max_jagg_at_depth { *j = u32::MAX; }
     let final_hit = *final_level.max_hits_at_depth.last().unwrap();
     if levels.last().map_or(true, |prev|
         *prev.max_hits_at_depth.last().unwrap() != final_hit
     ) {
         levels.push(final_level);
+    } else {
+        // Final deduped with last percentile level — override its jaggedness to u32::MAX.
+        let last = levels.last_mut().unwrap();
+        for j in &mut last.max_jagg_at_depth { *j = u32::MAX; }
     }
 
     debug_assert!(levels.windows(2).all(|w|

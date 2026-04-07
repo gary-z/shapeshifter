@@ -50,19 +50,26 @@ impl JaggednessPrune {
         Self { jagg_h_mask, jagg_v_mask, remaining_h_perimeter, remaining_v_perimeter }
     }
 
+    pub fn h_mask(&self) -> Bitboard { self.jagg_h_mask }
+    pub fn v_mask(&self) -> Bitboard { self.jagg_v_mask }
+
     /// Returns false (prune) if remaining perimeter can't smooth out the jaggedness.
     #[inline(always)]
     pub fn try_prune(&self, board: &Board, piece_idx: usize, m: u8) -> bool {
         let j = board.split_jaggedness(self.jagg_h_mask, self.jagg_v_mask);
+        self.try_prune_with_jagg(&j, piece_idx, m)
+    }
+
+    /// Same as try_prune but with pre-computed jaggedness result.
+    #[inline(always)]
+    pub fn try_prune_with_jagg(&self, j: &crate::core::board::JaggednessResult, piece_idx: usize, m: u8) -> bool {
         let rem_h = self.remaining_h_perimeter[piece_idx];
         let rem_v = self.remaining_v_perimeter[piece_idx];
 
-        // Circular (symmetric) bound.
         if j.circular_h > rem_h || j.circular_v > rem_v {
             return false;
         }
 
-        // Directional (asymmetric) bound for M>=3.
         if m >= 3 {
             let m32 = m as u32;
             if j.forward_h * 2 > m32 * rem_h || j.backward_h * 2 > m32 * rem_h {
