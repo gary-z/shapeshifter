@@ -140,13 +140,22 @@ macro_rules! define_backtrack {
 
             if !prune_node(board, data, piece_idx, config) { return false; }
 
-            let frame = build_search_frame(board, hits, data, piece_idx, prev_placement, config);
+            let placements = &data.all_placements[piece_idx];
+            let pl_len = placements.len();
+            let mut order = [0u8; 196];
+            sort_placements(board, data.m, placements, &mut order);
+            let (locked_mask, zero_plane, no_wrap) = filter_state(board, data, piece_idx, config);
 
-            for &(pl_idx, row, col, mask) in &frame.placements {
+            for oi in 0..pl_len {
+                let pl_idx = order[oi] as usize;
+                let (row, col, mask) = placements[pl_idx];
+
+                if !filter_placement(board, data, piece_idx, pl_idx, mask, prev_placement,
+                    locked_mask, zero_plane, no_wrap) { continue; }
+
                 let mut board = *board;
                 board.apply_piece(mask);
 
-                // Copy-make: copy hit counter and increment.
                 let mut new_hits = hits;
                 new_hits.apply_piece(mask);
                 if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
@@ -261,29 +270,17 @@ fn build_search_frame(
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
 
-    let locked_mask = if config.cell_locking {
-        board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
-    } else {
-        Bitboard::ZERO
-    };
-
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
 
-    let zero_plane = board.plane(0);
-    let no_wrap = data.total_deficit_prune.remaining_bits(piece_idx) == board.total_deficit();
+    let (locked_mask, zero_plane, no_wrap) = filter_state(board, data, piece_idx, config);
 
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let (row, col, mask) = placements[pl_idx];
-        if !(mask & locked_mask).is_zero() { continue; }
-        if no_wrap && !(mask & zero_plane).is_zero() { continue; }
-        if prev_placement < usize::MAX {
-            if let Some(ref table) = data.skip_tables[piece_idx] {
-                let num_curr = placements.len();
-                if table[prev_placement * num_curr + pl_idx] { continue; }
-            }
+        if !filter_placement(board, data, piece_idx, pl_idx, mask, prev_placement, locked_mask, zero_plane, no_wrap) {
+            continue;
         }
         filtered.push((pl_idx, row, col, mask));
     }
@@ -407,7 +404,7 @@ pub(crate) fn backtrack_stealing(
         let mut board = frame.board.clone();
         board.apply_piece(mask);
 
-        // Copy-make: copy hit counter and increment.
+        // Inline hit-count update + check (cross-module fn call not reliably inlined).
         let mut new_hits = frame.hits;
         new_hits.apply_piece(mask);
         if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
