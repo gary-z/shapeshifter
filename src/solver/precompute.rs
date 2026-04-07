@@ -542,8 +542,8 @@ pub(crate) fn build_solver_data(
 
     let subset_prune = super::prune::subset::SubsetPrune { checks: subset_checks };
     let weight_tuple_prune = super::prune::weight_tuple::WeightTuplePrune { checks: weight_tuple_checks };
-    let mc = super::prune::hit_count::precompute_mc(board, &all_placements, m);
-    let hit_count_threshold_val = mc.hit_count_thresholds.last().copied().unwrap_or(0);
+    let mc_levels = super::prune::hit_count::precompute_mc(board, &all_placements, m);
+    let num_levels = mc_levels.len();
 
     SolverData {
         all_placements,
@@ -553,9 +553,8 @@ pub(crate) fn build_solver_data(
         parity_prune,
         subset_prune,
         weight_tuple_prune,
-        hit_count_threshold: std::sync::atomic::AtomicU8::new(hit_count_threshold_val),
-        hit_count_thresholds: mc.hit_count_thresholds,
-        max_deficit_at_depth: mc.max_deficit_at_depth,
+        mc_levels,
+        mc_level_idx: std::sync::atomic::AtomicUsize::new(num_levels.saturating_sub(1)),
         suffix_coverage,
         skip_tables,
         single_cell_start,

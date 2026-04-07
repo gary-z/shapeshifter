@@ -115,7 +115,8 @@ pub(crate) fn check_placement(
 ) -> Option<HitCounter> {
     let mut new_hits = hits;
     new_hits.apply_piece(mask);
-    let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed);
+    let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
+    let t = data.mc_levels[idx].hit_count;
     if t > 0 && new_hits.any_cell_gte(t) {
         return None;
     }
@@ -141,8 +142,10 @@ pub(crate) fn prune_node(
     // budget (which guarantees the child won't exceed remaining_bits). This check is
     // redundant for children of filtered parents but serves as a safety net.
     if config.total_deficit_global && !data.total_deficit_prune.try_prune(board, piece_idx) { return false; }
-    // MC upper bound: deficit shouldn't be higher than any random solution at this depth.
-    if board.total_deficit() > data.max_deficit_at_depth[piece_idx] { return false; }
+    // MC upper bound: deficit shouldn't be higher than random solutions at this depth.
+    // Uses the current pipeline level's deficit bounds (tighter at lower percentiles).
+    let mc_idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
+    if board.total_deficit() > data.mc_levels[mc_idx].max_deficit_at_depth[piece_idx] { return false; }
     if config.jaggedness && !data.jaggedness_prune.try_prune(board, piece_idx, data.m) { return false; }
     if config.total_deficit_rowcol && !data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m) { return false; }
     if config.total_deficit_diagonal && !data.line_family_prune.try_prune_diagonal(board, piece_idx, data.m) { return false; }

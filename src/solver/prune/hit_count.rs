@@ -72,28 +72,30 @@ impl HitCounter {
     }
 }
 
-/// Results of Monte Carlo precomputation.
-pub(crate) struct McResults {
-    /// Progressive hit-count thresholds [p50+1, p75+1, p90+1, p95+1, max+1].
-    pub hit_count_thresholds: Vec<u8>,
-    /// Max total deficit observed at each depth (after placing k pieces).
-    /// Index k = after placing pieces 0..k-1. Length = n+1.
+/// One level of the progressive MC threshold pipeline.
+/// Both hit-count and deficit bounds are computed jointly from the same
+/// subset of MC trials, so the stated confidence is exact.
+pub(crate) struct McLevel {
+    /// Max cell hit count allowed (prune when any cell >= this).
+    pub hit_count: u8,
+    /// Max total deficit allowed at each depth k (index 0..=N).
     pub max_deficit_at_depth: Vec<u32>,
 }
 
-/// Run Monte Carlo to find per-cell hit count distribution and per-depth
-/// deficit bounds across random solutions.
+/// Run Monte Carlo to find joint hit-count and deficit bounds at
+/// progressive confidence levels (p50, p75, p90, p95, ~100%).
+///
+/// For each percentile P: take the bottom P% of trials sorted by max_hits,
+/// then compute both thresholds from that subset. This ensures P% of random
+/// solutions satisfy BOTH constraints simultaneously.
 pub(crate) fn precompute_mc(
     board: &crate::core::board::Board,
     all_placements: &[Vec<(usize, usize, Bitboard)>],
     m: u8,
-) -> McResults {
+) -> Vec<McLevel> {
     let n = all_placements.len();
     if n == 0 || all_placements.iter().any(|p| p.is_empty()) {
-        return McResults {
-            hit_count_thresholds: vec![],
-            max_deficit_at_depth: vec![0; n + 1],
-        };
+        return vec![McLevel { hit_count: 0, max_deficit_at_depth: vec![u32::MAX; n + 1] }];
     }
 
     // Precompute initial cell values for deficit tracking.
@@ -108,58 +110,86 @@ pub(crate) fn precompute_mc(
 
     let num_trials: usize = 10_000;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5348_4150_4553_4849);
-    let mut trial_maxes = Vec::with_capacity(num_trials);
-    let mut max_deficit = vec![0u32; n + 1];
     let initial_deficit = board.total_deficit();
     let m32 = m as u32;
+
+    // Per-trial results: (max_cell_hits, deficit_trajectory).
+    struct TrialResult {
+        max_hits: u8,
+        deficit_at_depth: Vec<u32>,
+    }
+    let mut trials: Vec<TrialResult> = Vec::with_capacity(num_trials);
 
     for _ in 0..num_trials {
         let mut cell_hits = [0u8; 225];
         let mut deficit = initial_deficit;
+        let mut deficit_at_depth = Vec::with_capacity(n + 1);
+        deficit_at_depth.push(deficit);
 
-        if deficit > max_deficit[0] { max_deficit[0] = deficit; }
-
-        for (k, placements) in all_placements.iter().enumerate() {
+        for placements in all_placements.iter() {
             let idx = rng.random_range(0..placements.len());
             let mask = placements[idx].2;
 
-            // For each cell in the mask: count zeros_hit and update cell_hits.
             let mut bits = mask;
             let mut zeros_hit = 0u32;
             while !bits.is_zero() {
                 let bit = bits.lowest_set_bit() as usize;
-                // Current cell value = (initial - hits_so_far) mod M.
                 let current = (initial_value[bit] as u32 + m32 * 32 - cell_hits[bit] as u32) % m32;
                 if current == 0 { zeros_hit += 1; }
                 cell_hits[bit] = cell_hits[bit].saturating_add(1);
                 bits.clear_bit(bit as u32);
             }
 
-            // Deficit update: M * zeros_hit - piece_cells.
             deficit = deficit + m32 * zeros_hit - mask.count_ones();
-            let depth = k + 1;
-            if deficit > max_deficit[depth] { max_deficit[depth] = deficit; }
+            deficit_at_depth.push(deficit);
         }
 
-        let trial_max = cell_hits.iter().copied().max().unwrap_or(0);
-        trial_maxes.push(trial_max);
+        let max_hits = cell_hits.iter().copied().max().unwrap_or(0);
+        trials.push(TrialResult { max_hits, deficit_at_depth });
     }
 
-    trial_maxes.sort_unstable();
+    // Sort trials by max_hits (ascending) for percentile subsetting.
+    trials.sort_unstable_by_key(|t| t.max_hits);
 
-    let percentiles = [50, 75, 90, 95];
-    let mut thresholds: Vec<u8> = percentiles.iter().map(|&p| {
-        let idx = (num_trials * p / 100).min(num_trials - 1);
-        trial_maxes[idx].saturating_add(1).min(31)
-    }).collect();
+    // For each percentile: take the bottom P% of trials,
+    // compute hit_count threshold and per-depth deficit bounds from that subset.
+    let percentiles = [50usize, 75, 90, 95];
+    let mut levels: Vec<McLevel> = Vec::new();
 
-    let max_observed = *trial_maxes.last().unwrap();
-    thresholds.push(max_observed.saturating_add(1).min(31));
-    // Ensure strictly increasing: dedup removes consecutive equals,
-    // and the sorted percentile input guarantees non-decreasing order.
-    thresholds.dedup();
-    debug_assert!(thresholds.windows(2).all(|w| w[0] < w[1]),
-        "thresholds should be strictly increasing after dedup: {:?}", thresholds);
+    for &pct in &percentiles {
+        let count = (num_trials * pct / 100).max(1);
+        let subset = &trials[..count];
 
-    McResults { hit_count_thresholds: thresholds, max_deficit_at_depth: max_deficit }
+        let hit_count = subset.last().unwrap().max_hits.saturating_add(1).min(31);
+        let mut max_deficit = vec![0u32; n + 1];
+        for trial in subset {
+            for (k, &d) in trial.deficit_at_depth.iter().enumerate() {
+                if d > max_deficit[k] { max_deficit[k] = d; }
+            }
+        }
+
+        let level = McLevel { hit_count, max_deficit_at_depth: max_deficit };
+        // Skip if identical to previous level.
+        if levels.last().map_or(true, |prev: &McLevel| prev.hit_count != level.hit_count) {
+            levels.push(level);
+        }
+    }
+
+    // Final: all trials (max observed + 1).
+    let hit_count = trials.last().unwrap().max_hits.saturating_add(1).min(31);
+    let mut max_deficit = vec![0u32; n + 1];
+    for trial in &trials {
+        for (k, &d) in trial.deficit_at_depth.iter().enumerate() {
+            if d > max_deficit[k] { max_deficit[k] = d; }
+        }
+    }
+    let final_level = McLevel { hit_count, max_deficit_at_depth: max_deficit };
+    if levels.last().map_or(true, |prev| prev.hit_count != final_level.hit_count) {
+        levels.push(final_level);
+    }
+
+    debug_assert!(levels.windows(2).all(|w| w[0].hit_count < w[1].hit_count),
+        "levels should have strictly increasing hit_count");
+
+    levels
 }

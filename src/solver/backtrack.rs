@@ -159,7 +159,11 @@ macro_rules! define_backtrack {
                 // Hit-count update + check (inlined — cross-module call not reliably inlined).
                 let mut new_hits = hits;
                 new_hits.apply_piece(mask);
-                if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
+                if {
+                    let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
+                    let t = data.mc_levels[idx].hit_count;
+                    t > 0 && new_hits.any_cell_gte(t)
+                } {
                     continue;
                 }
 
@@ -411,7 +415,11 @@ pub(crate) fn backtrack_stealing(
         // Inline hit-count update + check (cross-module fn call not reliably inlined).
         let mut new_hits = frame.hits;
         new_hits.apply_piece(mask);
-        if { let t = data.hit_count_threshold.load(std::sync::atomic::Ordering::Relaxed); t > 0 && new_hits.any_cell_gte(t) } {
+        if {
+                    let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
+                    let t = data.mc_levels[idx].hit_count;
+                    t > 0 && new_hits.any_cell_gte(t)
+                } {
             progress_local += data.progress_weights[piece_idx];
             nodes.set(nodes.get() + 1);
             continue;
