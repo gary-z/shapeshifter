@@ -26,9 +26,6 @@ pub(crate) fn build_solver_data(
     let bh = h as usize;
     let bw = w as usize;
 
-    // Precompute per-piece cell counts (avoids per-call SIMD popcount in apply_piece).
-    let piece_cells: Vec<u32> = (0..n).map(|i| pieces[order[i]].cell_count()).collect();
-
     // Precompute suffix sums/maxes of piece properties.
     let total_deficit_prune = super::prune::total_deficit::TotalDeficitPrune::precompute(pieces, order);
     let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
@@ -564,7 +561,6 @@ pub(crate) fn build_solver_data(
         subgame_prune,
         hit_count_threshold: std::sync::atomic::AtomicU8::new(hit_count_threshold_val),
         hit_count_thresholds,
-        piece_cells,
         suffix_coverage,
         skip_tables,
         single_cell_start,

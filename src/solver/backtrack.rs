@@ -154,7 +154,7 @@ macro_rules! define_backtrack {
                 }
 
                 let mut board = *board;
-                board.apply_piece_fast(mask, data.piece_cells[piece_idx]);
+                board.apply_piece(mask);
 
                 // Hit-count update + check (inlined — cross-module call not reliably inlined).
                 let mut new_hits = hits;
@@ -311,7 +311,7 @@ fn split_work(
         for ci in frame.cursor..frame.placements.len() {
             let (pl_idx, row, col, mask) = frame.placements[ci];
             let mut board = frame.board.clone();
-            board.apply_piece_fast(mask, data.piece_cells[frame.piece_idx]);
+            board.apply_piece(mask);
             let mut hits = frame.hits;
             hits.apply_piece(mask);
             let depth = frame.piece_idx + 1;
@@ -406,7 +406,7 @@ pub(crate) fn backtrack_stealing(
         let piece_idx = frame.piece_idx;
 
         let mut board = frame.board.clone();
-        board.apply_piece_fast(mask, data.piece_cells[piece_idx]);
+        board.apply_piece(mask);
 
         // Inline hit-count update + check (cross-module fn call not reliably inlined).
         let mut new_hits = frame.hits;

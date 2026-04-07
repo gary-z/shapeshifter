@@ -105,8 +105,6 @@ pub(crate) struct SolverData {
     pub(crate) subgame_prune: prune::subgame::SubgamePrune,
     pub(crate) hit_count_threshold: std::sync::atomic::AtomicU8,
     pub(crate) hit_count_thresholds: Vec<u8>,
-    /// Precomputed cell count per piece (in solver order), avoids per-call popcount.
-    pub(crate) piece_cells: Vec<u32>,
     pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
