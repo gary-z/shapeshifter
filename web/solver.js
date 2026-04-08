@@ -1,7 +1,7 @@
 import init, { solve_puzzle } from './pkg/shapeshifter.js';
 import { parseShapeshifterHtml } from './parser.js';
 
-const ASSETS_DIR = 'https://images.neopets.com/medieval/shapeshifter';
+const ASSETS_DIR = 'web/assets';
 
 let wasmReady = false;
 

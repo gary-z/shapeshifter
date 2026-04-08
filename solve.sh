@@ -3,7 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HTML_FILE="$SCRIPT_DIR/data/ShapeShifter.html"
-ASSETS_DIR="https://images.neopets.com/medieval/shapeshifter"
+# Relative from data/solution.html to web/assets/
+ASSETS_DIR="../web/assets"
 JSON_FILE="$SCRIPT_DIR/data/puzzle.json"
 HISTORY_FILE="$SCRIPT_DIR/data/puzzle_history.jsonl"
 SOLUTION_FILE="$SCRIPT_DIR/data/solution.html"
