@@ -1,15 +1,17 @@
 # Shapeshifter Solver
 
-Solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), a Neopets puzzle game. Solves all 100 levels, including the hardest (14x14, M=5, 36 pieces) in under 10 seconds.
+Solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), a Neopets puzzle game. Solves most of the 100 levels, including the hardest (14x14, M=5, 36 pieces) in under 10 seconds.
 
 ## Usage
 
+1. Save the Shapeshifter page source as `data/ShapeShifter.html` (Right-click the page, Save As, HTML Only).
+2. Run:
+
 ```bash
-# Save the puzzle page HTML, then:
 ./solve.sh
 ```
 
-This parses the HTML, solves the puzzle, and generates a visual step-by-step guide as `data/solution.html`.
+This parses the HTML, solves the puzzle, and writes a visual step-by-step guide to `data/solution.html`.
 
 ## Game Rules
 
@@ -34,41 +36,3 @@ This parses the HTML, solves the puzzle, and generates a visual step-by-step gui
 
 - **Move ordering**: minimize zero-cell hits (avoid wrapping), maximize deficit coverage.
 
-## Benchmarks
-
-Levels 60-100, 120s timeout, parallel (all cores):
-
-| Range | Board | Solve rate |
-|-------|-------|-----------|
-| 60-69 | 8x8-10x10, M3-4 | 16/20 (2 seeds) |
-| 70-79 | 10x10-10x11, M3-4 | 14/20 |
-| 80-89 | 10x11-12x12, M3-4 | 16/20 |
-| 90-100 | 12x12-14x14, M4-5 | 22/22 |
-
-M=3 levels are hardest (less wrapping overhead for MC bounds to exploit).
-
-## Project Structure
-
-```
-src/
-  core/           Board, bitboard (256-bit SIMD), piece definitions
-  solver/
-    mod.rs        Progressive pipeline, parallel dispatch
-    backtrack.rs  Serial + work-stealing backtracker
-    pruning.rs    Four-phase pruning dispatcher
-    prune/        Per-technique modules (hit_count MC, jaggedness, parity, total_deficit)
-  generate.rs     Puzzle generation (for benchmarking)
-  puzzle.rs       HTML guide generation
-tools/
-  parse_html.py   Extract puzzle from saved HTML
-data/
-  levels.json     Level specifications (M, board size, piece count)
-```
-
-## Building
-
-Requires Rust nightly (for portable SIMD).
-
-```bash
-cargo build --release
-```
