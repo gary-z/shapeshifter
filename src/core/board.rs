@@ -33,8 +33,6 @@ pub struct Board {
     /// Total deficit: sum of per-cell decrements still needed to solve.
     /// = sum_{d=1}^{M-1} d * popcount(planes[d])
     total_deficit: u32,
-    /// Number of non-zero planes (planes[d] for d>0 that have any bits set).
-    active_planes: u8,
 }
 
 impl Board {
@@ -58,13 +56,9 @@ impl Board {
         }
 
         let mut total_deficit = 0u32;
-        let mut active_planes = 0u8;
         for d in 1..m as usize {
             let cnt = planes[d].count_ones();
             total_deficit += d as u32 * cnt;
-            if cnt > 0 {
-                active_planes += 1;
-            }
         }
 
         Self {
@@ -73,7 +67,6 @@ impl Board {
             height: height as u8,
             width: width as u8,
             total_deficit,
-            active_planes,
         }
     }
 
@@ -99,7 +92,6 @@ impl Board {
             height,
             width,
             total_deficit: 0,
-            active_planes: 0,
         }
     }
 
@@ -187,12 +179,6 @@ impl Board {
         }
     }
 
-    /// Number of non-zero planes (planes with d > 0 that have any bits set).
-    /// Each piece placement can reduce this by at most 1.
-    pub fn active_planes(&self) -> u8 {
-        self.active_planes
-    }
-
     /// Total deficit: sum of per-cell hits still needed to reach all-zero (cached, O(1)).
     /// = sum_{d=1}^{M-1} d * popcount(planes[d])
     #[inline(always)]
@@ -248,33 +234,6 @@ impl Board {
             forward_h: fwd_h, forward_v: fwd_v,
             backward_h: bwd_h, backward_v: bwd_v,
         }
-    }
-
-    /// Weighted jaggedness: sum of circular distances for all adjacent pairs.
-    /// For M<=3, equivalent to count of adjacent pairs with different values.
-    /// For M>=4, edges weighted by min(|a-b|, M-|a-b|).
-    /// A solved board has jaggedness = 0.
-    pub fn jaggedness(&self) -> u32 {
-        let h = self.height as usize;
-        let w = self.width as usize;
-
-        // Build masks for valid horizontal and vertical pair origins.
-        let mut h_mask = Bitboard::ZERO;
-        let mut v_mask = Bitboard::ZERO;
-        for r in 0..h {
-            for c in 0..w {
-                let bit = (r * crate::core::STRIDE + c) as u32;
-                if c + 1 < w {
-                    h_mask.set_bit(bit);
-                }
-                if r + 1 < h {
-                    v_mask.set_bit(bit);
-                }
-            }
-        }
-
-        let result = self.split_jaggedness(h_mask, v_mask);
-        result.circular_h + result.circular_v
     }
 
     /// Bitboard mask of all valid cells on this board.
@@ -491,11 +450,32 @@ mod tests {
 
     // --- Jaggedness tests ---
 
+    /// Compute jaggedness for a board by building masks and calling split_jaggedness.
+    fn jaggedness(board: &Board) -> u32 {
+        let h = board.height() as usize;
+        let w = board.width() as usize;
+        let mut h_mask = Bitboard::ZERO;
+        let mut v_mask = Bitboard::ZERO;
+        for r in 0..h {
+            for c in 0..w {
+                let bit = (r * crate::core::STRIDE + c) as u32;
+                if c + 1 < w {
+                    h_mask.set_bit(bit);
+                }
+                if r + 1 < h {
+                    v_mask.set_bit(bit);
+                }
+            }
+        }
+        let result = board.split_jaggedness(h_mask, v_mask);
+        result.circular_h + result.circular_v
+    }
+
     #[test]
     fn test_jaggedness_solved_board() {
         // All zeros: every adjacent pair matches. Jaggedness = 0.
         let board = Board::new_solved(3, 3, 2);
-        assert_eq!(board.jaggedness(), 0);
+        assert_eq!(jaggedness(&board), 0);
     }
 
     #[test]
@@ -503,7 +483,7 @@ mod tests {
         // All 1s: every adjacent pair matches. Jaggedness = 0.
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 0);
+        assert_eq!(jaggedness(&board), 0);
     }
 
     #[test]
@@ -512,7 +492,7 @@ mod tests {
         // (0,0) differs from (0,1) horizontally and (1,0) vertically. Jaggedness = 2.
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 2);
+        assert_eq!(jaggedness(&board), 2);
     }
 
     #[test]
@@ -521,7 +501,7 @@ mod tests {
         // Neighbors: (2,1) horizontal, (1,2) vertical. Both are 0. Jaggedness = 2.
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[0, 0, 1]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 2);
+        assert_eq!(jaggedness(&board), 2);
     }
 
     #[test]
@@ -530,7 +510,7 @@ mod tests {
         // 4 neighbors: (0,1), (2,1), (1,0), (1,2) all 0. Jaggedness = 4.
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 1, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 4);
+        assert_eq!(jaggedness(&board), 4);
     }
 
     #[test]
@@ -542,7 +522,7 @@ mod tests {
         // Jaggedness = 3.
         let grid: &[&[u8]] = &[&[1, 1, 1], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 3);
+        assert_eq!(jaggedness(&board), 3);
     }
 
     #[test]
@@ -553,7 +533,7 @@ mod tests {
         // Jaggedness = 3.
         let grid: &[&[u8]] = &[&[1, 0, 0], &[1, 0, 0], &[1, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 3);
+        assert_eq!(jaggedness(&board), 3);
     }
 
     #[test]
@@ -567,7 +547,7 @@ mod tests {
         // Jaggedness = 12.
         let grid: &[&[u8]] = &[&[0, 1, 0], &[1, 0, 1], &[0, 1, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 12);
+        assert_eq!(jaggedness(&board), 12);
     }
 
     #[test]
@@ -583,7 +563,7 @@ mod tests {
         // Jaggedness = 5.
         let grid: &[&[u8]] = &[&[1, 2, 1], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 3);
-        assert_eq!(board.jaggedness(), 5);
+        assert_eq!(jaggedness(&board), 5);
     }
 
     #[test]
@@ -603,7 +583,7 @@ mod tests {
         // Jaggedness = 12.
         let grid: &[&[u8]] = &[&[0, 1, 2], &[1, 2, 0], &[2, 0, 1]];
         let board = Board::from_grid(grid, 3);
-        assert_eq!(board.jaggedness(), 12);
+        assert_eq!(jaggedness(&board), 12);
     }
 
     #[test]
@@ -618,14 +598,14 @@ mod tests {
         // Jaggedness = 3.
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 3);
+        assert_eq!(jaggedness(&board), 3);
     }
 
     #[test]
     fn test_jaggedness_after_apply_piece() {
         // Start solved (jaggedness=0), apply a piece, check jaggedness increases.
         let mut board = Board::new_solved(3, 3, 2);
-        assert_eq!(board.jaggedness(), 0);
+        assert_eq!(jaggedness(&board), 0);
 
         // Place a 2x2 piece at (0,0). Board becomes:
         // 1 1 0
@@ -641,7 +621,7 @@ mod tests {
         // Horizontal: (0,1)-(0,2) differ, (1,1)-(1,2) differ. +2
         // Vertical: (1,0)-(2,0) differ, (1,1)-(2,1) differ. +2
         // Jaggedness = 4.
-        assert_eq!(board.jaggedness(), 4);
+        assert_eq!(jaggedness(&board), 4);
     }
 
     #[test]
@@ -652,7 +632,7 @@ mod tests {
         // No overlap. Jaggedness = 4.
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 1]];
         let board = Board::from_grid(grid, 2);
-        assert_eq!(board.jaggedness(), 4);
+        assert_eq!(jaggedness(&board), 4);
     }
 
     #[test]
@@ -666,7 +646,7 @@ mod tests {
         // Weighted jaggedness = 2 + 2 + 2 = 6.
         let grid: &[&[u8]] = &[&[0, 2, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 4);
-        assert_eq!(board.jaggedness(), 6);
+        assert_eq!(jaggedness(&board), 6);
     }
 
     #[test]
@@ -680,7 +660,7 @@ mod tests {
         // Weighted jaggedness = 3. Same as binary.
         let grid: &[&[u8]] = &[&[0, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 4);
-        assert_eq!(board.jaggedness(), 3);
+        assert_eq!(jaggedness(&board), 3);
     }
 
     #[test]
@@ -694,6 +674,6 @@ mod tests {
         // Weighted jaggedness = 2. Same as binary.
         let grid: &[&[u8]] = &[&[3, 0, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 4);
-        assert_eq!(board.jaggedness(), 2);
+        assert_eq!(jaggedness(&board), 2);
     }
 }

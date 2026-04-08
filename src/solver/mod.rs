@@ -39,7 +39,6 @@ pub struct SolveResult {
 /// Configuration controlling which pruning techniques are enabled.
 #[derive(Clone)]
 pub struct PruningConfig {
-    pub active_planes: bool,
     pub total_deficit_global: bool,
     pub jaggedness: bool,
     pub single_cell_endgame: bool,
@@ -48,7 +47,6 @@ pub struct PruningConfig {
 impl Default for PruningConfig {
     fn default() -> Self {
         Self {
-            active_planes: true,
             total_deficit_global: true,
             jaggedness: true,
             single_cell_endgame: true,
@@ -60,7 +58,6 @@ impl PruningConfig {
     /// All pruning disabled.
     pub fn none() -> Self {
         Self {
-            active_planes: false,
             total_deficit_global: false,
             jaggedness: false,
             single_cell_endgame: false,
@@ -515,21 +512,6 @@ mod tests {
 
     fn test_seeds() -> Vec<u64> {
         (0..5).collect()
-    }
-
-    #[test]
-    fn test_prune_active_planes() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.active_planes = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "active_planes prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "active_planes should reduce nodes: {} vs {}", nodes_with, nodes_without);
     }
 
     #[test]
