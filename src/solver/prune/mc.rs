@@ -122,7 +122,7 @@ impl McPrune {
         let total_jagg = j.circular_h + j.circular_v;
         if total_jagg > level.max_jagg_at_depth[piece_idx] { return false; }
         if total_jagg > level.rev_max_jagg[remaining] { return false; }
-        if !jagg_prune.try_prune_with_jagg(&j, piece_idx, m) { return false; }
+        if !jagg_prune.try_prune(&j, piece_idx, m) { return false; }
 
         true
     }

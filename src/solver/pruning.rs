@@ -16,9 +16,6 @@
 //! 4. **prune_node** — per-node feasibility check at start of recursion.
 //!    Chains all prune techniques in cost-effectiveness order.
 //!
-//! TODO: Add cumulative wrap count bound (MC precompute).
-//!       Track total wraps during search; MC bounds wraps at each depth.
-//!       (Equivalent to the deficit upper bound but tracked incrementally.)
 
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;

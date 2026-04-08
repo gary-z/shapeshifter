@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;

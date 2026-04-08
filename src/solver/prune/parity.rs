@@ -24,7 +24,7 @@ pub(crate) struct ParityPrune {
 
 impl ParityPrune {
     /// Build all parity partitions from pieces, order, and board dimensions.
-    pub fn precompute(pieces: &[Piece], order: &[usize], h: u8, w: u8, m: u8) -> Self {
+    pub fn precompute(pieces: &[Piece], order: &[usize], h: u8, w: u8, _m: u8) -> Self {
         let bh = h as usize;
         let bw = w as usize;
         let n = pieces.len();

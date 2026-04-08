@@ -125,7 +125,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
 }
 
 /// Build sorted placements, skip tables, and all precomputed pruning data.
-fn prepare_solver(game: &Game, config: &PruningConfig) -> (crate::core::board::Board, Vec<usize>, SolverData) {
+fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::Board, Vec<usize>, SolverData) {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();

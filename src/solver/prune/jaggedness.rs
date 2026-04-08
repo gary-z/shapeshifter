@@ -8,7 +8,6 @@
 //! Uses both circular (symmetric) and directional (asymmetric, M>=3) bounds.
 
 use crate::core::bitboard::Bitboard;
-use crate::core::board::Board;
 use crate::core::piece::Piece;
 
 /// Precomputed data for jaggedness pruning.
@@ -54,15 +53,9 @@ impl JaggednessPrune {
     pub fn v_mask(&self) -> Bitboard { self.jagg_v_mask }
 
     /// Returns false (prune) if remaining perimeter can't smooth out the jaggedness.
+    /// Takes pre-computed jaggedness result (shared with MC jaggedness check).
     #[inline(always)]
-    pub fn try_prune(&self, board: &Board, piece_idx: usize, m: u8) -> bool {
-        let j = board.split_jaggedness(self.jagg_h_mask, self.jagg_v_mask);
-        self.try_prune_with_jagg(&j, piece_idx, m)
-    }
-
-    /// Same as try_prune but with pre-computed jaggedness result.
-    #[inline(always)]
-    pub fn try_prune_with_jagg(&self, j: &crate::core::board::JaggednessResult, piece_idx: usize, m: u8) -> bool {
+    pub fn try_prune(&self, j: &crate::core::board::JaggednessResult, piece_idx: usize, m: u8) -> bool {
         let rem_h = self.remaining_h_perimeter[piece_idx];
         let rem_v = self.remaining_v_perimeter[piece_idx];
 
@@ -123,12 +116,12 @@ mod tests {
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
 
-        assert!(jp.try_prune(&board, 0, 2));
+        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        assert!(jp.try_prune(&j, 0, 2));
     }
 
     #[test]
     fn test_try_prune_uniform_nonzero() {
-        // All cells at same deficit → zero jaggedness → feasible.
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
         let p = Piece::from_grid(&[&[true]]);
@@ -136,13 +129,12 @@ mod tests {
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
 
-        assert!(jp.try_prune(&board, 0, 2));
+        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        assert!(jp.try_prune(&j, 0, 2));
     }
 
     #[test]
     fn test_try_prune_checkerboard_infeasible() {
-        // Checkerboard pattern: maximum jaggedness. Single 1x1 piece
-        // has perimeter 0 in both directions → can't reduce jaggedness → prune.
         let grid: &[&[u8]] = &[&[0, 1, 0], &[1, 0, 1], &[0, 1, 0]];
         let board = Board::from_grid(grid, 2);
         let p = Piece::from_grid(&[&[true]]);
@@ -150,7 +142,7 @@ mod tests {
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
 
-        // 1x1 piece has 0 h and v perimeter, but board has nonzero jaggedness
-        assert!(!jp.try_prune(&board, 0, 2));
+        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        assert!(!jp.try_prune(&j, 0, 2));
     }
 }

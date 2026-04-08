@@ -10,7 +10,7 @@ use std::sync::{Condvar, Mutex};
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
-use super::backtrack::{sort_placements, solve_single_cells, backtrack};
+use super::backtrack::{sort_placements, solve_single_cells};
 use super::prune::mc::HitCounter;
 use super::pruning::*;
 use super::{PruningConfig, SolverData, SolveResult, format_count};
@@ -82,7 +82,7 @@ fn build_search_frame(
     data: &SolverData,
     piece_idx: usize,
     prev_placement: usize,
-    config: &PruningConfig,
+    _config: &PruningConfig,
 ) -> SearchFrame {
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
