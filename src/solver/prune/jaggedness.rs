@@ -9,7 +9,65 @@
 
 use crate::core::STRIDE;
 use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
 use crate::core::piece::Piece;
+
+/// Result of split jaggedness computation.
+pub(crate) struct JaggednessResult {
+    /// Circular distance h/v: sum of min(|a-b|, M-|a-b|) over adjacent pairs.
+    pub circular_h: u32,
+    pub circular_v: u32,
+    /// Directional (forward) weight h/v: sum of (b-a) mod M over adjacent pairs.
+    pub forward_h: u32,
+    pub forward_v: u32,
+    /// Directional (backward) weight h/v: sum of (a-b) mod M over adjacent pairs.
+    pub backward_h: u32,
+    pub backward_v: u32,
+}
+
+/// Compute jaggedness of a board split into horizontal and vertical components.
+///
+/// For each adjacent cell pair, computes the circular distance min(|a-b|, M-|a-b|)
+/// and directional forward/backward distances. Masks determine which pairs to check.
+#[inline(always)]
+pub(crate) fn split_jaggedness(board: &Board, h_mask: Bitboard, v_mask: Bitboard) -> JaggednessResult {
+    let m = board.m() as usize;
+    let mut sh = [Bitboard::ZERO; 5]; // M <= 5
+    let mut sv = [Bitboard::ZERO; 5];
+    for d in 0..m {
+        sh[d] = board.plane(d as u8) >> 1;
+        sv[d] = board.plane(d as u8) >> STRIDE as u32;
+    }
+    let mut circ_h = 0u32;
+    let mut circ_v = 0u32;
+    let mut fwd_h = 0u32;
+    let mut fwd_v = 0u32;
+    let mut bwd_h = 0u32;
+    let mut bwd_v = 0u32;
+    for d1 in 0..m {
+        let p = board.plane(d1 as u8);
+        for d2 in 0..m {
+            if d1 == d2 { continue; }
+            let h_count = (p & sh[d2] & h_mask).count_ones();
+            let v_count = (p & sv[d2] & v_mask).count_ones();
+            let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
+            let cw = diff.min(m - diff) as u32;
+            circ_h += cw * h_count;
+            circ_v += cw * v_count;
+            let fw = ((d2 + m - d1) % m) as u32;
+            let bw = ((d1 + m - d2) % m) as u32;
+            fwd_h += fw * h_count;
+            fwd_v += fw * v_count;
+            bwd_h += bw * h_count;
+            bwd_v += bw * v_count;
+        }
+    }
+    JaggednessResult {
+        circular_h: circ_h, circular_v: circ_v,
+        forward_h: fwd_h, forward_v: fwd_v,
+        backward_h: bwd_h, backward_v: bwd_v,
+    }
+}
 
 /// Precomputed data for jaggedness pruning.
 pub(crate) struct JaggednessPrune {
@@ -56,7 +114,7 @@ impl JaggednessPrune {
     /// Returns false (prune) if remaining perimeter can't smooth out the jaggedness.
     /// Takes pre-computed jaggedness result (shared with MC jaggedness check).
     #[inline(always)]
-    pub fn try_prune(&self, j: &crate::core::board::JaggednessResult, piece_idx: usize, m: u8) -> bool {
+    pub fn try_prune(&self, j: &JaggednessResult, piece_idx: usize, m: u8) -> bool {
         let rem_h = self.remaining_h_perimeter[piece_idx];
         let rem_v = self.remaining_v_perimeter[piece_idx];
 
@@ -84,12 +142,25 @@ mod tests {
     use crate::core::board::Board;
     use crate::core::piece::Piece;
 
+    /// Compute total jaggedness (circular H + V) for a board.
+    fn jaggedness(board: &Board) -> u32 {
+        let h = board.height() as usize;
+        let w = board.width() as usize;
+        let mut h_mask = Bitboard::ZERO;
+        let mut v_mask = Bitboard::ZERO;
+        for r in 0..h {
+            for c in 0..w {
+                let bit = (r * STRIDE + c) as u32;
+                if c + 1 < w { h_mask.set_bit(bit); }
+                if r + 1 < h { v_mask.set_bit(bit); }
+            }
+        }
+        let result = split_jaggedness(board, h_mask, v_mask);
+        result.circular_h + result.circular_v
+    }
+
     #[test]
     fn test_precompute_perimeters() {
-        // Horizontal domino [true, true]: 2 cells, 1 h_internal
-        //   h_perimeter = 2*2 - 1*2 = 2, v_perimeter = 2*2 - 0*2 = 4
-        // Vertical domino: 2 cells, 1 v_internal
-        //   h_perimeter = 2*2 - 0*2 = 4, v_perimeter = 2*2 - 1*2 = 2
         let h_dom = Piece::from_grid(&[&[true, true]]);
         let v_dom = Piece::from_grid(&[&[true], &[true]]);
         assert_eq!(h_dom.h_perimeter(), 2);
@@ -101,23 +172,21 @@ mod tests {
         let order = vec![0, 1];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
 
-        assert_eq!(jp.remaining_h_perimeter[0], 2 + 4); // h_dom + v_dom
+        assert_eq!(jp.remaining_h_perimeter[0], 2 + 4);
         assert_eq!(jp.remaining_v_perimeter[0], 4 + 2);
-        assert_eq!(jp.remaining_h_perimeter[1], 4); // just v_dom
+        assert_eq!(jp.remaining_h_perimeter[1], 4);
         assert_eq!(jp.remaining_v_perimeter[1], 2);
         assert_eq!(jp.remaining_h_perimeter[2], 0);
     }
 
     #[test]
     fn test_try_prune_solved_board() {
-        // All-zero board has zero jaggedness → always feasible.
         let board = Board::new_solved(3, 3, 2);
         let p = Piece::from_grid(&[&[true]]);
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-
-        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
         assert!(jp.try_prune(&j, 0, 2));
     }
 
@@ -129,8 +198,7 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-
-        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
         assert!(jp.try_prune(&j, 0, 2));
     }
 
@@ -142,8 +210,127 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-
-        let j = board.split_jaggedness(jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
         assert!(!jp.try_prune(&j, 0, 2));
+    }
+
+    // --- Jaggedness computation tests (moved from core/board.rs) ---
+
+    #[test]
+    fn test_jaggedness_solved_board() {
+        let board = Board::new_solved(3, 3, 2);
+        assert_eq!(jaggedness(&board), 0);
+    }
+
+    #[test]
+    fn test_jaggedness_uniform_nonzero() {
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 0);
+    }
+
+    #[test]
+    fn test_jaggedness_single_cell_different() {
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 2);
+    }
+
+    #[test]
+    fn test_jaggedness_corner_cell() {
+        let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[0, 0, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 2);
+    }
+
+    #[test]
+    fn test_jaggedness_center_cell() {
+        let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 1, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_horizontal_stripe() {
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_vertical_stripe() {
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[1, 0, 0], &[1, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_checkerboard() {
+        let grid: &[&[u8]] = &[&[0, 1, 0], &[1, 0, 1], &[0, 1, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 12);
+    }
+
+    #[test]
+    fn test_jaggedness_m3_two_values() {
+        let grid: &[&[u8]] = &[&[1, 2, 1], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 3);
+        assert_eq!(jaggedness(&board), 5);
+    }
+
+    #[test]
+    fn test_jaggedness_m3_all_different() {
+        let grid: &[&[u8]] = &[&[0, 1, 2], &[1, 2, 0], &[2, 0, 1]];
+        let board = Board::from_grid(grid, 3);
+        assert_eq!(jaggedness(&board), 12);
+    }
+
+    #[test]
+    fn test_jaggedness_rectangular_board() {
+        let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_after_apply_piece() {
+        let mut board = Board::new_solved(3, 3, 2);
+        assert_eq!(jaggedness(&board), 0);
+
+        let mut piece = Bitboard::ZERO;
+        piece.set_bit(0);
+        piece.set_bit(1);
+        piece.set_bit(15);
+        piece.set_bit(16);
+        board.apply_piece(piece);
+        assert_eq!(jaggedness(&board), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_two_isolated_cells() {
+        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 1]];
+        let board = Board::from_grid(grid, 2);
+        assert_eq!(jaggedness(&board), 4);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_weighted() {
+        let grid: &[&[u8]] = &[&[0, 2, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(jaggedness(&board), 6);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_distance_1() {
+        let grid: &[&[u8]] = &[&[0, 1, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(jaggedness(&board), 3);
+    }
+
+    #[test]
+    fn test_jaggedness_m4_wrap_around() {
+        let grid: &[&[u8]] = &[&[3, 0, 0], &[0, 0, 0], &[0, 0, 0]];
+        let board = Board::from_grid(grid, 4);
+        assert_eq!(jaggedness(&board), 2);
     }
 }

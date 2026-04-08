@@ -119,7 +119,7 @@ impl McPrune {
 
         // Jaggedness: MC bounds (forward + reverse) + deterministic lower bound.
         // Computed once, shared across all jaggedness checks.
-        let j = board.split_jaggedness(jagg_prune.h_mask(), jagg_prune.v_mask());
+        let j = super::jaggedness::split_jaggedness(board, jagg_prune.h_mask(), jagg_prune.v_mask());
         let total_jagg = j.circular_h + j.circular_v;
         if total_jagg > level.max_jagg_at_depth[piece_idx] { return false; }
         if total_jagg > level.rev_max_jagg[remaining] { return false; }
@@ -203,7 +203,7 @@ pub(crate) fn precompute_mc(
         cell_value[..225].copy_from_slice(&initial_value[..225]);
 
         // Depth 0 jaggedness.
-        let jagg0 = board.split_jaggedness(jagg_h_mask, jagg_v_mask);
+        let jagg0 = super::jaggedness::split_jaggedness(board, jagg_h_mask, jagg_v_mask);
         let jagg0_total = jagg0.circular_h + jagg0.circular_v;
 
         // We'll store final max_hits as bucket key, accumulate per-depth maxes.
