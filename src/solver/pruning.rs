@@ -25,9 +25,6 @@ use crate::core::board::Board;
 use super::SolverData;
 use super::prune::hit_count::HitCounter;
 
-// Re-export types still needed by precompute.rs (subset/weight_tuple construction).
-pub(crate) use super::prune::subset::SubsetReachability;
-pub(crate) use super::prune::weight_tuple::WeightTupleReachability;
 
 // ---------------------------------------------------------------------------
 // Phase 2: filter_placement — before apply_piece
@@ -140,10 +137,6 @@ pub(crate) fn prune_node(
         // Deterministic jaggedness lower bound (existing, always sound).
         if !data.jaggedness_prune.try_prune_with_jagg(&j, piece_idx, data.m) { return false; }
     }
-    if config.total_deficit_rowcol && !data.line_family_prune.try_prune_rowcol(board, piece_idx, data.m) { return false; }
-    if config.total_deficit_diagonal && !data.line_family_prune.try_prune_diagonal(board, piece_idx, data.m) { return false; }
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, data.m, rb) { return false; }
-    if config.total_deficit_global && !data.subset_prune.try_prune(board, piece_idx) { return false; }
-    if config.total_deficit_global && !data.weight_tuple_prune.try_prune(board, piece_idx) { return false; }
     true
 }

@@ -6,8 +6,5 @@
 
 pub(crate) mod hit_count;
 pub(crate) mod jaggedness;
-pub(crate) mod line_family;
 pub(crate) mod parity;
-pub(crate) mod subset;
 pub(crate) mod total_deficit;
-pub(crate) mod weight_tuple;
