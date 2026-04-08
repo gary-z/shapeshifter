@@ -36,16 +36,20 @@ pub(crate) fn build_solver_data(
         .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
         .collect();
 
-    let mc_levels = super::prune::hit_count::precompute_mc(board, &all_placements, m);
+    let mc_levels = super::prune::mc::precompute_mc(board, &all_placements, m);
     let num_levels = mc_levels.len();
+    let mc_prune = super::prune::mc::McPrune {
+        levels: mc_levels,
+        level_idx: std::sync::atomic::AtomicUsize::new(num_levels.saturating_sub(1)),
+        n_pieces: n,
+    };
 
     SolverData {
         all_placements,
         total_deficit_prune,
         jaggedness_prune,
         parity_prune,
-        mc_levels,
-        mc_level_idx: std::sync::atomic::AtomicUsize::new(num_levels.saturating_sub(1)),
+        mc_prune,
         skip_tables,
         single_cell_start,
         m,

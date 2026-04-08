@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
-use super::prune::hit_count::HitCounter;
+use super::prune::mc::HitCounter;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
@@ -154,11 +154,7 @@ macro_rules! define_backtrack {
                 // Hit-count update + check (inlined — cross-module call not reliably inlined).
                 let mut new_hits = hits;
                 new_hits.apply_piece(mask);
-                if {
-                    let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
-                    let t = data.mc_levels[idx].max_hits_at_depth[piece_idx + 1];
-                    t > 0 && new_hits.any_cell_gte(t)
-                } {
+                if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
                     continue;
                 }
 

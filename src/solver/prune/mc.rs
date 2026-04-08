@@ -76,17 +76,64 @@ impl HitCounter {
 /// All bounds are computed jointly from the same subset of MC trials,
 /// so the stated confidence is exact.
 pub(crate) struct McLevel {
-    /// Max cell hit count allowed at each depth k (index 0..=N).
+    /// Forward MC (solver direction): max values at each solver depth k.
     pub max_hits_at_depth: Vec<u8>,
-    /// Max total deficit allowed at each depth k (index 0..=N).
     pub max_deficit_at_depth: Vec<u32>,
-    /// Max total jaggedness (H + V mismatched adjacent pairs) at each depth k.
     pub max_jagg_at_depth: Vec<u32>,
-    /// Reverse MC: max deficit after placing k pieces from solved (index 0..=N).
-    /// At solver depth d, pieces remaining = N-d, so use rev_max_deficit[N-d].
+    /// Reverse MC (generation direction): max values with j pieces from solved.
+    /// Index j = pieces remaining in solver.
     pub rev_max_deficit: Vec<u32>,
-    /// Reverse MC: max jaggedness after placing k pieces from solved.
     pub rev_max_jagg: Vec<u32>,
+}
+
+/// Monte Carlo pruning data. Holds progressive threshold levels and
+/// the current level index (set by the pipeline in solve()).
+pub(crate) struct McPrune {
+    pub levels: Vec<McLevel>,
+    pub level_idx: std::sync::atomic::AtomicUsize,
+    pub n_pieces: usize,
+}
+
+impl McPrune {
+    /// Per-node feasibility check using MC bounds + deterministic jaggedness.
+    /// Returns false to prune. Computes jaggedness once for both MC and deterministic checks.
+    #[inline(always)]
+    pub fn try_prune(
+        &self,
+        board: &crate::core::board::Board,
+        piece_idx: usize,
+        jagg_prune: &super::jaggedness::JaggednessPrune,
+        m: u8,
+    ) -> bool {
+        let idx = self.level_idx.load(std::sync::atomic::Ordering::Relaxed);
+        let level = &self.levels[idx];
+        let deficit = board.total_deficit();
+
+        // Forward: deficit upper bound at this depth.
+        if deficit > level.max_deficit_at_depth[piece_idx] { return false; }
+
+        // Reverse: deficit upper bound by pieces remaining.
+        let remaining = self.n_pieces - piece_idx;
+        if deficit > level.rev_max_deficit[remaining] { return false; }
+
+        // Jaggedness: MC bounds (forward + reverse) + deterministic lower bound.
+        // Computed once, shared across all jaggedness checks.
+        let j = board.split_jaggedness(jagg_prune.h_mask(), jagg_prune.v_mask());
+        let total_jagg = j.circular_h + j.circular_v;
+        if total_jagg > level.max_jagg_at_depth[piece_idx] { return false; }
+        if total_jagg > level.rev_max_jagg[remaining] { return false; }
+        if !jagg_prune.try_prune_with_jagg(&j, piece_idx, m) { return false; }
+
+        true
+    }
+
+    /// Per-placement hit count check. Returns false to prune.
+    #[inline(always)]
+    pub fn exceeds_hit_threshold(&self, hits: &HitCounter, depth: usize) -> bool {
+        let idx = self.level_idx.load(std::sync::atomic::Ordering::Relaxed);
+        let t = self.levels[idx].max_hits_at_depth[depth];
+        t > 0 && hits.any_cell_gte(t)
+    }
 }
 
 /// Run Monte Carlo to find joint hit-count and deficit bounds at

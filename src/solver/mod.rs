@@ -81,11 +81,7 @@ pub(crate) struct SolverData {
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) parity_prune: prune::parity::ParityPrune,
-    /// Progressive MC threshold levels (tightest first). Each level has
-    /// jointly computed hit-count and deficit bounds at a given confidence.
-    pub(crate) mc_levels: Vec<prune::hit_count::McLevel>,
-    /// Current pipeline level index into mc_levels.
-    pub(crate) mc_level_idx: std::sync::atomic::AtomicUsize,
+    pub(crate) mc_prune: prune::mc::McPrune,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
     pub(crate) m: u8,
@@ -100,12 +96,12 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     let config = PruningConfig::default();
 
     let (board, order, data) = prepare_solver(game, &config);
-    let num_levels = data.mc_levels.len();
+    let num_levels = data.mc_prune.levels.len();
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
     for level_idx in 0..num_levels {
-        data.mc_level_idx.store(level_idx, Ordering::Relaxed);
+        data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
         let result = if parallel {
             #[cfg(not(target_arch = "wasm32"))]
             { parallel::run_parallel(&board, &order, &data, &config, exhaustive) }
@@ -203,7 +199,7 @@ fn run_serial(
 
     let found = backtrack::backtrack(
         board,
-        prune::hit_count::HitCounter::new(),
+        prune::mc::HitCounter::new(),
         data,
         0,
         usize::MAX,

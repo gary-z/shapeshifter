@@ -11,7 +11,7 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
 use super::backtrack::{sort_placements, solve_single_cells, backtrack};
-use super::prune::hit_count::HitCounter;
+use super::prune::mc::HitCounter;
 use super::pruning::*;
 use super::{PruningConfig, SolverData, SolveResult, format_count};
 
@@ -225,11 +225,7 @@ fn backtrack_stealing(
         // Inline hit-count update + check (cross-module fn call not reliably inlined).
         let mut new_hits = frame.hits;
         new_hits.apply_piece(mask);
-        if {
-            let idx = data.mc_level_idx.load(std::sync::atomic::Ordering::Relaxed);
-            let t = data.mc_levels[idx].max_hits_at_depth[piece_idx + 1];
-            t > 0 && new_hits.any_cell_gte(t)
-        } {
+        if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
             progress_local += data.progress_weights[piece_idx];
             nodes.set(nodes.get() + 1);
             continue;
