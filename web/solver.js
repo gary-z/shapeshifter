@@ -1,4 +1,7 @@
 import init, { solve_puzzle } from './pkg/shapeshifter.js';
+import { parseShapeshifterHtml } from './parser.js';
+
+const ASSETS_DIR = 'https://images.neopets.com/medieval/shapeshifter';
 
 let wasmReady = false;
 
@@ -6,7 +9,7 @@ async function initWasm() {
     try {
         await init();
         wasmReady = true;
-        document.getElementById('status').textContent = 'WASM loaded. Ready to solve.';
+        document.getElementById('status').textContent = 'Ready to solve.';
         document.getElementById('solve-btn').disabled = false;
     } catch (e) {
         document.getElementById('status').textContent = 'Failed to load WASM: ' + e.message;
@@ -14,199 +17,161 @@ async function initWasm() {
     }
 }
 
-function renderBoard(puzzle, placements) {
-    const container = document.getElementById('board-container');
-    container.innerHTML = '';
+function iconSrc(icons, val) {
+    if (icons.length > 0 && val < icons.length && icons[val]) {
+        return `${ASSETS_DIR}/${icons[val]}_0.gif`;
+    }
+    return null;
+}
 
-    const rows = puzzle.rows;
-    const cols = puzzle.columns;
-    const m = puzzle.m;
-    const board = puzzle.board.map(row => [...row]);
+function iconSrcHighlight(icons, val) {
+    if (icons.length > 0 && val < icons.length && icons[val]) {
+        return `${ASSETS_DIR}/${icons[val]}_1.gif`;
+    }
+    return null;
+}
 
-    // Build a map of which piece covers which cells
-    const pieceMap = Array.from({ length: rows }, () => Array(cols).fill(-1));
+function renderBoardHtml(board, h, w, icons, pieceMask, clickPos) {
+    let s = `<div class="board" style="grid-template-columns: repeat(${w}, 50px)">\n`;
+    for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+            const val = board[r][c];
+            const isPiece = pieceMask ? pieceMask[r * w + c] : false;
+            const isClick = clickPos ? (r === clickPos[0] && c === clickPos[1]) : false;
+            const cls = isClick ? 'cell highlight click-here'
+                : isPiece ? 'cell highlight' : 'cell';
+            const src = isPiece ? iconSrcHighlight(icons, val) : iconSrc(icons, val);
+            if (src) {
+                s += `<div class="${cls}"><img src="${src}"></div>\n`;
+            } else {
+                // Fallback: colored number cell
+                const colors = ['#2ecc71', '#e74c3c', '#3498db', '#f39c12', '#9b59b6'];
+                const bg = colors[val % colors.length];
+                const border = isPiece ? '3px solid #ff0' : isClick ? '3px solid #2ecc40' : 'none';
+                s += `<div class="${cls}" style="background:${bg};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:18px;width:50px;height:50px;border:${border}">${val}</div>\n`;
+            }
+        }
+    }
+    s += '</div>\n';
+    return s;
+}
 
-    if (placements) {
-        for (let pieceIdx = 0; pieceIdx < placements.length; pieceIdx++) {
-            const [pr, pc] = placements[pieceIdx];
-            const shape = puzzle.pieces[pieceIdx];
-            for (let r = 0; r < shape.length; r++) {
-                for (let c = 0; c < shape[r].length; c++) {
-                    if (shape[r][c]) {
-                        const br = pr + r;
-                        const bc = pc + c;
-                        if (br < rows && bc < cols) {
-                            pieceMap[br][bc] = pieceIdx;
-                            board[br][bc] = (board[br][bc] + 1) % m;
-                        }
-                    }
+function applyPiece(board, piece, row, col, m) {
+    const h = board.length, w = board[0].length;
+    for (let r = 0; r < piece.length; r++) {
+        for (let c = 0; c < piece[r].length; c++) {
+            if (piece[r][c]) {
+                const br = row + r, bc = col + c;
+                if (br < h && bc < w) {
+                    board[br][bc] = (board[br][bc] + m - 1) % m;
                 }
             }
         }
     }
-
-    const grid = document.createElement('div');
-    grid.className = 'board-grid';
-    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-
-    // Color palette for pieces
-    const colors = [
-        '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
-        '#1abc9c', '#e67e22', '#e84393', '#00cec9', '#fdcb6e',
-        '#6c5ce7', '#fab1a0', '#00b894', '#a29bfe', '#fd79a8',
-        '#55a3e8', '#ff7675', '#74b9ff', '#a8e6cf', '#ffeaa7'
-    ];
-
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const cell = document.createElement('div');
-            cell.className = 'board-cell';
-            cell.textContent = board[r][c];
-
-            if (pieceMap[r][c] >= 0) {
-                const colorIdx = pieceMap[r][c] % colors.length;
-                cell.style.backgroundColor = colors[colorIdx];
-                cell.style.color = '#fff';
-                cell.style.fontWeight = 'bold';
-                cell.title = `Piece ${pieceMap[r][c]} at (${r}, ${c})`;
-            }
-
-            // Highlight solved cells (value 0)
-            if (placements && board[r][c] === 0) {
-                cell.classList.add('solved-cell');
-            }
-
-            grid.appendChild(cell);
-        }
-    }
-
-    container.appendChild(grid);
 }
 
-function renderInitialBoard(puzzle) {
-    const container = document.getElementById('board-container');
-    container.innerHTML = '';
-
-    const rows = puzzle.rows;
-    const cols = puzzle.columns;
-
-    const grid = document.createElement('div');
-    grid.className = 'board-grid';
-    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            const cell = document.createElement('div');
-            cell.className = 'board-cell';
-            cell.textContent = puzzle.board[r][c];
-            grid.appendChild(cell);
+function buildPieceMask(piece, row, col, h, w) {
+    const mask = Array(h * w).fill(false);
+    for (let r = 0; r < piece.length; r++) {
+        for (let c = 0; c < piece[r].length; c++) {
+            if (piece[r][c]) {
+                const br = row + r, bc = col + c;
+                if (br < h && bc < w) mask[br * w + bc] = true;
+            }
         }
     }
-
-    container.appendChild(grid);
+    return mask;
 }
 
-function renderPlacements(placements, pieces) {
-    const list = document.getElementById('placements-list');
-    list.innerHTML = '';
+function generateSolutionGuide(puzzle, placements) {
+    const { m, rows: h, columns: w, pieces, icons } = puzzle;
+    const board = puzzle.board.map(r => [...r]);
+
+    let html = `<h2>Level ${puzzle.level} Solution</h2>
+<p class="info">${h}&times;${w} board, M=${m}, ${pieces.length} pieces</p>\n`;
 
     for (let i = 0; i < placements.length; i++) {
-        const [r, c] = placements[i];
-        const li = document.createElement('li');
+        const [row, col] = placements[i];
+        const piece = pieces[i];
+        const mask = buildPieceMask(piece, row, col, h, w);
 
-        // Describe piece shape
-        const shape = pieces[i];
-        const shapeRows = shape.length;
-        const shapeCols = Math.max(...shape.map(r => r.length));
-        const shapeStr = shape.map(row =>
-            row.map(v => v ? '#' : '.').join('')
-        ).join(' / ');
+        // Piece shape preview
+        const shapeStr = piece.map(r => r.map(v => v ? '\u2588' : '\u00B7').join('')).join('\n');
 
-        li.innerHTML = `<strong>Piece ${i}</strong> (${shapeRows}x${shapeCols}): row=${r}, col=${c} <span class="shape-preview">${shapeStr}</span>`;
-        list.appendChild(li);
+        html += `<div class="step">
+<h3>Step ${i + 1}: Place piece at row ${row}, col ${col}</h3>
+<pre class="shape-preview">${shapeStr}</pre>\n`;
+        html += renderBoardHtml(board, h, w, icons, mask, [row, col]);
+
+        applyPiece(board, piece, row, col, m);
+        html += '</div>\n';
     }
+
+    // Final board
+    const allZero = board.every(r => r.every(v => v === 0));
+    html += '<div class="step"><h3>Result</h3>\n';
+    html += renderBoardHtml(board, h, w, icons, null, null);
+    if (allZero) {
+        html += '<div class="solved">SOLVED!</div>\n';
+    } else {
+        html += '<div class="solved" style="color:#e74c3c">NOT SOLVED</div>\n';
+    }
+    html += '</div>\n';
+
+    return html;
 }
 
 async function solvePuzzle() {
-    if (!wasmReady) {
-        alert('WASM module not loaded yet.');
-        return;
-    }
+    if (!wasmReady) { alert('WASM not loaded yet.'); return; }
 
-    const jsonInput = document.getElementById('puzzle-input').value.trim();
-    if (!jsonInput) {
-        alert('Please paste puzzle JSON.');
-        return;
-    }
+    const input = document.getElementById('puzzle-input').value.trim();
+    if (!input) { alert('Paste the Shapeshifter page HTML.'); return; }
 
-    let puzzle;
-    try {
-        puzzle = JSON.parse(jsonInput);
-    } catch (e) {
-        document.getElementById('result-text').textContent = 'Invalid JSON: ' + e.message;
-        return;
-    }
-
-    // Show initial board
-    renderInitialBoard(puzzle);
-
-    const solveBtn = document.getElementById('solve-btn');
-    const resultText = document.getElementById('result-text');
+    const resultDiv = document.getElementById('results-content');
     const statsText = document.getElementById('stats-text');
 
-    solveBtn.disabled = true;
-    resultText.textContent = 'Solving...';
-    statsText.textContent = '';
-    document.getElementById('placements-list').innerHTML = '';
+    // Parse HTML to JSON
+    let puzzle;
+    try {
+        puzzle = parseShapeshifterHtml(input);
+    } catch (e) {
+        resultDiv.innerHTML = `<p style="color:#e74c3c">Parse error: ${e.message}</p>`;
+        return;
+    }
 
-    // Yield to UI before heavy computation
+    const puzzleJson = JSON.stringify(puzzle);
+    resultDiv.innerHTML = `<p>Parsed level ${puzzle.level}: ${puzzle.rows}&times;${puzzle.columns}, M=${puzzle.m}, ${puzzle.pieces.length} pieces</p><p>Solving...</p>`;
+    statsText.textContent = '';
+
+    document.getElementById('solve-btn').disabled = true;
     await new Promise(resolve => setTimeout(resolve, 50));
 
     const startTime = performance.now();
 
-    let resultJson;
+    let solverResult;
     try {
-        resultJson = solve_puzzle(jsonInput);
+        const resultJson = solve_puzzle(puzzleJson);
+        solverResult = JSON.parse(resultJson);
     } catch (e) {
-        resultText.textContent = 'Error: ' + e.message;
-        solveBtn.disabled = false;
+        resultDiv.innerHTML = `<p style="color:#e74c3c">Solver error: ${e.message}</p>`;
+        document.getElementById('solve-btn').disabled = false;
         return;
     }
 
     const elapsed = performance.now() - startTime;
 
-    let result;
-    try {
-        result = JSON.parse(resultJson);
-    } catch (e) {
-        resultText.textContent = 'Failed to parse solver result: ' + resultJson;
-        solveBtn.disabled = false;
-        return;
-    }
-
-    if (result.error) {
-        resultText.textContent = 'Error: ' + result.error;
-        solveBtn.disabled = false;
-        return;
-    }
-
-    if (result.solved) {
-        resultText.textContent = 'Solved!';
-        resultText.className = 'result-solved';
-        renderPlacements(result.placements, puzzle.pieces);
-        renderBoard(puzzle, result.placements);
+    if (solverResult.error) {
+        resultDiv.innerHTML = `<p style="color:#e74c3c">Error: ${solverResult.error}</p>`;
+    } else if (solverResult.solved) {
+        resultDiv.innerHTML = generateSolutionGuide(puzzle, solverResult.placements);
     } else {
-        resultText.textContent = 'No solution found.';
-        resultText.className = 'result-unsolved';
+        resultDiv.innerHTML = '<p style="color:#e74c3c">No solution found.</p>';
     }
 
-    const nodesFormatted = result.nodes.toLocaleString();
-    statsText.textContent = `Time: ${elapsed.toFixed(1)} ms | Nodes explored: ${nodesFormatted}`;
-
-    solveBtn.disabled = false;
+    statsText.textContent = `Time: ${elapsed.toFixed(0)} ms | Nodes: ${solverResult.nodes.toLocaleString()}`;
+    document.getElementById('solve-btn').disabled = false;
 }
 
-// Wire up the UI
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('solve-btn').addEventListener('click', solvePuzzle);
     initWasm();
