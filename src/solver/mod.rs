@@ -1,11 +1,12 @@
 mod backtrack;
+#[cfg(not(target_arch = "wasm32"))]
+mod parallel;
 mod precompute;
 pub(crate) mod prune;
 pub(crate) mod pruning;
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use crate::core::bitboard::Bitboard;
 use crate::game::Game;
@@ -106,7 +107,10 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     for level_idx in 0..num_levels {
         data.mc_level_idx.store(level_idx, Ordering::Relaxed);
         let result = if parallel {
-            run_parallel(&board, &order, &data, &config, exhaustive)
+            #[cfg(not(target_arch = "wasm32"))]
+            { parallel::run_parallel(&board, &order, &data, &config, exhaustive) }
+            #[cfg(target_arch = "wasm32")]
+            { run_serial(&board, &order, &data, &config) }
         } else {
             run_serial(&board, &order, &data, &config)
         };
@@ -231,143 +235,6 @@ pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     run_serial(&board, &order, &data, config)
 }
 
-/// Parallel backtrack with pre-built data.
-fn run_parallel(
-    board: &crate::core::board::Board,
-    order: &[usize],
-    data: &SolverData,
-    config: &PruningConfig,
-    exhaustive: bool,
-) -> SolveResult {
-    let n = data.all_placements.len();
-
-    let wq = backtrack::WorkQueue::new();
-    wq.push(backtrack::StealableTask {
-        board: board.clone(),
-        hits: prune::hit_count::HitCounter::new(),
-        prefix: Vec::new(),
-        depth: 0,
-        prev_placement: usize::MAX,
-    });
-
-    let num_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
-
-    let abort = AtomicBool::new(false);
-    let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
-    let total_nodes = std::sync::atomic::AtomicU64::new(0);
-    let active_count = std::sync::atomic::AtomicUsize::new(0);
-    let idle_count = std::sync::atomic::AtomicUsize::new(0);
-    let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
-    let workers_alive = std::sync::atomic::AtomicUsize::new(num_threads);
-
-    let total_space: f64 = data.all_placements.iter()
-        .map(|p| p.len() as f64)
-        .product();
-    eprintln!("search space: {:.3e}", total_space);
-
-    let solve_start = std::time::Instant::now();
-
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let bar_width = 30;
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                if abort.load(Ordering::Relaxed)
-                    || workers_alive.load(Ordering::Relaxed) == 0 { break; }
-
-                let p = f64::from_bits(progress.load(Ordering::Relaxed)).min(1.0);
-                let pct = p * 100.0;
-                let nodes_so_far = total_nodes.load(Ordering::Relaxed);
-                let elapsed = solve_start.elapsed().as_secs_f64();
-
-                let filled = (p * bar_width as f64) as usize;
-                let bar: String = (0..bar_width).map(|i| if i < filled { '#' } else { ' ' }).collect();
-
-                let nodes_str = format_count(nodes_so_far);
-                eprint!("\r\x1b[K[{}] {:.1}%  {}  {:.1}s", bar, pct, nodes_str, elapsed);
-            }
-            eprint!("\r\x1b[K");
-        });
-
-        for _ in 0..num_threads {
-            s.spawn(|| {
-                let nodes = Cell::new(0u64);
-                let mut solution = Vec::with_capacity(n);
-
-                loop {
-                    if abort.load(Ordering::Relaxed) { break; }
-
-                    let task = wq.pop().or_else(|| {
-                        idle_count.fetch_add(1, Ordering::Relaxed);
-                        let t = wq.wait_for_task(&abort, &active_count);
-                        idle_count.fetch_sub(1, Ordering::Relaxed);
-                        t
-                    });
-                    let task = match task {
-                        Some(t) => t,
-                        None => break,
-                    };
-                    active_count.fetch_add(1, Ordering::SeqCst);
-
-                    solution.clear();
-                    solution.extend_from_slice(&task.prefix);
-                    nodes.set(0);
-
-                    let found = backtrack::backtrack_stealing(
-                        &task.board,
-                        task.hits,
-                        data,
-                        task.depth,
-                        task.prev_placement,
-                        &mut solution,
-                        &nodes,
-                        config,
-                        &abort,
-                        &wq,
-                        &idle_count,
-                        exhaustive,
-                        &progress,
-                    );
-
-                    active_count.fetch_sub(1, Ordering::SeqCst);
-                    total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
-
-                    if found {
-                        if !exhaustive {
-                            abort.store(true, Ordering::Relaxed);
-                        }
-                        let mut guard = result.lock().unwrap();
-                        if guard.is_none() {
-                            *guard = Some(solution.clone());
-                        }
-                    }
-                }
-                workers_alive.fetch_sub(1, Ordering::Relaxed);
-            });
-        }
-    });
-
-    let result = result.into_inner().unwrap();
-    let nodes_visited = total_nodes.load(Ordering::Relaxed);
-
-    let solution = result.map(|sorted_solution| {
-        let mut solution = vec![(0, 0); n];
-        for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
-            solution[order[sorted_idx]] = (row, col);
-        }
-        solution
-    });
-
-    let final_progress = f64::from_bits(progress.load(Ordering::Relaxed));
-
-    SolveResult {
-        solution,
-        nodes_visited,
-        progress: final_progress,
-    }
-}
 
 #[cfg(test)]
 mod tests {
