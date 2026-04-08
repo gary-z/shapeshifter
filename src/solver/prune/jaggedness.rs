@@ -7,6 +7,7 @@
 //!
 //! Uses both circular (symmetric) and directional (asymmetric, M>=3) bounds.
 
+use crate::core::STRIDE;
 use crate::core::bitboard::Bitboard;
 use crate::core::piece::Piece;
 
@@ -33,7 +34,7 @@ impl JaggednessPrune {
         let mut jagg_v_mask = Bitboard::ZERO;
         for r in 0..bh {
             for c in 0..bw {
-                let bit = (r * 15 + c) as u32;
+                let bit = (r * STRIDE + c) as u32;
                 if c + 1 < bw { jagg_h_mask.set_bit(bit); }
                 if r + 1 < bh { jagg_v_mask.set_bit(bit); }
             }

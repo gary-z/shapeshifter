@@ -9,6 +9,7 @@
 //! up to 31). Increment is a parallel ripple-carry add — ~10 bitboard ops.
 //! The struct is Copy so we use copy-make (no undo needed).
 
+use crate::core::STRIDE;
 use crate::core::bitboard::Bitboard;
 use rand::{RngExt, SeedableRng};
 
@@ -164,7 +165,7 @@ pub(crate) fn precompute_mc(
     let mut initial_value = [0u8; 225];
     for r in 0..h {
         for c in 0..w {
-            initial_value[r * 15 + c] = board.get(r, c);
+            initial_value[r * STRIDE + c] = board.get(r, c);
         }
     }
 
@@ -186,7 +187,7 @@ pub(crate) fn precompute_mc(
     let mut jagg_v_mask = Bitboard::ZERO;
     for r in 0..h {
         for c in 0..w {
-            let bit = (r * 15 + c) as u32;
+            let bit = (r * STRIDE + c) as u32;
             if c + 1 < w { jagg_h_mask.set_bit(bit); }
             if r + 1 < h { jagg_v_mask.set_bit(bit); }
         }
@@ -238,9 +239,9 @@ pub(crate) fn precompute_mc(
             let mut jagg: u32 = 0;
             for r in 0..h {
                 for c in 0..w {
-                    let v = cell_value[r * 15 + c];
-                    if c + 1 < w && cell_value[r * 15 + c + 1] != v { jagg += 1; }
-                    if r + 1 < h && cell_value[(r + 1) * 15 + c] != v { jagg += 1; }
+                    let v = cell_value[r * STRIDE + c];
+                    if c + 1 < w && cell_value[r * STRIDE + c + 1] != v { jagg += 1; }
+                    if r + 1 < h && cell_value[(r + 1) * STRIDE + c] != v { jagg += 1; }
                 }
             }
             depth_jagg[k + 1] = jagg;
@@ -297,9 +298,9 @@ pub(crate) fn precompute_mc(
                 let mut jagg: u32 = 0;
                 for r in 0..h {
                     for c in 0..w {
-                        let v = cell_value[r * 15 + c];
-                        if c + 1 < w && cell_value[r * 15 + c + 1] != v { jagg += 1; }
-                        if r + 1 < h && cell_value[(r + 1) * 15 + c] != v { jagg += 1; }
+                        let v = cell_value[r * STRIDE + c];
+                        if c + 1 < w && cell_value[r * STRIDE + c + 1] != v { jagg += 1; }
+                        if r + 1 < h && cell_value[(r + 1) * STRIDE + c] != v { jagg += 1; }
                     }
                 }
                 if jagg > rev_max_jagg[depth] {

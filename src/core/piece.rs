@@ -1,4 +1,5 @@
 use crate::core::bitboard::Bitboard;
+use crate::core::STRIDE;
 
 /// A puzzle piece defined by its filled cells, anchored at (0, 0).
 /// The shape is stored as a Bitboard using the 15-column stride layout.
@@ -26,7 +27,7 @@ impl Piece {
             assert_eq!(row.len(), width, "all rows must have the same width");
             for (c, &filled) in row.iter().enumerate() {
                 if filled {
-                    shape.set_bit((r * 15 + c) as u32);
+                    shape.set_bit((r * STRIDE + c) as u32);
                 }
             }
         }
@@ -63,7 +64,7 @@ impl Piece {
         let mut count = 0u32;
         for r in 0..self.height as usize {
             for c in 0..self.width as usize {
-                if self.shape.get_bit((r * 15 + c) as u32) && (r + c) % 2 == 0 {
+                if self.shape.get_bit((r * STRIDE + c) as u32) && (r + c) % 2 == 0 {
                     count += 1;
                 }
             }
@@ -75,7 +76,7 @@ impl Piece {
     pub fn max_row_thickness(&self) -> u32 {
         let mut max = 0u32;
         for r in 0..self.height as usize {
-            let row_bits = (self.shape >> (r as u32 * 15)).limbs()[0] & ((1u64 << self.width) - 1);
+            let row_bits = (self.shape >> (r as u32 * STRIDE as u32)).limbs()[0] & ((1u64 << self.width) - 1);
             let count = row_bits.count_ones();
             if count > max {
                 max = count;
@@ -90,7 +91,7 @@ impl Piece {
         for c in 0..self.width as usize {
             let mut count = 0u32;
             for r in 0..self.height as usize {
-                if self.shape.get_bit((r * 15 + c) as u32) {
+                if self.shape.get_bit((r * STRIDE + c) as u32) {
                     count += 1;
                 }
             }
@@ -106,7 +107,7 @@ impl Piece {
         let mut counts = [0u32; 9]; // d = pr - pc ranges from -(w-1) to h-1, offset by 4
         for r in 0..self.height as usize {
             for c in 0..self.width as usize {
-                if self.shape.get_bit((r * 15 + c) as u32) {
+                if self.shape.get_bit((r * STRIDE + c) as u32) {
                     let d = (r as i32 - c as i32 + 4) as usize;
                     counts[d] += 1;
                 }
@@ -120,7 +121,7 @@ impl Piece {
         let mut counts = [0u32; 9]; // d = pr + pc ranges from 0 to h+w-2
         for r in 0..self.height as usize {
             for c in 0..self.width as usize {
-                if self.shape.get_bit((r * 15 + c) as u32) {
+                if self.shape.get_bit((r * STRIDE + c) as u32) {
                     counts[r + c] += 1;
                 }
             }
@@ -152,7 +153,7 @@ impl Piece {
                 let mut band_counts = [0u32; 3]; // max bands: ceil(5/2) = 3
                 for pr in 0..self.height as usize {
                     for pc in 0..self.width as usize {
-                        if self.shape.get_bit((pr * 15 + pc) as u32) {
+                        if self.shape.get_bit((pr * STRIDE + pc) as u32) {
                             let cell_parity = (pr as u32 % 2) ^ (pc as u32 % 2);
                             if cell_parity == elig_parity {
                                 let band = (pc as u32 + c0_parity) / 2;
@@ -193,7 +194,7 @@ impl Piece {
             let mut band_counts = [0u32; 3]; // ceil(5/2) = 3 max bands
             for pr in 0..self.height as usize {
                 for pc in 0..self.width as usize {
-                    if self.shape.get_bit((pr * 15 + pc) as u32) {
+                    if self.shape.get_bit((pr * STRIDE + pc) as u32) {
                         let band = (pc as u32 + c0_parity) / 2;
                         if (band as usize) < band_counts.len() {
                             band_counts[band as usize] += 1;
@@ -230,13 +231,13 @@ impl Piece {
     /// Vertical perimeter: boundary edges between vertically adjacent cells.
     pub fn v_perimeter(&self) -> u32 {
         let s = self.shape;
-        let v_internal = (s & (s >> 15)).count_ones();
+        let v_internal = (s & (s >> STRIDE as u32)).count_ones();
         s.count_ones() * 2 - v_internal * 2
     }
 
     /// Return the piece's shape shifted to board position (row, col).
     pub fn placed_at(&self, row: usize, col: usize) -> Bitboard {
-        let offset = (row * 15 + col) as u32;
+        let offset = (row * STRIDE + col) as u32;
         self.shape << offset
     }
 
@@ -260,7 +261,7 @@ impl std::fmt::Debug for Piece {
         writeln!(f, "Piece({}x{})", self.height, self.width)?;
         for r in 0..self.height as usize {
             for c in 0..self.width as usize {
-                let index = (r * 15 + c) as u32;
+                let index = (r * STRIDE + c) as u32;
                 if self.shape.get_bit(index) {
                     write!(f, "#")?;
                 } else {

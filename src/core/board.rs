@@ -1,4 +1,5 @@
 use crate::core::bitboard::Bitboard;
+use crate::core::STRIDE;
 
 /// Maximum value of M (number of digit states per cell).
 pub const MAX_M: usize = 5;
@@ -51,7 +52,7 @@ impl Board {
             assert_eq!(row.len(), width, "all rows must have the same width");
             for (c, &val) in row.iter().enumerate() {
                 assert!(val < m, "cell value {val} >= m ({m})");
-                let index = (r * 15 + c) as u32;
+                let index = (r * crate::core::STRIDE + c) as u32;
                 planes[val as usize].set_bit(index);
             }
         }
@@ -85,7 +86,7 @@ impl Board {
         let mut mask = Bitboard::ZERO;
         for r in 0..height as usize {
             for c in 0..width as usize {
-                mask.set_bit((r * 15 + c) as u32);
+                mask.set_bit((r * crate::core::STRIDE + c) as u32);
             }
         }
 
@@ -116,7 +117,7 @@ impl Board {
 
     /// Get the value at cell (row, col).
     pub fn get(&self, row: usize, col: usize) -> u8 {
-        let index = (row * 15 + col) as u32;
+        let index = (row * crate::core::STRIDE + col) as u32;
         for d in 0..self.m as usize {
             if self.planes[d].get_bit(index) {
                 return d as u8;
@@ -216,7 +217,7 @@ impl Board {
         let mut sv = [Bitboard::ZERO; 5];
         for d in 0..m {
             sh[d] = self.planes[d] >> 1;
-            sv[d] = self.planes[d] >> 15;
+            sv[d] = self.planes[d] >> STRIDE as u32;
         }
         let mut circ_h = 0u32;
         let mut circ_v = 0u32;
@@ -262,7 +263,7 @@ impl Board {
         let mut v_mask = Bitboard::ZERO;
         for r in 0..h {
             for c in 0..w {
-                let bit = (r * 15 + c) as u32;
+                let bit = (r * crate::core::STRIDE + c) as u32;
                 if c + 1 < w {
                     h_mask.set_bit(bit);
                 }

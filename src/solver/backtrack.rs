@@ -101,87 +101,72 @@ pub(crate) fn next_prev_placement(data: &SolverData, piece_idx: usize, pl_idx: u
     if next < data.all_placements.len() && data.skip_tables[next].is_some() { pl_idx } else { usize::MAX }
 }
 
-/// Generate backtrack functions with and without abort support.
-macro_rules! define_backtrack {
-    ($name:ident $(, abort: $abort_param:ident : $abort_ty:ty)?) => {
-        pub(crate) fn $name(
-            board: &Board,
-            hits: HitCounter,
-            data: &SolverData,
-            piece_idx: usize,
-            prev_placement: usize,
-            solution: &mut Vec<(usize, usize)>,
-            nodes: &Cell<u64>,
-            config: &PruningConfig,
-            $($abort_param: $abort_ty,)?
-        ) -> bool {
-            $(
-                if nodes.get() & 1023 == 0 && $abort_param.load(Ordering::Relaxed) {
-                    return false;
-                }
-            )?
+/// Serial backtracker. Recursively tries all placements for each piece,
+/// pruning infeasible branches via MC bounds and deterministic checks.
+pub(crate) fn backtrack(
+    board: &Board,
+    hits: HitCounter,
+    data: &SolverData,
+    piece_idx: usize,
+    prev_placement: usize,
+    solution: &mut Vec<(usize, usize)>,
+    nodes: &Cell<u64>,
+    config: &PruningConfig,
+) -> bool {
+    if piece_idx == data.all_placements.len() {
+        return board.is_solved();
+    }
 
-            if piece_idx == data.all_placements.len() {
-                return board.is_solved();
-            }
+    if config.single_cell_endgame && piece_idx >= data.single_cell_start {
+        let num_remaining = data.all_placements.len() - piece_idx;
+        return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
+    }
 
-            if config.single_cell_endgame && piece_idx >= data.single_cell_start {
-                let num_remaining = data.all_placements.len() - piece_idx;
-                return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
-            }
+    if !prune_node(board, data, piece_idx, config) { return false; }
 
-            if !prune_node(board, data, piece_idx, config) { return false; }
+    let placements = &data.all_placements[piece_idx];
+    let pl_len = placements.len();
+    let mut order = [0u8; 196];
+    sort_placements(board, data.m, placements, &mut order);
+    let fs = filter_state(board, data, piece_idx);
 
-            let placements = &data.all_placements[piece_idx];
-            let pl_len = placements.len();
-            let mut order = [0u8; 196];
-            sort_placements(board, data.m, placements, &mut order);
-            let fs = filter_state(board, data, piece_idx);
+    for oi in 0..pl_len {
+        let pl_idx = order[oi] as usize;
+        let (row, col, mask) = placements[pl_idx];
+        nodes.set(nodes.get() + 1);
 
-            for oi in 0..pl_len {
-                let pl_idx = order[oi] as usize;
-                let (row, col, mask) = placements[pl_idx];
-                nodes.set(nodes.get() + 1);
-
-                if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
-                    continue;
-                }
-
-                let mut board = *board;
-                board.apply_piece(mask);
-
-                // Hit-count update + check (inlined — cross-module call not reliably inlined).
-                let mut new_hits = hits;
-                new_hits.apply_piece(mask);
-                if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
-                    continue;
-                }
-
-                solution.push((row, col));
-
-                let next_prev = next_prev_placement(data, piece_idx, pl_idx);
-
-                if $name(
-                    &board,
-                    new_hits,
-                    data,
-                    piece_idx + 1,
-                    next_prev,
-                    solution,
-                    nodes,
-                    config,
-                    $($abort_param,)?
-                ) {
-                    return true;
-                }
-
-                solution.pop();
-            }
-
-            false
+        if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
+            continue;
         }
-    };
-}
 
-// Serial backtrack: no abort parameter, no overhead.
-define_backtrack!(backtrack);
+        let mut board = *board;
+        board.apply_piece(mask);
+
+        let mut new_hits = hits;
+        new_hits.apply_piece(mask);
+        if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
+            continue;
+        }
+
+        solution.push((row, col));
+
+        let next_prev = next_prev_placement(data, piece_idx, pl_idx);
+
+        if backtrack(
+            &board,
+            new_hits,
+            data,
+            piece_idx + 1,
+            next_prev,
+            solution,
+            nodes,
+            config,
+        ) {
+            return true;
+        }
+
+        solution.pop();
+    }
+
+    false
+}
