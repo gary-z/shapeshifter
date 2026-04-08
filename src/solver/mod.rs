@@ -524,7 +524,7 @@ mod tests {
         let no_prune = PruningConfig::none();
         let with_prune = PruningConfig::none().only(|c| c.active_planes = true);
 
-        let (nodes_without, fail_without) = fuzz_with_config(&no_prune, &configs, &seeds);
+        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
         let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
 
         assert_eq!(fail_with, 0, "active_planes prune caused failures");
@@ -690,7 +690,6 @@ mod tests {
 
     #[test]
     fn test_pair_merge_soundness_stress() {
-        use rand::SeedableRng;
 
         let configs = vec![
             (2, 4, 4, 10), (2, 4, 4, 14), (2, 6, 6, 12),
@@ -731,7 +730,6 @@ mod tests {
 
     #[test]
     fn test_subset_no_false_zero_effect() {
-        use rand::SeedableRng;
 
         let configs = vec![
             (2, 4, 4, 10), (3, 4, 4, 8), (2, 6, 6, 12),

@@ -1,4 +1,5 @@
 #![feature(portable_simd)]
+#![deny(warnings)]
 
 pub mod core;
 pub mod game;
