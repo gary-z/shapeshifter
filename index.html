@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shapeshifter Puzzle Solver</title>
+<style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #1a1a2e;
+        color: #e0e0e0;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+    }
+
+    .container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 30px 20px;
+    }
+
+    h1 {
+        text-align: center;
+        color: #e94560;
+        font-size: 2em;
+        margin-bottom: 5px;
+    }
+
+    .subtitle {
+        text-align: center;
+        color: #888;
+        font-size: 0.9em;
+        margin-bottom: 30px;
+    }
+
+    #status {
+        text-align: center;
+        padding: 8px;
+        font-size: 0.85em;
+        color: #aaa;
+        margin-bottom: 20px;
+    }
+
+    .input-section {
+        margin-bottom: 25px;
+    }
+
+    .input-section label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #ccc;
+    }
+
+    textarea {
+        width: 100%;
+        height: 200px;
+        background: #16213e;
+        color: #e0e0e0;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 12px;
+        font-family: 'Consolas', 'Fira Code', monospace;
+        font-size: 13px;
+        resize: vertical;
+        outline: none;
+        transition: border-color 0.2s;
+    }
+
+    textarea:focus {
+        border-color: #e94560;
+    }
+
+    .btn-row {
+        text-align: center;
+        margin: 20px 0;
+    }
+
+    button#solve-btn {
+        background: #e94560;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 12px 40px;
+        font-size: 1.1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s, transform 0.1s;
+    }
+
+    button#solve-btn:hover:not(:disabled) {
+        background: #c0392b;
+        transform: translateY(-1px);
+    }
+
+    button#solve-btn:disabled {
+        background: #555;
+        cursor: not-allowed;
+    }
+
+    .results-section {
+        background: #16213e;
+        border-radius: 10px;
+        padding: 20px;
+        margin-top: 20px;
+        border: 1px solid #2a2a4a;
+    }
+
+    .results-section h2 {
+        margin-top: 0;
+        color: #e94560;
+        font-size: 1.2em;
+        border-bottom: 1px solid #2a2a4a;
+        padding-bottom: 10px;
+    }
+
+    #result-text {
+        font-size: 1.3em;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+
+    .result-solved { color: #2ecc71; }
+    .result-unsolved { color: #e74c3c; }
+
+    #stats-text {
+        color: #aaa;
+        font-size: 0.9em;
+        margin-bottom: 15px;
+    }
+
+    #board-container {
+        display: flex;
+        justify-content: center;
+        margin: 20px 0;
+    }
+
+    .board-grid {
+        display: grid;
+        gap: 2px;
+        background: #0a0a1a;
+        padding: 2px;
+        border-radius: 6px;
+    }
+
+    .board-cell {
+        width: 48px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: 600;
+        background: #2a2a4a;
+        border-radius: 4px;
+        transition: background 0.15s;
+    }
+
+    .board-cell.solved-cell {
+        background: #1a3a2a;
+    }
+
+    .placements-section {
+        margin-top: 20px;
+    }
+
+    .placements-section h3 {
+        color: #ccc;
+        margin-bottom: 10px;
+    }
+
+    #placements-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    #placements-list li {
+        background: #0f3460;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin-bottom: 6px;
+        font-size: 0.9em;
+        line-height: 1.5;
+    }
+
+    .shape-preview {
+        color: #888;
+        font-family: monospace;
+        font-size: 0.85em;
+        margin-left: 8px;
+    }
+
+    .sample-link {
+        text-align: center;
+        margin-top: 10px;
+    }
+
+    .sample-link a {
+        color: #e94560;
+        cursor: pointer;
+        text-decoration: underline;
+        font-size: 0.85em;
+    }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Shapeshifter Solver</h1>
+    <p class="subtitle">Paste a puzzle JSON and click Solve to find the solution using WASM.</p>
+    <div id="status">Loading WASM module...</div>
+
+    <div class="input-section">
+        <label for="puzzle-input">Puzzle JSON</label>
+        <textarea id="puzzle-input" placeholder='{
+  "level": 1,
+  "m": 2,
+  "rows": 3,
+  "columns": 3,
+  "board": [[1,0,1],[0,1,0],[1,0,1]],
+  "pieces": [[[true,true],[true,false]], [[true]]]
+}'></textarea>
+        <div class="sample-link">
+            <a id="load-sample">Load sample puzzle</a>
+        </div>
+    </div>
+
+    <div class="btn-row">
+        <button id="solve-btn" disabled>Solve</button>
+    </div>
+
+    <div class="results-section">
+        <h2>Results</h2>
+        <div id="result-text">Waiting for input...</div>
+        <div id="stats-text"></div>
+        <div id="board-container"></div>
+        <div class="placements-section">
+            <h3>Piece Placements</h3>
+            <ul id="placements-list"></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Sample puzzle loader
+    document.getElementById('load-sample').addEventListener('click', () => {
+        const sample = {
+            "level": 1,
+            "m": 2,
+            "rows": 3,
+            "columns": 3,
+            "board": [[1,0,1],[0,1,0],[1,0,1]],
+            "pieces": [[[true,true],[true,false]], [[true]], [[true,true]], [[true]]]
+        };
+        document.getElementById('puzzle-input').value = JSON.stringify(sample, null, 2);
+    });
+</script>
+<script type="module" src="web/solver.js"></script>
+</body>
+</html>

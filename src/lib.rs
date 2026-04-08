@@ -6,3 +6,6 @@ pub mod generate;
 pub mod level;
 pub mod puzzle;
 pub mod solver;
+
+#[cfg(feature = "wasm")]
+mod wasm;
