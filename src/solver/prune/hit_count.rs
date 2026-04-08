@@ -82,6 +82,11 @@ pub(crate) struct McLevel {
     pub max_deficit_at_depth: Vec<u32>,
     /// Max total jaggedness (H + V mismatched adjacent pairs) at each depth k.
     pub max_jagg_at_depth: Vec<u32>,
+    /// Reverse MC: max deficit after placing k pieces from solved (index 0..=N).
+    /// At solver depth d, pieces remaining = N-d, so use rev_max_deficit[N-d].
+    pub rev_max_deficit: Vec<u32>,
+    /// Reverse MC: max jaggedness after placing k pieces from solved.
+    pub rev_max_jagg: Vec<u32>,
 }
 
 /// Run Monte Carlo to find joint hit-count and deficit bounds at
@@ -101,6 +106,8 @@ pub(crate) fn precompute_mc(
             max_hits_at_depth: vec![0; n + 1],
             max_deficit_at_depth: vec![u32::MAX; n + 1],
             max_jagg_at_depth: vec![u32::MAX; n + 1],
+            rev_max_deficit: vec![u32::MAX; n + 1],
+            rev_max_jagg: vec![u32::MAX; n + 1],
         }];
     }
 
@@ -207,6 +214,54 @@ pub(crate) fn precompute_mc(
         }
     }
 
+    // --- Reverse MC: reverse piece order, starting from solved board ---
+    // Places the solver's last piece first from solved (the piece closest to the
+    // solved state in the solver's search). Index j = pieces placed from solved =
+    // pieces remaining in solver. At solver depth d, check rev bounds at N-d.
+    let mut rev_max_deficit = vec![0u32; n + 1];
+    let mut rev_max_jagg = vec![0u32; n + 1];
+    {
+        let mut rng2 = rand::rngs::SmallRng::seed_from_u64(0x5245_5645_5253_454D);
+        for _ in 0..num_trials {
+            let mut cell_value = [0u8; 225]; // solved = all zeros
+            let mut deficit: u32 = 0;
+
+            for k in 0..n {
+                let placements = &all_placements[n - 1 - k];
+                let idx = rng2.random_range(0..placements.len());
+                let mask = placements[idx].2;
+
+                let mut bits = mask;
+                let mut zeros_hit = 0u32;
+                while !bits.is_zero() {
+                    let bit = bits.lowest_set_bit() as usize;
+                    let old_val = cell_value[bit];
+                    if old_val == 0 { zeros_hit += 1; }
+                    cell_value[bit] = if old_val == 0 { m - 1 } else { old_val - 1 };
+                    bits.clear_bit(bit as u32);
+                }
+
+                deficit = deficit + m32 * zeros_hit - mask.count_ones();
+                let depth = k + 1;
+                if deficit > rev_max_deficit[depth] {
+                    rev_max_deficit[depth] = deficit;
+                }
+
+                let mut jagg: u32 = 0;
+                for r in 0..h {
+                    for c in 0..w {
+                        let v = cell_value[r * 15 + c];
+                        if c + 1 < w && cell_value[r * 15 + c + 1] != v { jagg += 1; }
+                        if r + 1 < h && cell_value[(r + 1) * 15 + c] != v { jagg += 1; }
+                    }
+                }
+                if jagg > rev_max_jagg[depth] {
+                    rev_max_jagg[depth] = jagg;
+                }
+            }
+        }
+    }
+
     // Build levels from bucket accumulations.
     // For percentile P: take buckets 0..b where cumulative count >= P% of trials.
     // Per-depth maxes are the max across included buckets.
@@ -229,7 +284,12 @@ pub(crate) fn precompute_mc(
         for h in &mut max_hits {
             *h = h.saturating_add(1).min(31);
         }
-        McLevel { max_hits_at_depth: max_hits, max_deficit_at_depth: max_deficit, max_jagg_at_depth: max_jagg }
+        McLevel {
+            max_hits_at_depth: max_hits, max_deficit_at_depth: max_deficit,
+            max_jagg_at_depth: max_jagg,
+            rev_max_deficit: rev_max_deficit.clone(),
+            rev_max_jagg: rev_max_jagg.clone(),
+        }
     };
 
     for &pct in &percentiles {
@@ -253,15 +313,19 @@ pub(crate) fn precompute_mc(
     // non-monotonic and MC can't guarantee coverage of all valid states.
     let mut final_level = build_level(MAX_BUCKETS - 1);
     for j in &mut final_level.max_jagg_at_depth { *j = u32::MAX; }
+    for d in &mut final_level.rev_max_deficit { *d = u32::MAX; }
+    for j in &mut final_level.rev_max_jagg { *j = u32::MAX; }
     let final_hit = *final_level.max_hits_at_depth.last().unwrap();
     if levels.last().map_or(true, |prev|
         *prev.max_hits_at_depth.last().unwrap() != final_hit
     ) {
         levels.push(final_level);
     } else {
-        // Final deduped with last percentile level — override its jaggedness to u32::MAX.
+        // Final deduped with last percentile level — disable non-monotonic bounds.
         let last = levels.last_mut().unwrap();
         for j in &mut last.max_jagg_at_depth { *j = u32::MAX; }
+        for d in &mut last.rev_max_deficit { *d = u32::MAX; }
+        for j in &mut last.rev_max_jagg { *j = u32::MAX; }
     }
 
     debug_assert!(levels.windows(2).all(|w|
