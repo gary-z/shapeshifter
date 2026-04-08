@@ -1,13 +1,12 @@
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
-use crate::core::coverage::precompute_suffix_coverage;
 use crate::core::piece::Piece;
 use super::SolverData;
 
 /// Build all precomputed data needed by the backtracking solver.
 ///
 /// This includes: suffix sums, jaggedness masks, parity partitions,
-/// suffix coverage, and hit-count MC levels.
+/// and hit-count MC levels.
 pub(crate) fn build_solver_data(
     board: &Board,
     pieces: &[Piece],
@@ -24,21 +23,6 @@ pub(crate) fn build_solver_data(
     // Precompute suffix sums/maxes of piece properties.
     let total_deficit_prune = super::prune::total_deficit::TotalDeficitPrune::precompute(pieces, order);
     let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
-
-    // Precompute per-piece reach: union of all placement masks.
-    let reaches: Vec<Bitboard> = all_placements
-        .iter()
-        .map(|placements| {
-            let mut reach = Bitboard::ZERO;
-            for &(_, _, mask) in placements {
-                reach |= mask;
-            }
-            reach
-        })
-        .collect();
-
-    // Precompute suffix coverage in binary bitboard layers.
-    let suffix_coverage = precompute_suffix_coverage(&reaches);
 
     let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
 
@@ -62,7 +46,6 @@ pub(crate) fn build_solver_data(
         parity_prune,
         mc_levels,
         mc_level_idx: std::sync::atomic::AtomicUsize::new(num_levels.saturating_sub(1)),
-        suffix_coverage,
         skip_tables,
         single_cell_start,
         m,

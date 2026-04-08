@@ -142,7 +142,7 @@ macro_rules! define_backtrack {
             let pl_len = placements.len();
             let mut order = [0u8; 196];
             sort_placements(board, data.m, placements, &mut order);
-            let fs = filter_state(board, data, piece_idx, config);
+            let fs = filter_state(board, data, piece_idx);
 
             for oi in 0..pl_len {
                 let pl_idx = order[oi] as usize;
@@ -280,7 +280,7 @@ fn build_search_frame(
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
 
-    let fs = filter_state(board, data, piece_idx, config);
+    let fs = filter_state(board, data, piece_idx);
 
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {

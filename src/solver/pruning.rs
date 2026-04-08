@@ -42,9 +42,6 @@ pub(crate) fn filter_placement(
     prev_placement: usize,
     fs: &FilterState,
 ) -> bool {
-    // Cell locking: skip placements that hit locked zero cells.
-    if !(mask & fs.locked_mask).is_zero() { return false; }
-
     // Zero-hit budget: if this placement hits more zero cells than the child
     // can afford (would make child_deficit > child_remaining_bits), skip.
     // Subsumes the wrapping filter (max_zeros_hit=0 when remaining_bits==deficit).
@@ -63,7 +60,6 @@ pub(crate) fn filter_placement(
 
 /// Per-node filter state, constant across all placements at this node.
 pub(crate) struct FilterState {
-    pub locked_mask: Bitboard,
     pub zero_plane: Bitboard,
     /// Max zero cells a placement can hit without making the child's deficit
     /// exceed its remaining budget. Generalizes the wrapping filter:
@@ -77,13 +73,7 @@ pub(crate) fn filter_state(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
-    config: &super::PruningConfig,
 ) -> FilterState {
-    let locked_mask = if config.cell_locking {
-        board.plane(0) & !data.suffix_coverage[piece_idx].coverage_ge(data.m)
-    } else {
-        Bitboard::ZERO
-    };
     let zero_plane = board.plane(0);
     // Max zeros a placement can hit: (remaining_bits - deficit) / M.
     // Any placement exceeding this will fail the child's total_deficit check.
@@ -94,7 +84,7 @@ pub(crate) fn filter_state(
     } else {
         0
     };
-    FilterState { locked_mask, zero_plane, max_zeros_hit }
+    FilterState { zero_plane, max_zeros_hit }
 }
 
 // ---------------------------------------------------------------------------

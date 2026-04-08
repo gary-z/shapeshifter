@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use crate::core::bitboard::Bitboard;
-use crate::core::coverage::CoverageCounter;
 use crate::game::Game;
 
 /// Format a count with SI suffix (e.g. 1234567 → "1.2M nodes").
@@ -41,9 +40,7 @@ pub struct SolveResult {
 pub struct PruningConfig {
     pub active_planes: bool,
     pub total_deficit_global: bool,
-    pub coverage: bool,
     pub jaggedness: bool,
-    pub cell_locking: bool,
     pub single_cell_endgame: bool,
 }
 
@@ -52,9 +49,7 @@ impl Default for PruningConfig {
         Self {
             active_planes: true,
             total_deficit_global: true,
-            coverage: true,
             jaggedness: true,
-            cell_locking: true,
             single_cell_endgame: true,
         }
     }
@@ -66,9 +61,7 @@ impl PruningConfig {
         Self {
             active_planes: false,
             total_deficit_global: false,
-            coverage: false,
             jaggedness: false,
-            cell_locking: false,
             single_cell_endgame: false,
         }
     }
@@ -92,7 +85,6 @@ pub(crate) struct SolverData {
     pub(crate) mc_levels: Vec<prune::hit_count::McLevel>,
     /// Current pipeline level index into mc_levels.
     pub(crate) mc_level_idx: std::sync::atomic::AtomicUsize,
-    pub(crate) suffix_coverage: Vec<CoverageCounter>,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
     pub(crate) m: u8,
@@ -693,21 +685,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_coverage() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.coverage = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "coverage prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "coverage should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
     fn test_prune_jaggedness() {
         let configs = small_configs();
         let seeds = test_seeds();
@@ -720,21 +697,6 @@ mod tests {
         assert_eq!(fail_with, 0, "jaggedness prune caused failures");
         assert!(nodes_with <= nodes_without,
             "jaggedness should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_prune_cell_locking() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.cell_locking = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "cell_locking prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "cell_locking should reduce nodes: {} vs {}", nodes_with, nodes_without);
     }
 
     #[test]
