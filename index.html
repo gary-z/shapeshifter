@@ -23,14 +23,13 @@
     }
 
     h1 { text-align: center; color: #e94560; font-size: 2em; margin-bottom: 5px; }
-    .subtitle { text-align: center; color: #888; font-size: 0.9em; margin-bottom: 30px; }
     #status { text-align: center; padding: 8px; font-size: 0.85em; color: #aaa; margin-bottom: 20px; }
 
     .input-section { margin-bottom: 25px; }
     .input-section label { display: block; font-weight: 600; margin-bottom: 8px; color: #ccc; }
 
     textarea {
-        width: 100%; height: 200px;
+        width: 100%; height: 80px;
         background: #16213e; color: #e0e0e0;
         border: 1px solid #333; border-radius: 8px;
         padding: 12px;
@@ -82,20 +81,16 @@
     }
 
     .solved { color: #2ecc71; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }
-
-    .help-text { color: #666; font-size: 0.8em; margin-top: 8px; }
 </style>
 </head>
 <body>
 <div class="container">
     <h1>Shapeshifter Solver</h1>
-    <p class="subtitle">Paste the Shapeshifter page HTML source and click Solve.</p>
     <div id="status">Loading WASM solver...</div>
 
     <div class="input-section">
-        <label for="puzzle-input">Page HTML source</label>
-        <textarea id="puzzle-input" placeholder="Right-click the Shapeshifter puzzle page → View Page Source → Select All → Copy → Paste here"></textarea>
-        <p class="help-text">On the Neopets Shapeshifter page, right-click → View Page Source (or Ctrl+U), then Ctrl+A to select all, Ctrl+C to copy, and paste here.</p>
+        <label for="puzzle-input">Paste page source (Ctrl+U, Ctrl+A, Ctrl+C)</label>
+        <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
     </div>
 
     <div class="btn-row">
