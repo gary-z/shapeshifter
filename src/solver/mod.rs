@@ -97,25 +97,31 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
+    let mut first_solution: Option<Solution> = None;
     for level_idx in 0..num_levels {
         data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
         let result = if parallel {
             #[cfg(not(target_arch = "wasm32"))]
             { parallel::run_parallel(&board, &order, &data, &config, exhaustive) }
             #[cfg(target_arch = "wasm32")]
-            { run_serial(&board, &order, &data, &config) }
+            { run_serial(&board, &order, &data, &config, exhaustive) }
         } else {
-            run_serial(&board, &order, &data, &config)
+            run_serial(&board, &order, &data, &config, exhaustive)
         };
         total_nodes += result.nodes_visited;
         last_progress = result.progress;
         if result.solution.is_some() {
-            return SolveResult { nodes_visited: total_nodes, ..result };
+            if !exhaustive {
+                return SolveResult { nodes_visited: total_nodes, ..result };
+            }
+            if first_solution.is_none() {
+                first_solution = result.solution;
+            }
         }
     }
 
     SolveResult {
-        solution: None,
+        solution: first_solution,
         nodes_visited: total_nodes,
         progress: last_progress,
     }
@@ -189,6 +195,7 @@ fn run_serial(
     order: &[usize],
     data: &SolverData,
     config: &PruningConfig,
+    exhaustive: bool,
 ) -> SolveResult {
     let n = data.all_placements.len();
     let nodes = Cell::new(0u64);
@@ -203,6 +210,7 @@ fn run_serial(
         &mut sorted_solution,
         &nodes,
         config,
+        exhaustive,
     );
 
     let solution = if found {
@@ -225,7 +233,7 @@ fn run_serial(
 /// Kept for tests that call it directly.
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
     let (board, order, data) = prepare_solver(game, config);
-    run_serial(&board, &order, &data, config)
+    run_serial(&board, &order, &data, config, false)
 }
 
 

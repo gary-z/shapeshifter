@@ -112,6 +112,7 @@ pub(crate) fn backtrack(
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
     config: &PruningConfig,
+    exhaustive: bool,
 ) -> bool {
     if piece_idx == data.all_placements.len() {
         return board.is_solved();
@@ -129,6 +130,8 @@ pub(crate) fn backtrack(
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
     let fs = filter_state(board, data, piece_idx);
+
+    let mut found = false;
 
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
@@ -161,12 +164,16 @@ pub(crate) fn backtrack(
             solution,
             nodes,
             config,
+            exhaustive,
         ) {
-            return true;
+            if !exhaustive {
+                return true;
+            }
+            found = true;
         }
 
         solution.pop();
     }
 
-    false
+    found
 }
