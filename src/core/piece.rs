@@ -68,14 +68,14 @@ impl Piece {
     /// Horizontal perimeter: boundary edges between horizontally adjacent cells.
     pub fn h_perimeter(&self) -> u32 {
         let s = self.shape;
-        let h_internal = (s & (s >> 1)).count_ones();
+        let h_internal = (s & s.shr_1()).count_ones();
         s.count_ones() * 2 - h_internal * 2
     }
 
     /// Vertical perimeter: boundary edges between vertically adjacent cells.
     pub fn v_perimeter(&self) -> u32 {
         let s = self.shape;
-        let v_internal = (s & (s >> STRIDE as u32)).count_ones();
+        let v_internal = (s & s.shr_stride()).count_ones();
         s.count_ones() * 2 - v_internal * 2
     }
 
@@ -87,13 +87,22 @@ impl Piece {
 
     /// Iterate over all valid placement positions on a board of the given dimensions.
     /// Returns (row, col, shifted_shape) for each valid position.
+    /// Uses incremental 1-cell shifts instead of absolute shifts for each position.
     pub fn placements(&self, board_height: u8, board_width: u8) -> Vec<(usize, usize, Bitboard)> {
         let max_row = board_height as usize - self.height as usize;
         let max_col = board_width as usize - self.width as usize;
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity((max_row + 1) * (max_col + 1));
+        let mut row_start = self.shape; // shape at (0, 0)
         for r in 0..=max_row {
+            let mut mask = row_start;
             for c in 0..=max_col {
-                result.push((r, c, self.placed_at(r, c)));
+                result.push((r, c, mask));
+                if c < max_col {
+                    mask = mask.shl_1();
+                }
+            }
+            if r < max_row {
+                row_start = row_start.shl_stride();
             }
         }
         result

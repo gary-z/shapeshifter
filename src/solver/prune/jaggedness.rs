@@ -35,8 +35,8 @@ pub(crate) fn split_jaggedness(board: &Board, h_mask: Bitboard, v_mask: Bitboard
     let mut sh = [Bitboard::ZERO; 5]; // M <= 5
     let mut sv = [Bitboard::ZERO; 5];
     for d in 0..m {
-        sh[d] = board.plane(d as u8) >> 1;
-        sv[d] = board.plane(d as u8) >> STRIDE as u32;
+        sh[d] = board.plane(d as u8).shr_1();
+        sv[d] = board.plane(d as u8).shr_stride();
     }
     let mut circ_h = 0u32;
     let mut circ_v = 0u32;

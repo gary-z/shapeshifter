@@ -19,7 +19,7 @@ struct SearchFrame {
     board: Board,
     hits: HitCounter,
     piece_idx: usize,
-    placements: Vec<(usize, usize, usize, Bitboard)>,
+    placements: Vec<(usize, Bitboard)>,  // (pl_idx, mask) — row/col looked up on solution
     cursor: usize,
     filtered_out: usize,
 }
@@ -95,11 +95,11 @@ fn build_search_frame(
     let mut filtered = Vec::with_capacity(pl_len);
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
-        let (row, col, mask) = placements[pl_idx];
+        let mask = placements[pl_idx].2;
         if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
             continue;
         }
-        filtered.push((pl_idx, row, col, mask));
+        filtered.push((pl_idx, mask));
     }
 
     let filtered_out = pl_len - filtered.len();
@@ -123,7 +123,7 @@ fn split_work(
         if frame.cursor >= frame.placements.len() { continue; }
         let mut tasks = Vec::new();
         for ci in frame.cursor..frame.placements.len() {
-            let (pl_idx, row, col, mask) = frame.placements[ci];
+            let (pl_idx, mask) = frame.placements[ci];
             let mut board = frame.board.clone();
             board.apply_piece(mask);
             let mut hits = frame.hits;
@@ -131,6 +131,7 @@ fn split_work(
             let depth = frame.piece_idx + 1;
             let prefix_len = base_solution_len + si;
             let mut prefix = solution_prefix[..prefix_len].to_vec();
+            let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
             prefix.push((row, col));
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
             tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
@@ -215,14 +216,13 @@ fn backtrack_stealing(
             continue;
         }
 
-        let (pl_idx, row, col, mask) = frame.placements[frame.cursor];
+        let (pl_idx, mask) = frame.placements[frame.cursor];
         frame.cursor += 1;
         let piece_idx = frame.piece_idx;
 
         let mut board = frame.board.clone();
         board.apply_piece(mask);
 
-        // Inline hit-count update + check (cross-module fn call not reliably inlined).
         let mut new_hits = frame.hits;
         new_hits.apply_piece(mask);
         if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
@@ -233,6 +233,7 @@ fn backtrack_stealing(
 
         let sol_depth = base_solution_len + stack.len() - 1;
         solution.truncate(sol_depth);
+        let (row, col, _) = data.all_placements[piece_idx][pl_idx];
         solution.push((row, col));
 
         nodes.set(nodes.get() + 1);

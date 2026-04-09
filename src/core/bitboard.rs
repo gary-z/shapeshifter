@@ -95,11 +95,53 @@ impl Bitboard {
             + arr[3].count_ones()
     }
 
-    // TODO: Add specialized shr_1() and shr_stride() methods using lane-shift +
-    // carry-OR to avoid the scalar shldq/shrdq fallback in the generic shr path.
-    // The jaggedness computation (split_jaggedness) calls >> 1 and >> STRIDE on
-    // every node, generating ~80 scalar double-shift instructions that could be
-    // replaced with ~6 SIMD instructions per call.
+    /// Shift right by 1 bit (one cell horizontally). Specialized for performance.
+    #[inline(always)]
+    pub fn shr_1(&self) -> Self {
+        let arr = self.v.to_array();
+        Self { v: u64x4::from_array([
+            (arr[0] >> 1) | (arr[1] << 63),
+            (arr[1] >> 1) | (arr[2] << 63),
+            (arr[2] >> 1) | (arr[3] << 63),
+            arr[3] >> 1,
+        ])}
+    }
+
+    /// Shift left by 1 bit (one cell horizontally). Specialized for performance.
+    #[inline(always)]
+    pub fn shl_1(&self) -> Self {
+        let arr = self.v.to_array();
+        Self { v: u64x4::from_array([
+            arr[0] << 1,
+            (arr[1] << 1) | (arr[0] >> 63),
+            (arr[2] << 1) | (arr[1] >> 63),
+            (arr[3] << 1) | (arr[2] >> 63),
+        ])}
+    }
+
+    /// Shift right by STRIDE bits (one cell vertically). Specialized for performance.
+    #[inline(always)]
+    pub fn shr_stride(&self) -> Self {
+        let arr = self.v.to_array();
+        Self { v: u64x4::from_array([
+            (arr[0] >> crate::core::STRIDE) | (arr[1] << (64 - crate::core::STRIDE)),
+            (arr[1] >> crate::core::STRIDE) | (arr[2] << (64 - crate::core::STRIDE)),
+            (arr[2] >> crate::core::STRIDE) | (arr[3] << (64 - crate::core::STRIDE)),
+            arr[3] >> crate::core::STRIDE,
+        ])}
+    }
+
+    /// Shift left by STRIDE bits (one cell vertically). Specialized for performance.
+    #[inline(always)]
+    pub fn shl_stride(&self) -> Self {
+        let arr = self.v.to_array();
+        Self { v: u64x4::from_array([
+            arr[0] << crate::core::STRIDE,
+            (arr[1] << crate::core::STRIDE) | (arr[0] >> (64 - crate::core::STRIDE)),
+            (arr[2] << crate::core::STRIDE) | (arr[1] >> (64 - crate::core::STRIDE)),
+            (arr[3] << crate::core::STRIDE) | (arr[2] >> (64 - crate::core::STRIDE)),
+        ])}
+    }
 
     /// Shift left by `n` bits. Bits shifted beyond 256 are lost.
     pub fn shl(&self, n: u32) -> Self {

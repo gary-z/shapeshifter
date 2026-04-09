@@ -132,7 +132,7 @@ pub(crate) fn backtrack(
 
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
-        let (row, col, mask) = placements[pl_idx];
+        let mask = placements[pl_idx].2;
         nodes.set(nodes.get() + 1);
 
         if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
@@ -148,7 +148,7 @@ pub(crate) fn backtrack(
             continue;
         }
 
-        solution.push((row, col));
+        solution.push((placements[pl_idx].0, placements[pl_idx].1));
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
 
