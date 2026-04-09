@@ -92,19 +92,14 @@ pub(crate) struct SolverData {
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     let config = PruningConfig::default();
 
-    let precompute_start = std::time::Instant::now();
     let (board, order, data) = prepare_solver(game, &config);
-    let precompute_elapsed = precompute_start.elapsed();
     let num_levels = data.mc_prune.levels.len();
-    eprintln!("precompute: {:.3?} ({} pipeline levels)", precompute_elapsed, num_levels);
 
-    let solve_start = std::time::Instant::now();
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
     let mut first_solution: Option<Solution> = None;
     for level_idx in 0..num_levels {
         data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
-        let level_start = std::time::Instant::now();
         macro_rules! dispatch {
             ($m:literal) => {{
                 if parallel {
@@ -124,18 +119,10 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
             5 => dispatch!(5),
             _ => unreachable!(),
         };
-        let level_elapsed = level_start.elapsed();
         total_nodes += result.nodes_visited;
         last_progress = result.progress;
-        let found = result.solution.is_some();
-        eprintln!("  level {}/{}: {:.3?}  {} nodes{}",
-            level_idx + 1, num_levels, level_elapsed,
-            format_count(result.nodes_visited),
-            if found { "  [SOLVED]" } else { "" });
-        if found {
+        if result.solution.is_some() {
             if !exhaustive {
-                let total_solve = solve_start.elapsed();
-                eprintln!("solve total: {:.3?}", total_solve);
                 return SolveResult { nodes_visited: total_nodes, ..result };
             }
             if first_solution.is_none() {
@@ -144,8 +131,6 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
         }
     }
 
-    let total_solve = solve_start.elapsed();
-    eprintln!("solve total: {:.3?}", total_solve);
     SolveResult {
         solution: first_solution,
         nodes_visited: total_nodes,
