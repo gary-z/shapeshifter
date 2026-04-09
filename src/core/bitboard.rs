@@ -95,6 +95,12 @@ impl Bitboard {
             + arr[3].count_ones()
     }
 
+    // TODO: Add specialized shr_1() and shr_stride() methods using lane-shift +
+    // carry-OR to avoid the scalar shldq/shrdq fallback in the generic shr path.
+    // The jaggedness computation (split_jaggedness) calls >> 1 and >> STRIDE on
+    // every node, generating ~80 scalar double-shift instructions that could be
+    // replaced with ~6 SIMD instructions per call.
+
     /// Shift left by `n` bits. Bits shifted beyond 256 are lost.
     pub fn shl(&self, n: u32) -> Self {
         if n >= 256 {
