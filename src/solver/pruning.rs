@@ -98,6 +98,7 @@ pub(crate) fn filter_state(
 /// Run all pruning checks for a given board state and piece index.
 /// Returns true if the state is feasible (search should continue).
 /// Ordered by cost-effectiveness: cheapest high-impact checks first.
+#[inline(always)]
 pub(crate) fn prune_node(
     board: &Board,
     data: &SolverData,
