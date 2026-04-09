@@ -99,12 +99,11 @@ impl McPrune {
     /// Per-node feasibility check using MC bounds + deterministic jaggedness.
     /// Returns false to prune. Computes jaggedness once for both MC and deterministic checks.
     #[inline(always)]
-    pub fn try_prune(
+    pub fn try_prune<const M: usize>(
         &self,
         board: &crate::core::board::Board,
         piece_idx: usize,
         jagg_prune: &super::jaggedness::JaggednessPrune,
-        m: u8,
     ) -> bool {
         let idx = self.level_idx.load(std::sync::atomic::Ordering::Relaxed);
         let level = &self.levels[idx];
@@ -119,11 +118,11 @@ impl McPrune {
 
         // Jaggedness: MC bounds (forward + reverse) + deterministic lower bound.
         // Computed once, shared across all jaggedness checks.
-        let j = super::jaggedness::split_jaggedness(board, jagg_prune.h_mask(), jagg_prune.v_mask());
+        let j = super::jaggedness::split_jaggedness::<M>(board, jagg_prune.h_mask(), jagg_prune.v_mask());
         let total_jagg = j.circular_h + j.circular_v;
         if total_jagg > level.max_jagg_at_depth[piece_idx] { return false; }
         if total_jagg > level.rev_max_jagg[remaining] { return false; }
-        if !jagg_prune.try_prune(&j, piece_idx, m) { return false; }
+        if !jagg_prune.try_prune(&j, piece_idx, M as u8) { return false; }
 
         true
     }
@@ -203,7 +202,13 @@ pub(crate) fn precompute_mc(
         cell_value[..225].copy_from_slice(&initial_value[..225]);
 
         // Depth 0 jaggedness.
-        let jagg0 = super::jaggedness::split_jaggedness(board, jagg_h_mask, jagg_v_mask);
+        let jagg0 = match m {
+            2 => super::jaggedness::split_jaggedness::<2>(board, jagg_h_mask, jagg_v_mask),
+            3 => super::jaggedness::split_jaggedness::<3>(board, jagg_h_mask, jagg_v_mask),
+            4 => super::jaggedness::split_jaggedness::<4>(board, jagg_h_mask, jagg_v_mask),
+            5 => super::jaggedness::split_jaggedness::<5>(board, jagg_h_mask, jagg_v_mask),
+            _ => unreachable!(),
+        };
         let jagg0_total = jagg0.circular_h + jagg0.circular_v;
 
         // We'll store final max_hits as bucket key, accumulate per-depth maxes.

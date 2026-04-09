@@ -103,7 +103,7 @@ pub(crate) fn next_prev_placement(data: &SolverData, piece_idx: usize, pl_idx: u
 
 /// Serial backtracker. Recursively tries all placements for each piece,
 /// pruning infeasible branches via MC bounds and deterministic checks.
-pub(crate) fn backtrack(
+pub(crate) fn backtrack<const M: usize>(
     board: &Board,
     hits: HitCounter,
     data: &SolverData,
@@ -123,13 +123,13 @@ pub(crate) fn backtrack(
         return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
     }
 
-    if !prune_node(board, data, piece_idx, config) { return false; }
+    if !prune_node::<M>(board, data, piece_idx, config) { return false; }
 
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
-    let fs = filter_state(board, data, piece_idx);
+    let fs = filter_state::<M>(board, data, piece_idx);
 
     let mut found = false;
 
@@ -155,7 +155,7 @@ pub(crate) fn backtrack(
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
 
-        if backtrack(
+        if backtrack::<M>(
             &board,
             new_hits,
             data,

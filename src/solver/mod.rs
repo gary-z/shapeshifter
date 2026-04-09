@@ -92,26 +92,50 @@ pub(crate) struct SolverData {
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     let config = PruningConfig::default();
 
+    let precompute_start = std::time::Instant::now();
     let (board, order, data) = prepare_solver(game, &config);
+    let precompute_elapsed = precompute_start.elapsed();
     let num_levels = data.mc_prune.levels.len();
+    eprintln!("precompute: {:.3?} ({} pipeline levels)", precompute_elapsed, num_levels);
 
+    let solve_start = std::time::Instant::now();
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
     let mut first_solution: Option<Solution> = None;
     for level_idx in 0..num_levels {
         data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
-        let result = if parallel {
-            #[cfg(not(target_arch = "wasm32"))]
-            { parallel::run_parallel(&board, &order, &data, &config, exhaustive) }
-            #[cfg(target_arch = "wasm32")]
-            { run_serial(&board, &order, &data, &config, exhaustive) }
-        } else {
-            run_serial(&board, &order, &data, &config, exhaustive)
+        let level_start = std::time::Instant::now();
+        macro_rules! dispatch {
+            ($m:literal) => {{
+                if parallel {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    { parallel::run_parallel::<$m>(&board, &order, &data, &config, exhaustive) }
+                    #[cfg(target_arch = "wasm32")]
+                    { run_serial(&board, &order, &data, &config, exhaustive) }
+                } else {
+                    run_serial(&board, &order, &data, &config, exhaustive)
+                }
+            }};
+        }
+        let result = match data.m {
+            2 => dispatch!(2),
+            3 => dispatch!(3),
+            4 => dispatch!(4),
+            5 => dispatch!(5),
+            _ => unreachable!(),
         };
+        let level_elapsed = level_start.elapsed();
         total_nodes += result.nodes_visited;
         last_progress = result.progress;
-        if result.solution.is_some() {
+        let found = result.solution.is_some();
+        eprintln!("  level {}/{}: {:.3?}  {} nodes{}",
+            level_idx + 1, num_levels, level_elapsed,
+            format_count(result.nodes_visited),
+            if found { "  [SOLVED]" } else { "" });
+        if found {
             if !exhaustive {
+                let total_solve = solve_start.elapsed();
+                eprintln!("solve total: {:.3?}", total_solve);
                 return SolveResult { nodes_visited: total_nodes, ..result };
             }
             if first_solution.is_none() {
@@ -120,6 +144,8 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
         }
     }
 
+    let total_solve = solve_start.elapsed();
+    eprintln!("solve total: {:.3?}", total_solve);
     SolveResult {
         solution: first_solution,
         nodes_visited: total_nodes,
@@ -189,6 +215,32 @@ fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::
     (board, order, data)
 }
 
+/// Dispatch serial backtrack monomorphized on M to eliminate runtime divs.
+fn dispatch_backtrack(
+    board: &crate::core::board::Board,
+    data: &SolverData,
+    solution: &mut Vec<(usize, usize)>,
+    nodes: &Cell<u64>,
+    config: &PruningConfig,
+    exhaustive: bool,
+) -> bool {
+    macro_rules! go {
+        ($m:literal) => {
+            backtrack::backtrack::<$m>(
+                board, prune::mc::HitCounter::new(), data, 0, usize::MAX,
+                solution, nodes, config, exhaustive,
+            )
+        };
+    }
+    match data.m {
+        2 => go!(2),
+        3 => go!(3),
+        4 => go!(4),
+        5 => go!(5),
+        _ => unreachable!("M must be 2..=5"),
+    }
+}
+
 /// Serial backtrack with pre-built data.
 fn run_serial(
     board: &crate::core::board::Board,
@@ -201,16 +253,8 @@ fn run_serial(
     let nodes = Cell::new(0u64);
     let mut sorted_solution = Vec::with_capacity(n);
 
-    let found = backtrack::backtrack(
-        board,
-        prune::mc::HitCounter::new(),
-        data,
-        0,
-        usize::MAX,
-        &mut sorted_solution,
-        &nodes,
-        config,
-        exhaustive,
+    let found = dispatch_backtrack(
+        board, data, &mut sorted_solution, &nodes, config, exhaustive,
     );
 
     let solution = if found {

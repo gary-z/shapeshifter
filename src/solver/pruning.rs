@@ -65,7 +65,7 @@ pub(crate) struct FilterState {
 
 /// Compute filter state that's constant across all placements at a node.
 #[inline(always)]
-pub(crate) fn filter_state(
+pub(crate) fn filter_state<const M: usize>(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
@@ -76,7 +76,7 @@ pub(crate) fn filter_state(
     let rb = data.total_deficit_prune.remaining_bits(piece_idx);
     let deficit = board.total_deficit();
     let max_zeros_hit = if rb >= deficit {
-        (rb - deficit) / data.m as u32
+        (rb - deficit) / M as u32
     } else {
         0
     };
@@ -99,7 +99,7 @@ pub(crate) fn filter_state(
 /// Returns true if the state is feasible (search should continue).
 /// Ordered by cost-effectiveness: cheapest high-impact checks first.
 #[inline(always)]
-pub(crate) fn prune_node(
+pub(crate) fn prune_node<const M: usize>(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
@@ -112,7 +112,7 @@ pub(crate) fn prune_node(
     // redundant for children of filtered parents but serves as a safety net.
     if config.total_deficit_global && !data.total_deficit_prune.try_prune(board, piece_idx) { return false; }
     // MC bounds (forward + reverse) + deterministic jaggedness (all share one jagg computation).
-    if !data.mc_prune.try_prune(board, piece_idx, &data.jaggedness_prune, data.m) { return false; }
-    if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, data.m, rb) { return false; }
+    if !data.mc_prune.try_prune::<M>(board, piece_idx, &data.jaggedness_prune) { return false; }
+    if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, M as u8, rb) { return false; }
     true
 }

@@ -30,11 +30,10 @@ pub(crate) struct JaggednessResult {
 /// For each adjacent cell pair, computes the circular distance min(|a-b|, M-|a-b|)
 /// and directional forward/backward distances. Masks determine which pairs to check.
 #[inline(always)]
-pub(crate) fn split_jaggedness(board: &Board, h_mask: Bitboard, v_mask: Bitboard) -> JaggednessResult {
-    let m = board.m() as usize;
+pub(crate) fn split_jaggedness<const M: usize>(board: &Board, h_mask: Bitboard, v_mask: Bitboard) -> JaggednessResult {
     let mut sh = [Bitboard::ZERO; 5]; // M <= 5
     let mut sv = [Bitboard::ZERO; 5];
-    for d in 0..m {
+    for d in 0..M {
         sh[d] = board.plane(d as u8).shr_1();
         sv[d] = board.plane(d as u8).shr_stride();
     }
@@ -44,18 +43,18 @@ pub(crate) fn split_jaggedness(board: &Board, h_mask: Bitboard, v_mask: Bitboard
     let mut fwd_v = 0u32;
     let mut bwd_h = 0u32;
     let mut bwd_v = 0u32;
-    for d1 in 0..m {
+    for d1 in 0..M {
         let p = board.plane(d1 as u8);
-        for d2 in 0..m {
+        for d2 in 0..M {
             if d1 == d2 { continue; }
             let h_count = (p & sh[d2] & h_mask).count_ones();
             let v_count = (p & sv[d2] & v_mask).count_ones();
             let diff = if d1 > d2 { d1 - d2 } else { d2 - d1 };
-            let cw = diff.min(m - diff) as u32;
+            let cw = diff.min(M - diff) as u32;
             circ_h += cw * h_count;
             circ_v += cw * v_count;
-            let fw = ((d2 + m - d1) % m) as u32;
-            let bw = ((d1 + m - d2) % m) as u32;
+            let fw = ((d2 + M - d1) % M) as u32;
+            let bw = ((d1 + M - d2) % M) as u32;
             fwd_h += fw * h_count;
             fwd_v += fw * v_count;
             bwd_h += bw * h_count;
@@ -155,7 +154,13 @@ mod tests {
                 if r + 1 < h { v_mask.set_bit(bit); }
             }
         }
-        let result = split_jaggedness(board, h_mask, v_mask);
+        let result = match board.m() {
+            2 => split_jaggedness::<2>(board, h_mask, v_mask),
+            3 => split_jaggedness::<3>(board, h_mask, v_mask),
+            4 => split_jaggedness::<4>(board, h_mask, v_mask),
+            5 => split_jaggedness::<5>(board, h_mask, v_mask),
+            _ => unreachable!(),
+        };
         result.circular_h + result.circular_v
     }
 
@@ -186,7 +191,7 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness::<2>(&board, jp.h_mask(), jp.v_mask());
         assert!(jp.try_prune(&j, 0, 2));
     }
 
@@ -198,7 +203,7 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness::<2>(&board, jp.h_mask(), jp.v_mask());
         assert!(jp.try_prune(&j, 0, 2));
     }
 
@@ -210,7 +215,7 @@ mod tests {
         let pieces = vec![p];
         let order = vec![0];
         let jp = JaggednessPrune::precompute(&pieces, &order, 3, 3);
-        let j = split_jaggedness(&board, jp.h_mask(), jp.v_mask());
+        let j = split_jaggedness::<2>(&board, jp.h_mask(), jp.v_mask());
         assert!(!jp.try_prune(&j, 0, 2));
     }
 

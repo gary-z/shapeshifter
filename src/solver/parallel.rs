@@ -77,7 +77,7 @@ impl WorkQueue {
     }
 }
 
-fn build_search_frame(
+fn build_search_frame<const M: usize>(
     board: &Board,
     hits: HitCounter,
     data: &SolverData,
@@ -91,7 +91,7 @@ fn build_search_frame(
     let mut order = [0u8; 196];
     sort_placements(board, data.m, placements, &mut order);
 
-    let fs = filter_state(board, data, piece_idx);
+    let fs = filter_state::<M>(board, data, piece_idx);
 
     // Filter in-place: pack surviving indices into the front of order.
     let mut len = 0u8;
@@ -158,7 +158,7 @@ fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
     }
 }
 
-fn backtrack_stealing(
+fn backtrack_stealing<const M: usize>(
     initial_board: &Board,
     initial_hits: HitCounter,
     data: &SolverData,
@@ -192,13 +192,13 @@ fn backtrack_stealing(
         return result;
     }
 
-    if !prune_node(initial_board, data, start_depth, config) {
+    if !prune_node::<M>(initial_board, data, start_depth, config) {
         atomic_add_f64(progress, task_weight);
         return false;
     }
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
-    let first_frame = build_search_frame(
+    let first_frame = build_search_frame::<M>(
         initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
     );
     let mut progress_local: f64 = 0.0;
@@ -271,7 +271,7 @@ fn backtrack_stealing(
             continue;
         }
 
-        if !prune_node(&board, data, next_piece, config) {
+        if !prune_node::<M>(&board, data, next_piece, config) {
             progress_local += data.progress_weights[piece_idx];
             continue;
         }
@@ -289,7 +289,7 @@ fn backtrack_stealing(
         }
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
-        let new_frame = build_search_frame(
+        let new_frame = build_search_frame::<M>(
             &board, new_hits, data, next_piece, next_prev, config,
         );
         progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
@@ -305,7 +305,7 @@ fn backtrack_stealing(
 }
 
 /// Parallel backtrack with pre-built data.
-pub(crate) fn run_parallel(
+pub(crate) fn run_parallel<const M: usize>(
     board: &Board,
     order: &[usize],
     data: &SolverData,
@@ -388,7 +388,7 @@ pub(crate) fn run_parallel(
                     solution.extend_from_slice(&task.prefix);
                     nodes.set(0);
 
-                    let found = backtrack_stealing(
+                    let found = backtrack_stealing::<M>(
                         &task.board,
                         task.hits,
                         data,
