@@ -7,7 +7,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
-use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
 use super::backtrack::{sort_placements, solve_single_cells};
@@ -19,8 +18,10 @@ struct SearchFrame {
     board: Board,
     hits: HitCounter,
     piece_idx: usize,
-    placements: Vec<(usize, Bitboard)>,  // (pl_idx, mask) — row/col looked up on solution
-    cursor: usize,
+    /// Sorted, filtered placement indices into data.all_placements[piece_idx].
+    order: [u8; 196],
+    len: u8,
+    cursor: u8,
     filtered_out: usize,
 }
 
@@ -92,18 +93,19 @@ fn build_search_frame(
 
     let fs = filter_state(board, data, piece_idx);
 
-    let mut filtered = Vec::with_capacity(pl_len);
+    // Filter in-place: pack surviving indices into the front of order.
+    let mut len = 0u8;
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let mask = placements[pl_idx].2;
-        if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
-            continue;
+        if filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
+            order[len as usize] = pl_idx as u8;
+            len += 1;
         }
-        filtered.push((pl_idx, mask));
     }
 
-    let filtered_out = pl_len - filtered.len();
-    SearchFrame { board: board.clone(), hits, piece_idx, placements: filtered, cursor: 0, filtered_out }
+    let filtered_out = pl_len - len as usize;
+    SearchFrame { board: board.clone(), hits, piece_idx, order, len, cursor: 0, filtered_out }
 }
 
 #[inline]
@@ -120,10 +122,11 @@ fn split_work(
     wq: &WorkQueue,
 ) {
     for (si, frame) in stack.iter_mut().enumerate() {
-        if frame.cursor >= frame.placements.len() { continue; }
+        if frame.cursor >= frame.len { continue; }
         let mut tasks = Vec::new();
-        for ci in frame.cursor..frame.placements.len() {
-            let (pl_idx, mask) = frame.placements[ci];
+        for ci in frame.cursor..frame.len {
+            let pl_idx = frame.order[ci as usize] as usize;
+            let mask = data.all_placements[frame.piece_idx][pl_idx].2;
             let mut board = frame.board.clone();
             board.apply_piece(mask);
             let mut hits = frame.hits;
@@ -136,7 +139,7 @@ fn split_work(
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
             tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
         }
-        frame.cursor = frame.placements.len();
+        frame.cursor = frame.len;
         wq.push_many(tasks);
         return;
     }
@@ -211,14 +214,15 @@ fn backtrack_stealing(
         if stack.is_empty() { break; }
 
         let frame = stack.last_mut().unwrap();
-        if frame.cursor >= frame.placements.len() {
+        if frame.cursor >= frame.len {
             stack.pop();
             continue;
         }
 
-        let (pl_idx, mask) = frame.placements[frame.cursor];
+        let pl_idx = frame.order[frame.cursor as usize] as usize;
         frame.cursor += 1;
         let piece_idx = frame.piece_idx;
+        let mask = data.all_placements[piece_idx][pl_idx].2;
 
         let mut board = frame.board.clone();
         board.apply_piece(mask);
