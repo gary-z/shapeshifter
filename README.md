@@ -1,8 +1,15 @@
 # Shapeshifter Solver
 
-Solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), a Neopets puzzle game. Solves most of the 100 levels, including the hardest (14x14, M=5, 36 pieces) in under 10 seconds in a majority of cases.
+Solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), a Neopets puzzle game. 
+
+
+Solves most of the 100 levels in under 2 minutes using a modern CPU.
 
 ## Usage
+
+**Web**: https://gary-z.github.io/shapeshifter/ (single threaded)
+
+**CLI** (multi-threading-available):
 
 1. Save the Shapeshifter page source as `data/ShapeShifter.html` (Right-click the page, Save As, HTML Only).
 2. Run:

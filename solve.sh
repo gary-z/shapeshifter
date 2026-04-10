@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HTML_FILE="$SCRIPT_DIR/data/ShapeShifter.html"
 # Relative from data/solution.html to web/assets/
 ASSETS_DIR="../web/assets"
-JSON_FILE="$SCRIPT_DIR/data/puzzle.json"
 HISTORY_FILE="$SCRIPT_DIR/data/puzzle_history.jsonl"
 SOLUTION_FILE="$SCRIPT_DIR/data/solution.html"
 
@@ -19,10 +18,6 @@ fi
 # Build binaries if needed
 cargo build --release --bin parse --bin solve --manifest-path "$SCRIPT_DIR/Cargo.toml" 2>/dev/null
 
-# Parse HTML to JSON and append to history if new game
-echo "Parsing..."
-"$SCRIPT_DIR/target/release/parse" "$HTML_FILE" -o "$JSON_FILE" --history "$HISTORY_FILE"
-
-# Solve and generate visual guide
-echo ""
-"$SCRIPT_DIR/target/release/solve" "$JSON_FILE" --parallel --assets-dir "$ASSETS_DIR" -o "$SOLUTION_FILE"
+# Parse HTML, append to history, and solve in one pipeline
+"$SCRIPT_DIR/target/release/parse" "$HTML_FILE" --history "$HISTORY_FILE" \
+    | "$SCRIPT_DIR/target/release/solve" --parallel --assets-dir "$ASSETS_DIR" -o "$SOLUTION_FILE"
