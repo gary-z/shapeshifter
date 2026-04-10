@@ -1,4 +1,4 @@
-// Port of tools/parse_html.py — parse Neopets Shapeshifter HTML into puzzle JSON.
+// Parse Neopets Shapeshifter HTML into puzzle JSON (browser version).
 
 export function parseShapeshifterHtml(html) {
     const levelMatch = html.match(/LEVEL\s+(\d+)/);

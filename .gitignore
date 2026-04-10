@@ -6,4 +6,5 @@ data/puzzle.json
 data/solution.html
 solution.html
 __pycache__/
+.claude/
 web/pkg/

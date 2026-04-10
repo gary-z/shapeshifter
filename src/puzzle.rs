@@ -52,99 +52,65 @@ impl PuzzleJson {
     }
 }
 
-/// Generate an HTML solution guide.
+/// The shared board.js component, embedded at compile time.
+const BOARD_JS: &str = include_str!("../web/board.js");
+
+/// CSS shared between the web app and standalone solution files.
+const SOLUTION_CSS: &str = r#"
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; max-width: 800px; margin: 0 auto; padding: 20px; }
+.step-nav { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 15px; }
+.step-nav button { background: #2a2a4a; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 8px 20px; font-size: 1em; cursor: pointer; }
+.step-nav button:hover:not(:disabled) { background: #3a3a5a; }
+.step-nav button:disabled { color: #555; cursor: not-allowed; }
+.step-label { font-size: 1em; color: #ccc; min-width: 180px; text-align: center; }
+.board { display: inline-grid; gap: 0; padding: 0; margin: 0 auto; display: grid; justify-content: center; }
+.cell { width: 50px; height: 50px; position: relative; line-height: 0; }
+.cell img { width: 50px; height: 50px; display: block; }
+.cell.click-here { outline: 4px solid #2ecc40; outline-offset: -4px; }
+.solved { color: #2ecc71; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }
+"#;
+
+/// Generate a self-contained HTML solution guide.
+///
+/// The output file embeds the puzzle data, solution placements, and the shared
+/// board.js component so it works as a standalone file with no external JS.
 pub fn generate_html_guide(
     puzzle: &PuzzleJson,
-    game: &Game,
+    _game: &Game,
     solution: &[(usize, usize)],
     assets_dir: &str,
 ) -> String {
-    let m = puzzle.m;
-    let h = puzzle.rows as usize;
-    let w = puzzle.columns as usize;
-    let pieces = game.pieces();
+    let placements_json = serde_json::to_string(
+        &solution.iter().map(|&(r, c)| [r, c]).collect::<Vec<_>>()
+    ).unwrap();
+    let puzzle_json = serde_json::to_string(puzzle).unwrap();
 
-    let mut board = game.board().clone();
-    let mut html = String::new();
-
-    html.push_str(&format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Shapeshifter Level {} Solution</title>
-<style>
-body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #fff; color: #222; max-width: 800px; margin: 0 auto; padding: 20px; }}
-h1 {{ color: #333; text-align: center; }}
-h2 {{ color: #444; border-bottom: 1px solid #ccc; padding-bottom: 5px; }}
-.step {{ background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 15px 0; border: 1px solid #ddd; }}
-.board {{ display: inline-grid; grid-template-columns: repeat({w}, 50px); gap: 0; padding: 0; }}
-.cell {{ width: 50px; height: 50px; position: relative; line-height: 0; }}
-.cell img {{ width: 50px; height: 50px; display: block; }}
-.cell.click-here {{ outline: 4px solid #2ecc40; outline-offset: -4px; }}
-.info {{ color: #666; font-size: 14px; margin: 5px 0; }}
-.solved {{ color: #4caf50; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }}
-.arrow {{ text-align: center; font-size: 24px; color: #999; }}
-</style>
+<title>Shapeshifter Level {level} Solution</title>
+<style>{css}</style>
 </head>
 <body>
-<h1>Shapeshifter Level {} Solution</h1>
-<p class="info" style="text-align:center">{h}&times;{w} board, M={m}, {n} pieces</p>
-"#, puzzle.level, puzzle.level, h = h, w = w, m = m, n = pieces.len()));
-
-    // First step shows the initial board with the piece highlight, so no need for a separate initial board.
-
-    for (i, &(row, col)) in solution.iter().enumerate() {
-        let piece = &pieces[i];
-        let mask = piece.placed_at(row, col);
-
-        html.push_str(&format!("<div class=\"step\"><h2>Piece {}</h2>\n", i));
-
-        // Board with highlight and click marker
-        html.push_str(&render_board(&board, h, w, puzzle, assets_dir, Some(mask), Some((row, col))));
-
-        board.apply_piece(mask);
-        html.push_str("</div>\n");
-    }
-
-    if board.is_solved() {
-        html.push_str("<div class=\"step\"><h2>Result</h2>\n");
-        html.push_str(&render_board(&board, h, w, puzzle, assets_dir, None, None));
-        html.push_str("<div class=\"solved\">SOLVED!</div>\n</div>\n");
-    }
-
-    html.push_str("</body></html>");
-    html
-}
-
-fn render_board(
-    board: &crate::core::board::Board,
-    h: usize,
-    w: usize,
-    puzzle: &PuzzleJson,
-    assets_dir: &str,
-    piece_mask: Option<crate::core::bitboard::Bitboard>,
-    click_pos: Option<(usize, usize)>,
-) -> String {
-    let mut s = format!("<div class=\"board\" style=\"grid-template-columns: repeat({}, 50px)\">\n", w);
-    for r in 0..h {
-        for c in 0..w {
-            let val = board.get(r, c);
-            let bit = (r * 15 + c) as u32;
-            let is_piece = piece_mask.map_or(false, |m| m.get_bit(bit));
-            let is_click = click_pos.map_or(false, |(cr, cc)| r == cr && c == cc);
-            let class = match (is_click, is_piece) {
-                (true, _) => "cell highlight click-here",
-                (false, true) => "cell highlight",
-                _ => "cell",
-            };
-            let src = if is_piece {
-                puzzle.icon_src_highlight(val, assets_dir)
-            } else {
-                puzzle.icon_src(val, assets_dir)
-            };
-            s.push_str(&format!("<div class=\"{}\"><img src=\"{}\"></div>\n", class, src));
-        }
-    }
-    s.push_str("</div>\n");
-    s
+<div id="solution" style="text-align:center"></div>
+<script>
+{board_js}
+</script>
+<script>
+var puzzle = {puzzle_json};
+var placements = {placements_json};
+var assetsDir = "{assets_dir}";
+boardShowSolution(document.getElementById('solution'), puzzle, placements, assetsDir);
+</script>
+</body>
+</html>"#,
+        level = puzzle.level,
+        css = SOLUTION_CSS,
+        board_js = BOARD_JS,
+        puzzle_json = puzzle_json,
+        placements_json = placements_json,
+        assets_dir = assets_dir,
+    )
 }

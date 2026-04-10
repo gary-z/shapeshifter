@@ -23,87 +23,85 @@
     }
 
     h1 { text-align: center; color: #e94560; font-size: 2em; margin-bottom: 5px; }
-    #status { text-align: center; padding: 8px; font-size: 0.85em; color: #aaa; margin-bottom: 20px; }
+    #status { text-align: center; padding: 8px; font-size: 0.85em; color: #aaa; margin-bottom: 20px; min-height: 1.5em; }
 
-    .input-section { margin-bottom: 25px; }
-    .input-section label { display: block; font-weight: 600; margin-bottom: 8px; color: #ccc; }
+    .input-row {
+        display: flex; gap: 12px; align-items: stretch; margin-bottom: 25px;
+    }
+    .input-row label { display: block; font-weight: 600; margin-bottom: 8px; color: #ccc; }
+    .input-row .input-field { flex: 1; }
 
     textarea {
-        width: 100%; height: 80px;
+        width: 100%; height: 40px;
         background: #16213e; color: #e0e0e0;
         border: 1px solid #333; border-radius: 8px;
         padding: 12px;
         font-family: 'Consolas', 'Fira Code', monospace; font-size: 12px;
-        resize: vertical; outline: none; transition: border-color 0.2s;
+        resize: none; outline: none; transition: border-color 0.2s;
     }
     textarea:focus { border-color: #e94560; }
 
-    .btn-row { text-align: center; margin: 20px 0; }
-
     button#solve-btn {
         background: #e94560; color: #fff; border: none; border-radius: 8px;
-        padding: 12px 40px; font-size: 1.1em; font-weight: 600;
+        padding: 0 30px; font-size: 1.1em; font-weight: 600;
         cursor: pointer; transition: background 0.2s, transform 0.1s;
+        align-self: flex-end; height: 40px;
     }
     button#solve-btn:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
     button#solve-btn:disabled { background: #555; cursor: not-allowed; }
 
     .results-section {
         background: #16213e; border-radius: 10px;
-        padding: 20px; margin-top: 20px; border: 1px solid #2a2a4a;
+        padding: 20px; border: 1px solid #2a2a4a;
     }
-    .results-section > h2 { margin-top: 0; color: #e94560; font-size: 1.2em; border-bottom: 1px solid #2a2a4a; padding-bottom: 10px; }
 
-    #stats-text { color: #aaa; font-size: 0.9em; margin-bottom: 15px; text-align: center; }
-
-    /* Solution guide styles (matching solution.html) */
-    #results-content h2 { color: #e94560; text-align: center; }
-    #results-content .info { color: #888; font-size: 14px; text-align: center; }
-
-    .step {
-        background: #0f1a3a; border-radius: 8px;
-        padding: 15px; margin: 15px 0; border: 1px solid #2a2a4a;
+    /* Step navigation */
+    .step-nav {
+        display: flex; align-items: center; justify-content: center;
+        gap: 15px; margin-bottom: 15px;
     }
-    .step h3 { color: #ccc; margin-top: 0; margin-bottom: 10px; }
+    .step-nav button {
+        background: #2a2a4a; color: #e0e0e0; border: 1px solid #444;
+        border-radius: 6px; padding: 8px 20px; font-size: 1em;
+        cursor: pointer; transition: background 0.2s;
+    }
+    .step-nav button:hover:not(:disabled) { background: #3a3a5a; }
+    .step-nav button:disabled { color: #555; cursor: not-allowed; }
+    .step-label {
+        font-size: 1em; color: #ccc; min-width: 180px; text-align: center;
+    }
 
+    /* Board grid */
     .board {
         display: inline-grid; gap: 0; padding: 0;
-        margin: 10px auto; display: grid; justify-content: center;
+        margin: 0 auto; display: grid; justify-content: center;
     }
     .cell { width: 50px; height: 50px; position: relative; line-height: 0; }
     .cell img { width: 50px; height: 50px; display: block; }
-    .cell.highlight { outline: 3px solid rgba(255,255,0,0.6); outline-offset: -3px; }
     .cell.click-here { outline: 4px solid #2ecc40; outline-offset: -4px; }
-
-    .shape-preview {
-        font-family: monospace; font-size: 14px; line-height: 1.2;
-        color: #aaa; margin: 5px 0 10px;
-    }
 
     .solved { color: #2ecc71; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }
 </style>
 </head>
 <body>
 <div class="container">
-    <h1>Shapeshifter Solver</h1>
-    <div id="status">Loading WASM solver...</div>
+    <h1><a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" style="color:#e94560;text-decoration:none">Shapeshifter</a> Solver</h1>
+    <div id="status"></div>
 
-    <div class="input-section">
-        <label for="puzzle-input">Paste page source (Right-click → View Page Source, then Select All → Copy)</label>
-        <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
-    </div>
-
-    <div class="btn-row">
+    <div class="input-row">
+        <div class="input-field">
+            <label for="puzzle-input">1. Go to <a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" style="color:#e94560">Shapeshifter</a> &nbsp; 2. Right-click &rarr; View Page Source &nbsp; 3. Select All &rarr; Copy &rarr; Paste below</label>
+            <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
+        </div>
         <button id="solve-btn" disabled>Solve</button>
     </div>
 
     <div class="results-section">
-        <h2>Solution</h2>
-        <div id="stats-text"></div>
-        <div id="results-content"><p style="color:#888">Waiting for input...</p></div>
+        <div id="results-content"></div>
     </div>
 </div>
 
+<script src="web/board.js"></script>
 <script type="module" src="web/solver.js"></script>
 </body>
 </html>
