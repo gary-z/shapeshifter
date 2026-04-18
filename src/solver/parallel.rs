@@ -135,6 +135,7 @@ fn split_work(
     for (si, frame) in stack.iter_mut().enumerate() {
         if frame.cursor >= frame.len { continue; }
         let mut tasks = Vec::new();
+        let mut sub_idx = 0usize;
         for ci in frame.cursor..frame.len {
             let pl_idx = frame.order[ci as usize] as usize;
             let mask = data.all_placements[frame.piece_idx][pl_idx].2;
@@ -148,7 +149,12 @@ fn split_work(
             let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
             prefix.push((row, col));
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
-            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev, flavor });
+            // Alternate flavor across split children to diversify exploration.
+            // Parent flavor is the "natural" order; we flip every other child
+            // to explore the reversed placement sort in parallel.
+            let child_flavor = if sub_idx % 2 == 0 { flavor } else { flavor ^ 1 };
+            sub_idx += 1;
+            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev, flavor: child_flavor });
         }
         frame.cursor = frame.len;
         wq.push_many(tasks);
@@ -327,22 +333,19 @@ pub(crate) fn run_parallel<const M: usize>(
     let n = data.all_placements.len();
 
     let wq = WorkQueue::new();
-    // Seed one top-level task per placement-sort flavor (except in exhaustive
-    // mode, which needs exactly one enumeration to keep the progress metric at
-    // 1.0). Flavors explore the same search space in different orders, so worker
-    // threads can race to find the first solution via whichever ordering hits
-    // it first.
-    let seed_flavors = if exhaustive { 1 } else { NUM_FLAVORS };
-    for flavor in 0..seed_flavors {
-        wq.push(StealableTask {
-            board: board.clone(),
-            hits: HitCounter::new(),
-            prefix: Vec::new(),
-            depth: 0,
-            prev_placement: usize::MAX,
-            flavor,
-        });
-    }
+    // Seed a single canonical (flavor=0) top-level task. When the first task
+    // splits work on idle thread detection, half of the split children inherit
+    // flavor=1 (reversed sort) — this gives diversity without duplicating the
+    // starting exploration. See `split_work` for the alternation logic.
+    wq.push(StealableTask {
+        board: board.clone(),
+        hits: HitCounter::new(),
+        prefix: Vec::new(),
+        depth: 0,
+        prev_placement: usize::MAX,
+        flavor: 0,
+    });
+    let _ = NUM_FLAVORS; // retained for future multi-flavor expansion
 
     let num_threads = std::thread::available_parallelism()
         .map(|p| p.get())
