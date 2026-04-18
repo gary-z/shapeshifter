@@ -16,6 +16,21 @@ pub(crate) fn sort_placements(
     placements: &[(usize, usize, Bitboard)],
     order: &mut [u8; 196],
 ) {
+    sort_placements_with_flavor(board, m, placements, order, 0);
+}
+
+/// Same as `sort_placements`, but `flavor` perturbs the order to diversify
+/// parallel exploration. flavor=0: canonical (zeros asc, deficit desc).
+/// flavor=1: reversed (zeros desc, deficit asc). The different flavors
+/// cause worker threads to explore different subtrees from the same state,
+/// without breaking soundness.
+pub(crate) fn sort_placements_with_flavor(
+    board: &Board,
+    m: u8,
+    placements: &[(usize, usize, Bitboard)],
+    order: &mut [u8; 196],
+    flavor: u8,
+) {
     let pl_len = placements.len();
     let zero_plane = board.plane(0);
     let mut keys = [0u16; 196];
@@ -51,6 +66,9 @@ pub(crate) fn sort_placements(
             order[j] = val;
         }
         start = end;
+    }
+    if flavor == 1 {
+        order[..pl_len].reverse();
     }
 }
 

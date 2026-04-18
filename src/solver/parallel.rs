@@ -9,7 +9,7 @@ use std::sync::{Condvar, Mutex};
 
 use crate::core::board::Board;
 
-use super::backtrack::{sort_placements, solve_single_cells};
+use super::backtrack::{sort_placements_with_flavor, solve_single_cells};
 use super::prune::mc::HitCounter;
 use super::pruning::*;
 use super::{PruningConfig, SolverData, SolveResult, format_count};
@@ -25,12 +25,21 @@ struct SearchFrame {
     filtered_out: usize,
 }
 
+/// Default flavor count (keep small so overhead stays modest); one top-level
+/// task is seeded per flavor, so each flavor gets ≈ num_threads / FLAVORS
+/// dedicated worker cycles on average.
+const NUM_FLAVORS: u8 = 2;
+
 pub(crate) struct StealableTask {
     pub board: Board,
     pub hits: HitCounter,
     pub prefix: Vec<(usize, usize)>,
     pub depth: usize,
     pub prev_placement: usize,
+    /// Placement-sort flavor (0 = canonical, 1 = reversed). Controls the order
+    /// this task and its descendants explore placements. Seeded at top-level with
+    /// one task per flavor so worker threads pull work from both explorations.
+    pub flavor: u8,
 }
 
 pub(crate) struct WorkQueue {
@@ -84,12 +93,13 @@ fn build_search_frame<const M: usize>(
     piece_idx: usize,
     prev_placement: usize,
     _config: &PruningConfig,
+    flavor: u8,
 ) -> SearchFrame {
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
 
     let mut order = [0u8; 196];
-    sort_placements(board, data.m, placements, &mut order);
+    sort_placements_with_flavor(board, data.m, placements, &mut order, flavor);
 
     let fs = filter_state::<M>(board, data, piece_idx);
 
@@ -120,6 +130,7 @@ fn split_work(
     base_solution_len: usize,
     data: &SolverData,
     wq: &WorkQueue,
+    flavor: u8,
 ) {
     for (si, frame) in stack.iter_mut().enumerate() {
         if frame.cursor >= frame.len { continue; }
@@ -137,7 +148,7 @@ fn split_work(
             let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
             prefix.push((row, col));
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
-            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
+            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev, flavor });
         }
         frame.cursor = frame.len;
         wq.push_many(tasks);
@@ -172,6 +183,7 @@ fn backtrack_stealing<const M: usize>(
     idle_count: &AtomicUsize,
     exhaustive: bool,
     progress: &std::sync::atomic::AtomicU64,
+    flavor: u8,
 ) -> bool {
     let n = data.all_placements.len();
     let base_solution_len = solution.len();
@@ -199,7 +211,7 @@ fn backtrack_stealing<const M: usize>(
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     let first_frame = build_search_frame::<M>(
-        initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
+        initial_board, initial_hits, data, start_depth, initial_prev_placement, config, flavor,
     );
     let mut progress_local: f64 = 0.0;
     progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
@@ -284,13 +296,13 @@ fn backtrack_stealing<const M: usize>(
                 progress_local = 0.0;
             }
             if idle_count.load(Ordering::Relaxed) > 0 {
-                split_work(&mut stack, solution, base_solution_len, data, wq);
+                split_work(&mut stack, solution, base_solution_len, data, wq, flavor);
             }
         }
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         let new_frame = build_search_frame::<M>(
-            &board, new_hits, data, next_piece, next_prev, config,
+            &board, new_hits, data, next_piece, next_prev, config, flavor,
         );
         progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
         nodes.set(nodes.get() + new_frame.filtered_out as u64);
@@ -315,13 +327,22 @@ pub(crate) fn run_parallel<const M: usize>(
     let n = data.all_placements.len();
 
     let wq = WorkQueue::new();
-    wq.push(StealableTask {
-        board: board.clone(),
-        hits: HitCounter::new(),
-        prefix: Vec::new(),
-        depth: 0,
-        prev_placement: usize::MAX,
-    });
+    // Seed one top-level task per placement-sort flavor (except in exhaustive
+    // mode, which needs exactly one enumeration to keep the progress metric at
+    // 1.0). Flavors explore the same search space in different orders, so worker
+    // threads can race to find the first solution via whichever ordering hits
+    // it first.
+    let seed_flavors = if exhaustive { 1 } else { NUM_FLAVORS };
+    for flavor in 0..seed_flavors {
+        wq.push(StealableTask {
+            board: board.clone(),
+            hits: HitCounter::new(),
+            prefix: Vec::new(),
+            depth: 0,
+            prev_placement: usize::MAX,
+            flavor,
+        });
+    }
 
     let num_threads = std::thread::available_parallelism()
         .map(|p| p.get())
@@ -402,6 +423,7 @@ pub(crate) fn run_parallel<const M: usize>(
                         &idle_count,
                         exhaustive,
                         &progress,
+                        task.flavor,
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);
