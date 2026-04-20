@@ -34,6 +34,10 @@ pub struct SolveResult {
     /// Final progress fraction (0.0–1.0) of naive search space explored.
     /// Only meaningful for parallel solves; 0.0 for serial.
     pub progress: f64,
+    /// MC level index at which the solve terminated (winning level if solved).
+    pub final_level_idx: usize,
+    /// Total number of MC levels available.
+    pub num_levels: usize,
 }
 
 /// Configuration controlling which pruning techniques are enabled.
@@ -97,8 +101,11 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
+    let mut last_level_idx = 0usize;
     let mut first_solution: Option<Solution> = None;
+    let mut first_solution_level_idx = 0usize;
     for level_idx in 0..num_levels {
+        last_level_idx = level_idx;
         data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
         macro_rules! dispatch {
             ($m:literal) => {{
@@ -123,10 +130,16 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
         last_progress = result.progress;
         if result.solution.is_some() {
             if !exhaustive {
-                return SolveResult { nodes_visited: total_nodes, ..result };
+                return SolveResult {
+                    nodes_visited: total_nodes,
+                    final_level_idx: level_idx,
+                    num_levels,
+                    ..result
+                };
             }
             if first_solution.is_none() {
                 first_solution = result.solution;
+                first_solution_level_idx = level_idx;
             }
         }
     }
@@ -135,6 +148,12 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
         solution: first_solution,
         nodes_visited: total_nodes,
         progress: last_progress,
+        final_level_idx: if first_solution_level_idx > 0 {
+            first_solution_level_idx
+        } else {
+            last_level_idx
+        },
+        num_levels,
     }
 }
 
@@ -256,6 +275,8 @@ fn run_serial(
         solution,
         nodes_visited: nodes.get(),
         progress: 0.0,
+        final_level_idx: 0,
+        num_levels: 1,
     }
 }
 

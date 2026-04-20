@@ -439,5 +439,7 @@ pub(crate) fn run_parallel<const M: usize>(
         solution,
         nodes_visited,
         progress: final_progress,
+        final_level_idx: 0,
+        num_levels: 1,
     }
 }

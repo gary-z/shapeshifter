@@ -35,7 +35,14 @@ fn solve_one(
 
     if worker {
         let solved = result.solution.is_some();
-        println!("{} {} {}", result.nodes_visited, elapsed.as_millis(), solved);
+        println!(
+            "{} {} {} {} {}",
+            result.nodes_visited,
+            elapsed.as_millis(),
+            solved,
+            result.final_level_idx,
+            result.num_levels,
+        );
         return solved;
     }
 

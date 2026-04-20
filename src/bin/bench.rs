@@ -25,6 +25,8 @@ struct TaskResult {
     nodes: Option<u64>,
     elapsed_ms: Option<u64>,
     status: String,
+    final_level_idx: Option<u32>,
+    num_levels: Option<u32>,
 }
 
 fn find_solver() -> std::path::PathBuf {
@@ -71,6 +73,8 @@ fn run_task(
                 nodes: None,
                 elapsed_ms: None,
                 status: "ERROR".to_string(),
+                final_level_idx: None,
+                num_levels: None,
             };
         }
     };
@@ -95,6 +99,8 @@ fn run_task(
                         let nodes = parts[0].parse().ok();
                         let elapsed_ms = parts[1].parse().ok();
                         let solved = parts[2] == "true";
+                        let final_level_idx = parts.get(3).and_then(|s| s.parse().ok());
+                        let num_levels = parts.get(4).and_then(|s| s.parse().ok());
                         return TaskResult {
                             level: task.level,
                             game_idx: task.game_idx,
@@ -103,6 +109,8 @@ fn run_task(
                             nodes,
                             elapsed_ms,
                             status: if solved { "OK" } else { "FAIL" }.to_string(),
+                            final_level_idx,
+                            num_levels,
                         };
                     }
                 }
@@ -115,6 +123,8 @@ fn run_task(
                 nodes: None,
                 elapsed_ms: None,
                 status: "ERROR".to_string(),
+                final_level_idx: None,
+                num_levels: None,
             }
         }
         Ok(None) => {
@@ -128,6 +138,8 @@ fn run_task(
                 nodes: None,
                 elapsed_ms: None,
                 status: "TIMEOUT".to_string(),
+                final_level_idx: None,
+                num_levels: None,
             }
         }
         _ => {
@@ -141,6 +153,8 @@ fn run_task(
                 nodes: None,
                 elapsed_ms: None,
                 status: "ERROR".to_string(),
+                final_level_idx: None,
+                num_levels: None,
             }
         }
     }
@@ -347,6 +361,32 @@ fn run_bench(
 
         println!("\n{} ok, {} fail, {} timeout", ok, fail, timeout);
         println!("Consistently 100% through level: {}", last_consistent);
+
+        // MC-level histogram (for solved runs only).
+        let mut mc_hist: std::collections::BTreeMap<u32, u32> = Default::default();
+        let mut mc_hist_by_total: std::collections::BTreeMap<(u32, u32), u32> = Default::default();
+        let mut mc_solved = 0u32;
+        for r in &results {
+            if r.status != "OK" { continue; }
+            if let (Some(fi), Some(nl)) = (r.final_level_idx, r.num_levels) {
+                *mc_hist.entry(fi).or_default() += 1;
+                *mc_hist_by_total.entry((nl, fi)).or_default() += 1;
+                mc_solved += 1;
+            }
+        }
+        if mc_solved > 0 {
+            println!("\nMC level usage (solved runs, n={}):", mc_solved);
+            println!("{:>6} {:>8} {:>8}", "idx", "count", "pct");
+            for (idx, count) in &mc_hist {
+                let pct = *count as f64 * 100.0 / mc_solved as f64;
+                println!("{:>6} {:>8} {:>7.1}%", idx, count, pct);
+            }
+            println!("\nBreakdown by (total_levels, final_idx):");
+            println!("{:>6} {:>6} {:>8}", "total", "idx", "count");
+            for ((total, idx), count) in &mc_hist_by_total {
+                println!("{:>6} {:>6} {:>8}", total, idx, count);
+            }
+        }
     });
 }
 
