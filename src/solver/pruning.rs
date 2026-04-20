@@ -111,6 +111,7 @@ pub(crate) fn prune_node<const M: usize>(
     // budget (which guarantees the child won't exceed remaining_bits). This check is
     // redundant for children of filtered parents but serves as a safety net.
     if config.total_deficit_global && !data.total_deficit_prune.try_prune(board, piece_idx) { return false; }
+    if config.coverage && !data.coverage_prune.try_prune(board, piece_idx) { return false; }
     // MC bounds (forward + reverse) + deterministic jaggedness (all share one jagg computation).
     if !data.mc_prune.try_prune::<M>(board, piece_idx, &data.jaggedness_prune) { return false; }
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, M as u8, rb) { return false; }

@@ -5,6 +5,7 @@
 //! All structs are concrete (no trait objects) for zero-overhead static dispatch.
 
 pub(crate) mod mc;
+pub(crate) mod coverage;
 pub(crate) mod jaggedness;
 pub(crate) mod parity;
 pub(crate) mod total_deficit;

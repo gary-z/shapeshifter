@@ -25,6 +25,7 @@ pub(crate) fn build_solver_data(
     let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
 
     let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
+    let coverage_prune = super::prune::coverage::CoveragePrune::precompute(&all_placements, m);
 
     // Compute progress weights: fraction of naive search space per placement at each depth.
     let mut suffix_products = vec![1.0f64; n + 1];
@@ -49,6 +50,7 @@ pub(crate) fn build_solver_data(
         total_deficit_prune,
         jaggedness_prune,
         parity_prune,
+        coverage_prune,
         mc_prune,
         skip_tables,
         single_cell_start,

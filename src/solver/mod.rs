@@ -42,6 +42,7 @@ pub struct PruningConfig {
     pub total_deficit_global: bool,
     pub jaggedness: bool,
     pub single_cell_endgame: bool,
+    pub coverage: bool,
 }
 
 impl Default for PruningConfig {
@@ -50,6 +51,7 @@ impl Default for PruningConfig {
             total_deficit_global: true,
             jaggedness: true,
             single_cell_endgame: true,
+            coverage: true,
         }
     }
 }
@@ -61,6 +63,7 @@ impl PruningConfig {
             total_deficit_global: false,
             jaggedness: false,
             single_cell_endgame: false,
+            coverage: false,
         }
     }
 
@@ -78,6 +81,7 @@ pub(crate) struct SolverData {
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) parity_prune: prune::parity::ParityPrune,
+    pub(crate) coverage_prune: prune::coverage::CoveragePrune,
     pub(crate) mc_prune: prune::mc::McPrune,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
