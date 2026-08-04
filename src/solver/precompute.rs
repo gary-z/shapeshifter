@@ -27,14 +27,18 @@ pub(crate) fn build_solver_data(
     let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
 
     // Compute progress weights: fraction of naive search space per placement at each depth.
-    let mut suffix_products = vec![1.0f64; n + 1];
-    for d in (0..n).rev() {
-        suffix_products[d] = suffix_products[d + 1] * all_placements[d].len() as f64;
-    }
-    let total_space = suffix_products[0];
-    let progress_weights: Vec<f64> = (0..n)
-        .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
-        .collect();
+    // Only the parallel solver reports progress, and it is not built for wasm.
+    #[cfg(not(target_arch = "wasm32"))]
+    let progress_weights: Vec<f64> = {
+        let mut suffix_products = vec![1.0f64; n + 1];
+        for d in (0..n).rev() {
+            suffix_products[d] = suffix_products[d + 1] * all_placements[d].len() as f64;
+        }
+        let total_space = suffix_products[0];
+        (0..n)
+            .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
+            .collect()
+    };
 
     let mc_levels = super::prune::mc::precompute_mc(board, &all_placements, m);
     let num_levels = mc_levels.len();
@@ -55,6 +59,7 @@ pub(crate) fn build_solver_data(
         m,
         h,
         w,
+        #[cfg(not(target_arch = "wasm32"))]
         progress_weights,
     }
 }
