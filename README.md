@@ -39,7 +39,7 @@ This parses the HTML, solves the puzzle, and writes a visual step-by-step guide 
 
 - **Deterministic pruning**: total deficit lower bound, parity partition reachability, jaggedness perimeter budget.
 
-- **Placement filtering**: zero-hit budget (generalized wrapping impossibility), cell locking, skip tables for equivalent piece pairs.
+- **Placement filtering**: cell locking, skip tables for equivalent piece pairs.
 
-- **Move ordering**: minimize zero-cell hits (avoid wrapping), maximize deficit coverage.
+- **Move ordering**: bucket by zero-cell hits (avoid wrapping), then by deficit coverage. The zero-hit budget — over 90% of candidates on tight boards — is applied while bucketing, so over-budget placements are never emitted at all.
 

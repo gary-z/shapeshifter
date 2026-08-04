@@ -17,7 +17,6 @@
 //!    Chains all prune techniques in cost-effectiveness order.
 //!
 
-use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 use super::SolverData;
 
@@ -28,21 +27,17 @@ use super::SolverData;
 
 /// Check if a placement should be skipped before applying it.
 /// Returns true if the placement is valid (keep it), false to skip.
-/// Checks: cell locking, zero-hit budget (generalizes wrapping filter), skip tables.
+///
+/// The zero-hit budget is *not* checked here: it is the primary sort key, so
+/// `sort_placements` drops over-budget placements while bucketing and never
+/// emits them. Only the pair skip table remains.
 #[inline(always)]
 pub(crate) fn filter_placement(
     data: &SolverData,
     piece_idx: usize,
     pl_idx: usize,
-    mask: Bitboard,
     prev_placement: usize,
-    fs: &FilterState,
 ) -> bool {
-    // Zero-hit budget: if this placement hits more zero cells than the child
-    // can afford (would make child_deficit > child_remaining_bits), skip.
-    // Subsumes the wrapping filter (max_zeros_hit=0 when remaining_bits==deficit).
-    if (mask & fs.zero_plane).count_ones() > fs.max_zeros_hit { return false; }
-
     // Skip table: deduplicate equivalent consecutive placement pairs.
     if prev_placement < usize::MAX {
         if let Some(ref table) = data.skip_tables[piece_idx] {
@@ -54,33 +49,20 @@ pub(crate) fn filter_placement(
     true
 }
 
-/// Per-node filter state, constant across all placements at this node.
-pub(crate) struct FilterState {
-    pub zero_plane: Bitboard,
-    /// Max zero cells a placement can hit without making the child's deficit
-    /// exceed its remaining budget. Generalizes the wrapping filter:
-    /// when max_zeros_hit=0, no zero cell can be touched at all.
-    pub max_zeros_hit: u32,
-}
-
-/// Compute filter state that's constant across all placements at a node.
+/// Max zero cells a placement can hit without making the child's deficit
+/// exceed its remaining budget. Generalizes the wrapping filter: when the
+/// result is 0, no zero cell can be touched at all.
 #[inline(always)]
-pub(crate) fn filter_state<const M: usize>(
+pub(crate) fn max_zeros_hit<const M: usize>(
     board: &Board,
     data: &SolverData,
     piece_idx: usize,
-) -> FilterState {
-    let zero_plane = board.plane(0);
-    // Max zeros a placement can hit: (remaining_bits - deficit) / M.
-    // Any placement exceeding this will fail the child's total_deficit check.
+) -> u32 {
+    // (remaining_bits - deficit) / M. Any placement exceeding this will fail
+    // the child's total_deficit check.
     let rb = data.total_deficit_prune.remaining_bits(piece_idx);
     let deficit = board.total_deficit();
-    let max_zeros_hit = if rb >= deficit {
-        (rb - deficit) / M as u32
-    } else {
-        0
-    };
-    FilterState { zero_plane, max_zeros_hit }
+    if rb >= deficit { (rb - deficit) / M as u32 } else { 0 }
 }
 
 // ---------------------------------------------------------------------------
