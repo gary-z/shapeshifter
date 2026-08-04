@@ -1,11 +1,9 @@
-use std::cell::Cell;
-
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
 use super::prune::mc::HitCounter;
 use super::pruning::*;
-use super::{PruningConfig, SolverData};
+use super::{NodeCounter, PruningConfig, SolverData};
 
 /// Sort placements by: primary = fewer zero-deficit cells hit,
 /// secondary = higher total deficit of covered cells.
@@ -110,7 +108,7 @@ pub(crate) fn backtrack<const M: usize>(
     piece_idx: usize,
     prev_placement: usize,
     solution: &mut Vec<(usize, usize)>,
-    nodes: &Cell<u64>,
+    nodes: &NodeCounter,
     config: &PruningConfig,
     exhaustive: bool,
 ) -> bool {
@@ -136,7 +134,7 @@ pub(crate) fn backtrack<const M: usize>(
     for oi in 0..pl_len {
         let pl_idx = order[oi] as usize;
         let mask = placements[pl_idx].2;
-        nodes.set(nodes.get() + 1);
+        nodes.add(piece_idx, 1);
 
         if !filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
             continue;

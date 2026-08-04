@@ -2,7 +2,6 @@
 //!
 //! This module is only compiled on non-wasm targets.
 
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -12,7 +11,7 @@ use crate::core::board::Board;
 use super::backtrack::{sort_placements, solve_single_cells};
 use super::prune::mc::HitCounter;
 use super::pruning::*;
-use super::{PruningConfig, SolverData, SolveResult, format_count};
+use super::{NodeCounter, PruningConfig, SolverData, SolveResult, format_count, MAX_DEPTH};
 
 struct SearchFrame {
     board: Board,
@@ -165,7 +164,7 @@ fn backtrack_stealing<const M: usize>(
     start_depth: usize,
     initial_prev_placement: usize,
     solution: &mut Vec<(usize, usize)>,
-    nodes: &Cell<u64>,
+    nodes: &NodeCounter,
     config: &PruningConfig,
     abort: &AtomicBool,
     wq: &WorkQueue,
@@ -203,7 +202,7 @@ fn backtrack_stealing<const M: usize>(
     );
     let mut progress_local: f64 = 0.0;
     progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
-    nodes.set(nodes.get() + first_frame.filtered_out as u64);
+    nodes.add(start_depth, first_frame.filtered_out as u64);
     stack.push(first_frame);
 
     let mut budget = SPLIT_BUDGET;
@@ -231,7 +230,7 @@ fn backtrack_stealing<const M: usize>(
         new_hits.apply_piece(mask);
         if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
             progress_local += data.progress_weights[piece_idx];
-            nodes.set(nodes.get() + 1);
+            nodes.add(piece_idx, 1);
             continue;
         }
 
@@ -240,7 +239,7 @@ fn backtrack_stealing<const M: usize>(
         let (row, col, _) = data.all_placements[piece_idx][pl_idx];
         solution.push((row, col));
 
-        nodes.set(nodes.get() + 1);
+        nodes.add(piece_idx, 1);
 
         let next_piece = piece_idx + 1;
 
@@ -293,7 +292,7 @@ fn backtrack_stealing<const M: usize>(
             &board, new_hits, data, next_piece, next_prev, config,
         );
         progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
-        nodes.set(nodes.get() + new_frame.filtered_out as u64);
+        nodes.add(next_piece, new_frame.filtered_out as u64);
         stack.push(new_frame);
     }
 
@@ -330,6 +329,8 @@ pub(crate) fn run_parallel<const M: usize>(
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
+    let nodes_by_depth: Vec<std::sync::atomic::AtomicU64> =
+        (0..MAX_DEPTH).map(|_| std::sync::atomic::AtomicU64::new(0)).collect();
     let active_count = AtomicUsize::new(0);
     let idle_count = AtomicUsize::new(0);
     let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
@@ -366,7 +367,7 @@ pub(crate) fn run_parallel<const M: usize>(
 
         for _ in 0..num_threads {
             s.spawn(|| {
-                let nodes = Cell::new(0u64);
+                let nodes = NodeCounter::new();
                 let mut solution = Vec::with_capacity(n);
 
                 loop {
@@ -386,7 +387,7 @@ pub(crate) fn run_parallel<const M: usize>(
 
                     solution.clear();
                     solution.extend_from_slice(&task.prefix);
-                    nodes.set(0);
+                    nodes.reset();
 
                     let found = backtrack_stealing::<M>(
                         &task.board,
@@ -405,7 +406,13 @@ pub(crate) fn run_parallel<const M: usize>(
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);
-                    total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
+                    total_nodes.fetch_add(nodes.total(), Ordering::Relaxed);
+                    for (d, slot) in nodes_by_depth.iter().enumerate() {
+                        let c = nodes.depth(d);
+                        if c > 0 {
+                            slot.fetch_add(c, Ordering::Relaxed);
+                        }
+                    }
 
                     if found {
                         if !exhaustive {
@@ -438,6 +445,10 @@ pub(crate) fn run_parallel<const M: usize>(
     SolveResult {
         solution,
         nodes_visited,
+        nodes_by_depth: nodes_by_depth[..n.min(MAX_DEPTH)]
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect(),
         progress: final_progress,
     }
 }

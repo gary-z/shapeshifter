@@ -6,11 +6,31 @@ use shapeshifter::generate;
 use shapeshifter::puzzle::{self, PuzzleJson};
 use shapeshifter::solver;
 
+/// Print a per-depth histogram of visited nodes (depth = piece index in solve order).
+fn print_depth_stats(nodes_by_depth: &[u64], total: u64) {
+    println!("\nNodes by depth:");
+    println!("{:<7} {:>16} {:>8}  {}", "Depth", "Nodes", "Share", "");
+    let max = nodes_by_depth.iter().copied().max().unwrap_or(0);
+    for (d, &n) in nodes_by_depth.iter().enumerate() {
+        let share = if total > 0 { n as f64 / total as f64 * 100.0 } else { 0.0 };
+        let bar_len = if max > 0 { (n as f64 / max as f64 * 40.0).round() as usize } else { 0 };
+        println!(
+            "{:<7} {:>16} {:>7.2}%  {}",
+            d,
+            n,
+            share,
+            "#".repeat(bar_len),
+        );
+    }
+    println!("{:<7} {:>16}", "total", total);
+}
+
 fn solve_one(
     puz: &PuzzleJson,
     parallel: bool,
     exhaustive: bool,
     worker: bool,
+    depth_stats: bool,
     assets_dir: &str,
     output_path: Option<&str>,
     json_path: Option<&str>,
@@ -44,6 +64,10 @@ fn solve_one(
         puz.level, puz.rows, puz.columns, puz.m,
         puz.pieces.len()
     );
+
+    if depth_stats {
+        print_depth_stats(&result.nodes_by_depth, result.nodes_visited);
+    }
 
     match result.solution {
         Some(solution) => {
@@ -84,6 +108,7 @@ fn main() {
     let mut parallel = false;
     let mut exhaustive = false;
     let mut worker = false;
+    let mut depth_stats = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -99,6 +124,7 @@ fn main() {
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--worker" => worker = true,
+            "--depth-stats" => depth_stats = true,
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: solve [puzzle.json] [OPTIONS]\n\n\
@@ -108,6 +134,7 @@ fn main() {
                        --parallel        Use parallel solver (all cores)\n  \
                        --exhaustive      Explore full search tree\n  \
                        --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
+                       --depth-stats     Print per-depth node histogram\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
                        -h, --help        Show this help"
@@ -124,7 +151,7 @@ fn main() {
     // File argument: single puzzle.
     if let Some(path) = json_path {
         let puz = PuzzleJson::load(path);
-        let ok = solve_one(&puz, parallel, exhaustive, worker, assets_dir, output_path.map(|s| s.as_str()), json_path.map(|s| s.as_str()));
+        let ok = solve_one(&puz, parallel, exhaustive, worker, depth_stats, assets_dir, output_path.map(|s| s.as_str()), json_path.map(|s| s.as_str()));
         if !ok && !worker {
             std::process::exit(1);
         }
@@ -143,7 +170,7 @@ fn main() {
         // Single JSON object (may or may not have a trailing newline).
         let puz: PuzzleJson =
             serde_json::from_str(&input).expect("failed to parse puzzle JSON from stdin");
-        let ok = solve_one(&puz, parallel, exhaustive, worker, assets_dir, output_path.map(|s| s.as_str()), None);
+        let ok = solve_one(&puz, parallel, exhaustive, worker, depth_stats, assets_dir, output_path.map(|s| s.as_str()), None);
         if !ok && !worker {
             std::process::exit(1);
         }
@@ -159,7 +186,7 @@ fn main() {
                     continue;
                 }
             };
-            if !solve_one(&puz, parallel, exhaustive, worker, assets_dir, None, None) {
+            if !solve_one(&puz, parallel, exhaustive, worker, depth_stats, assets_dir, None, None) {
                 all_ok = false;
             }
         }

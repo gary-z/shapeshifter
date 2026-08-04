@@ -31,9 +31,65 @@ pub type Solution = Vec<(usize, usize)>;
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
+    /// Nodes visited per search depth (index = piece index in solve order).
+    pub nodes_by_depth: Vec<u64>,
     /// Final progress fraction (0.0–1.0) of naive search space explored.
     /// Only meaningful for parallel solves; 0.0 for serial.
     pub progress: f64,
+}
+
+/// Upper bound on pieces in any level (level 100 has 36).
+pub(crate) const MAX_DEPTH: usize = 40;
+
+/// Node counter that also keeps a per-depth histogram. One per worker thread;
+/// the per-depth array is a plain Cell array, so counting costs one L1 add.
+pub(crate) struct NodeCounter {
+    total: Cell<u64>,
+    by_depth: [Cell<u64>; MAX_DEPTH],
+}
+
+impl NodeCounter {
+    pub(crate) fn new() -> Self {
+        Self {
+            total: Cell::new(0),
+            by_depth: std::array::from_fn(|_| Cell::new(0)),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn add(&self, depth: usize, n: u64) {
+        self.total.set(self.total.get() + n);
+        self.by_depth[depth].set(self.by_depth[depth].get() + n);
+    }
+
+    pub(crate) fn total(&self) -> u64 {
+        self.total.get()
+    }
+
+    pub(crate) fn depth(&self, d: usize) -> u64 {
+        self.by_depth[d].get()
+    }
+
+    pub(crate) fn reset(&self) {
+        self.total.set(0);
+        for c in &self.by_depth {
+            c.set(0);
+        }
+    }
+
+    pub(crate) fn to_vec(&self, n: usize) -> Vec<u64> {
+        (0..n.min(MAX_DEPTH)).map(|d| self.by_depth[d].get()).collect()
+    }
+}
+
+/// Element-wise add of a per-depth histogram into an accumulator.
+fn accumulate_depths(acc: &mut Vec<u64>, add: &[u64]) {
+    if acc.len() < add.len() {
+        acc.resize(add.len(), 0);
+    }
+    for (a, b) in acc.iter_mut().zip(add) {
+        *a += b;
+    }
 }
 
 /// Configuration controlling which pruning techniques are enabled.
@@ -96,6 +152,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     let num_levels = data.mc_prune.levels.len();
 
     let mut total_nodes = 0u64;
+    let mut total_by_depth: Vec<u64> = Vec::new();
     let mut last_progress = 0.0;
     let mut first_solution: Option<Solution> = None;
     for level_idx in 0..num_levels {
@@ -120,10 +177,15 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
             _ => unreachable!(),
         };
         total_nodes += result.nodes_visited;
+        accumulate_depths(&mut total_by_depth, &result.nodes_by_depth);
         last_progress = result.progress;
         if result.solution.is_some() {
             if !exhaustive {
-                return SolveResult { nodes_visited: total_nodes, ..result };
+                return SolveResult {
+                    nodes_visited: total_nodes,
+                    nodes_by_depth: total_by_depth,
+                    ..result
+                };
             }
             if first_solution.is_none() {
                 first_solution = result.solution;
@@ -134,6 +196,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     SolveResult {
         solution: first_solution,
         nodes_visited: total_nodes,
+        nodes_by_depth: total_by_depth,
         progress: last_progress,
     }
 }
@@ -205,7 +268,7 @@ fn dispatch_backtrack(
     board: &crate::core::board::Board,
     data: &SolverData,
     solution: &mut Vec<(usize, usize)>,
-    nodes: &Cell<u64>,
+    nodes: &NodeCounter,
     config: &PruningConfig,
     exhaustive: bool,
 ) -> bool {
@@ -235,7 +298,7 @@ fn run_serial(
     exhaustive: bool,
 ) -> SolveResult {
     let n = data.all_placements.len();
-    let nodes = Cell::new(0u64);
+    let nodes = NodeCounter::new();
     let mut sorted_solution = Vec::with_capacity(n);
 
     let found = dispatch_backtrack(
@@ -254,7 +317,8 @@ fn run_serial(
 
     SolveResult {
         solution,
-        nodes_visited: nodes.get(),
+        nodes_visited: nodes.total(),
+        nodes_by_depth: nodes.to_vec(n),
         progress: 0.0,
     }
 }
