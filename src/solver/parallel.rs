@@ -89,16 +89,14 @@ fn build_search_frame<const M: usize>(
     let pl_len = placements.len();
 
     let mut order = [0u8; 196];
-    sort_placements(board, data.m, placements, &mut order);
-
-    let fs = filter_state::<M>(board, data, piece_idx);
+    let max_zeros = max_zeros_hit::<M>(board, data, piece_idx);
+    let kept = sort_placements(board, data.m, placements, max_zeros, &mut order);
 
     // Filter in-place: pack surviving indices into the front of order.
     let mut len = 0u8;
-    for oi in 0..pl_len {
+    for oi in 0..kept {
         let pl_idx = order[oi] as usize;
-        let mask = placements[pl_idx].2;
-        if filter_placement(data, piece_idx, pl_idx, mask, prev_placement, &fs) {
+        if filter_placement(data, piece_idx, pl_idx, prev_placement) {
             order[len as usize] = pl_idx as u8;
             len += 1;
         }
@@ -208,6 +206,9 @@ fn backtrack_stealing<const M: usize>(
 
     let mut budget = SPLIT_BUDGET;
     let mut found = false;
+    // Exhaustive mode keeps searching after a hit, so the first solution found
+    // is stashed and restored on the way out.
+    let mut found_solution: Option<Vec<(usize, usize)>> = None;
 
     loop {
         if abort.load(Ordering::Relaxed) { break; }
@@ -252,6 +253,9 @@ fn backtrack_stealing<const M: usize>(
                     atomic_add_f64(progress, progress_local);
                     return true;
                 }
+                if found_solution.is_none() {
+                    found_solution = Some(solution.clone());
+                }
             }
             continue;
         }
@@ -265,6 +269,9 @@ fn backtrack_stealing<const M: usize>(
                 if !exhaustive {
                     atomic_add_f64(progress, progress_local);
                     return true;
+                }
+                if found_solution.is_none() {
+                    found_solution = Some(solution.clone());
                 }
                 solution.truncate(saved_len);
             }
@@ -299,6 +306,11 @@ fn backtrack_stealing<const M: usize>(
 
     if progress_local > 0.0 {
         atomic_add_f64(progress, progress_local);
+    }
+
+    if let Some(sol) = found_solution {
+        solution.clear();
+        solution.extend_from_slice(&sol);
     }
 
     found
