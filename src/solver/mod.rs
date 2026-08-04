@@ -12,6 +12,8 @@ use crate::core::bitboard::Bitboard;
 use crate::game::Game;
 
 /// Format a count with SI suffix (e.g. 1234567 → "1.2M nodes").
+/// Only the parallel solver's progress bar uses this, and it is not built for wasm.
+#[cfg(not(target_arch = "wasm32"))]
 fn format_count(n: u64) -> String {
     if n >= 1_000_000_000 {
         format!("{:.1}B nodes", n as f64 / 1e9)
@@ -84,6 +86,7 @@ pub(crate) struct SolverData {
     pub(crate) m: u8,
     pub(crate) h: u8,
     pub(crate) w: u8,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) progress_weights: Vec<f64>,
 }
 
