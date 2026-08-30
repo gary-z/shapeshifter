@@ -1,5 +1,7 @@
 mod backtrack;
 #[cfg(not(target_arch = "wasm32"))]
+mod linear;
+#[cfg(not(target_arch = "wasm32"))]
 mod parallel;
 mod precompute;
 pub(crate) mod prune;
@@ -41,6 +43,7 @@ pub struct SolveResult {
 /// Configuration controlling which pruning techniques are enabled.
 #[derive(Clone)]
 pub struct PruningConfig {
+    pub cell_interval: bool,
     pub total_deficit_global: bool,
     pub jaggedness: bool,
     pub single_cell_endgame: bool,
@@ -49,6 +52,7 @@ pub struct PruningConfig {
 impl Default for PruningConfig {
     fn default() -> Self {
         Self {
+            cell_interval: true,
             total_deficit_global: true,
             jaggedness: true,
             single_cell_endgame: true,
@@ -60,6 +64,7 @@ impl PruningConfig {
     /// All pruning disabled.
     pub fn none() -> Self {
         Self {
+            cell_interval: false,
             total_deficit_global: false,
             jaggedness: false,
             single_cell_endgame: false,
@@ -77,6 +82,9 @@ impl PruningConfig {
 /// Bundled into a single struct to keep the backtrack signature small.
 pub(crate) struct SolverData {
     pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) placement_hints: Vec<Vec<Vec<f64>>>,
+    pub(crate) cell_interval_prune: prune::cell_interval::CellIntervalPrune,
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) parity_prune: prune::parity::ParityPrune,
@@ -95,7 +103,7 @@ pub(crate) struct SolverData {
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     let config = PruningConfig::default();
 
-    let (board, order, data) = prepare_solver(game, &config);
+    let (board, order, data) = prepare_solver(game, &config, parallel);
     let num_levels = data.mc_prune.levels.len();
 
     let mut total_nodes = 0u64;
@@ -142,18 +150,43 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
 }
 
 /// Build sorted placements, skip tables, and all precomputed pruning data.
-fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::Board, Vec<usize>, SolverData) {
+fn prepare_solver(
+    game: &Game,
+    _config: &PruningConfig,
+    _parallel: bool,
+) -> (crate::core::board::Board, Vec<usize>, SolverData) {
     let board = game.board().clone();
     let pieces = game.pieces();
     let h = board.height();
     let w = board.width();
     let n = pieces.len();
 
-    let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
+    let original_placements = pieces
         .iter()
-        .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
-        .collect();
+        .map(|piece| piece.placements(h, w))
+        .collect::<Vec<_>>();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let raw_hints = if _parallel {
+        // LP-guided orders pay for themselves in the high-dimensional regimes
+        // where the benchmark shows complementary solutions. Keep one flavor
+        // so the canonical work-stealing search retains all but one core.
+        let seeds: &[u64] = match board.m() {
+            3 if board.height() as u16 * board.width() as u16 >= 100
+                && board.height() != board.width() => &[3],
+            5 if board.height() != board.width() => &[5],
+            _ => &[],
+        };
+        seeds
+            .iter()
+            .copied()
+            .filter_map(|seed| linear::relaxation_hints(&board, &original_placements, seed))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let mut indexed: Vec<_> = original_placements.into_iter().enumerate().collect();
     indexed.sort_by(|(i, a_pl), (j, b_pl)| {
         a_pl.len()
             .cmp(&b_pl.len())
@@ -165,6 +198,17 @@ fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::
     let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
     let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
         indexed.into_iter().map(|(_, p)| p).collect();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let placement_hints = raw_hints
+        .into_iter()
+        .map(|mut hints| {
+            order
+                .iter()
+                .map(|&index| std::mem::take(&mut hints[index]))
+                .collect()
+        })
+        .collect();
 
     let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
         if i == 0 { return None; }
@@ -198,6 +242,8 @@ fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::
     let data = precompute::build_solver_data(
         &board, pieces, &order, all_placements, skip_tables,
         single_cell_start, h, w, m,
+        #[cfg(not(target_arch = "wasm32"))]
+        placement_hints,
     );
 
     (board, order, data)
@@ -264,7 +310,7 @@ fn run_serial(
 
 /// Kept for tests that call it directly.
 pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
-    let (board, order, data) = prepare_solver(game, config);
+    let (board, order, data) = prepare_solver(game, config, false);
     run_serial(&board, &order, &data, config, false)
 }
 

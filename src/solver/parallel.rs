@@ -84,13 +84,24 @@ fn build_search_frame<const M: usize>(
     piece_idx: usize,
     prev_placement: usize,
     _config: &PruningConfig,
+    hints: Option<&[Vec<f64>]>,
 ) -> SearchFrame {
     let placements = &data.all_placements[piece_idx];
     let pl_len = placements.len();
 
     let mut order = [0u8; 196];
     let max_zeros = max_zeros_hit::<M>(board, data, piece_idx);
-    let kept = sort_placements(board, data.m, placements, max_zeros, &mut order);
+    let (required, forbidden) = if _config.cell_interval {
+        data.cell_interval_prune
+            .placement_constraints::<M>(board, piece_idx + 1)
+    } else {
+        (crate::core::bitboard::Bitboard::ZERO, crate::core::bitboard::Bitboard::ZERO)
+    };
+    let kept = sort_placements(
+        board, data.m, placements, max_zeros, required, forbidden,
+        hints.map(|values| values[piece_idx].as_slice()),
+        &mut order,
+    );
 
     // Filter in-place: pack surviving indices into the front of order.
     let mut len = 0u8;
@@ -166,10 +177,13 @@ fn backtrack_stealing<const M: usize>(
     nodes: &Cell<u64>,
     config: &PruningConfig,
     abort: &AtomicBool,
+    secondary_abort: Option<&AtomicBool>,
     wq: &WorkQueue,
     idle_count: &AtomicUsize,
     exhaustive: bool,
     progress: &std::sync::atomic::AtomicU64,
+    hints: Option<&[Vec<f64>]>,
+    allow_split: bool,
 ) -> bool {
     let n = data.all_placements.len();
     let base_solution_len = solution.len();
@@ -197,7 +211,7 @@ fn backtrack_stealing<const M: usize>(
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     let first_frame = build_search_frame::<M>(
-        initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
+        initial_board, initial_hits, data, start_depth, initial_prev_placement, config, hints,
     );
     let mut progress_local: f64 = 0.0;
     progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
@@ -211,7 +225,11 @@ fn backtrack_stealing<const M: usize>(
     let mut found_solution: Option<Vec<(usize, usize)>> = None;
 
     loop {
-        if abort.load(Ordering::Relaxed) { break; }
+        if abort.load(Ordering::Relaxed)
+            || secondary_abort.is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            break;
+        }
         if stack.is_empty() { break; }
 
         let frame = stack.last_mut().unwrap();
@@ -290,14 +308,14 @@ fn backtrack_stealing<const M: usize>(
                 atomic_add_f64(progress, progress_local);
                 progress_local = 0.0;
             }
-            if idle_count.load(Ordering::Relaxed) > 0 {
+            if allow_split && idle_count.load(Ordering::Relaxed) > 0 {
                 split_work(&mut stack, solution, base_solution_len, data, wq);
             }
         }
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         let new_frame = build_search_frame::<M>(
-            &board, new_hits, data, next_piece, next_prev, config,
+            &board, new_hits, data, next_piece, next_prev, config, hints,
         );
         progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
         nodes.set(nodes.get() + new_frame.filtered_out as u64);
@@ -338,6 +356,12 @@ pub(crate) fn run_parallel<const M: usize>(
     let num_threads = std::thread::available_parallelism()
         .map(|p| p.get())
         .unwrap_or(4);
+    let guided_count = if exhaustive {
+        0
+    } else {
+        data.placement_hints.len().min(num_threads.saturating_sub(1))
+    };
+    let canonical_count = num_threads - guided_count;
 
     let abort = AtomicBool::new(false);
     let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
@@ -346,6 +370,8 @@ pub(crate) fn run_parallel<const M: usize>(
     let idle_count = AtomicUsize::new(0);
     let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
     let workers_alive = AtomicUsize::new(num_threads);
+    let canonical_workers_alive = AtomicUsize::new(canonical_count);
+    let canonical_done = AtomicBool::new(false);
 
     let total_space: f64 = data.all_placements.iter()
         .map(|p| p.len() as f64)
@@ -355,7 +381,18 @@ pub(crate) fn run_parallel<const M: usize>(
     let solve_start = std::time::Instant::now();
 
     std::thread::scope(|s| {
-        s.spawn(|| {
+        let abort = &abort;
+        let result = &result;
+        let total_nodes = &total_nodes;
+        let active_count = &active_count;
+        let idle_count = &idle_count;
+        let progress = &progress;
+        let workers_alive = &workers_alive;
+        let canonical_workers_alive = &canonical_workers_alive;
+        let canonical_done = &canonical_done;
+        let wq = &wq;
+
+        s.spawn(move || {
             let bar_width = 30;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(200));
@@ -376,8 +413,43 @@ pub(crate) fn run_parallel<const M: usize>(
             eprint!("\r\x1b[K");
         });
 
-        for _ in 0..num_threads {
-            s.spawn(|| {
+        for hints in &data.placement_hints[..guided_count] {
+            s.spawn(move || {
+                let nodes = Cell::new(0u64);
+                let mut solution = Vec::with_capacity(n);
+                let guided_progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
+                let found = backtrack_stealing::<M>(
+                    board,
+                    HitCounter::new(),
+                    data,
+                    0,
+                    usize::MAX,
+                    &mut solution,
+                    &nodes,
+                    config,
+                    abort,
+                    Some(canonical_done),
+                    wq,
+                    idle_count,
+                    false,
+                    &guided_progress,
+                    Some(hints),
+                    false,
+                );
+                total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
+                if found {
+                    abort.store(true, Ordering::Relaxed);
+                    let mut guard = result.lock().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(solution);
+                    }
+                }
+                workers_alive.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+
+        for _ in 0..canonical_count {
+            s.spawn(move || {
                 let nodes = Cell::new(0u64);
                 let mut solution = Vec::with_capacity(n);
 
@@ -386,7 +458,7 @@ pub(crate) fn run_parallel<const M: usize>(
 
                     let task = wq.pop().or_else(|| {
                         idle_count.fetch_add(1, Ordering::Relaxed);
-                        let t = wq.wait_for_task(&abort, &active_count);
+                        let t = wq.wait_for_task(abort, active_count);
                         idle_count.fetch_sub(1, Ordering::Relaxed);
                         t
                     });
@@ -409,11 +481,14 @@ pub(crate) fn run_parallel<const M: usize>(
                         &mut solution,
                         &nodes,
                         config,
-                        &abort,
-                        &wq,
-                        &idle_count,
+                        abort,
+                        None,
+                        wq,
+                        idle_count,
                         exhaustive,
                         &progress,
+                        None,
+                        true,
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);
@@ -428,6 +503,9 @@ pub(crate) fn run_parallel<const M: usize>(
                             *guard = Some(solution.clone());
                         }
                     }
+                }
+                if canonical_workers_alive.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    canonical_done.store(true, Ordering::Relaxed);
                 }
                 workers_alive.fetch_sub(1, Ordering::Relaxed);
             });

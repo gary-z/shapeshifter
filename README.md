@@ -37,9 +37,11 @@ This parses the HTML, solves the puzzle, and writes a visual step-by-step guide 
   - **Total deficit upper bound**: max total remaining deficit, per depth
   - **Jaggedness upper bound**: max spatial disorder (adjacent mismatches), per depth
 
-- **Deterministic pruning**: total deficit lower bound, parity partition reachability, jaggedness perimeter budget.
+- **Deterministic pruning**: total deficit lower bound, parity partition reachability, jaggedness perimeter budget, and per-cell modular hit intervals.
 
-- **Placement filtering**: cell locking, skip tables for equivalent piece pairs.
+- **Parallel search portfolio**: on the largest rectangular M3 and M5 boards, one core runs a deterministic LP-guided placement order while the remaining cores keep the canonical geometric order. The fractional one-hot relaxation supplies global coverage guidance; every returned solution is still verified by the exact backtracker.
+
+- **Placement filtering**: forced-cover/forced-avoid cells from the modular interval constraint, plus skip tables for equivalent piece pairs.
 
 - **Move ordering**: bucket by zero-cell hits (avoid wrapping), then by deficit coverage. The zero-hit budget — over 90% of candidates on tight boards — is applied while bucketing, so over-budget placements are never emitted at all.
 

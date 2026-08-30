@@ -17,6 +17,8 @@ pub(crate) fn build_solver_data(
     h: u8,
     w: u8,
     m: u8,
+    #[cfg(not(target_arch = "wasm32"))]
+    placement_hints: Vec<Vec<Vec<f64>>>,
 ) -> SolverData {
     let n = pieces.len();
 
@@ -25,6 +27,9 @@ pub(crate) fn build_solver_data(
     let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
 
     let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
+    let cell_interval_prune = super::prune::cell_interval::CellIntervalPrune::precompute(
+        &all_placements, m, board.valid_mask(),
+    );
 
     // Compute progress weights: fraction of naive search space per placement at each depth.
     // Only the parallel solver reports progress, and it is not built for wasm.
@@ -50,6 +55,9 @@ pub(crate) fn build_solver_data(
 
     SolverData {
         all_placements,
+        #[cfg(not(target_arch = "wasm32"))]
+        placement_hints,
+        cell_interval_prune,
         total_deficit_prune,
         jaggedness_prune,
         parity_prune,

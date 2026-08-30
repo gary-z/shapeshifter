@@ -24,6 +24,10 @@ pub(crate) fn sort_placements(
     m: u8,
     placements: &[(usize, usize, Bitboard)],
     max_zeros: u32,
+    required: Bitboard,
+    forbidden: Bitboard,
+    #[cfg(not(target_arch = "wasm32"))]
+    hints: Option<&[f64]>,
     order: &mut [u8; 196],
 ) -> usize {
     let pl_len = placements.len();
@@ -34,11 +38,26 @@ pub(crate) fn sort_placements(
     // Pass 1: primary key only (one popcount per placement) + bucket histogram.
     let mut zeros = [0u8; 196];
     let mut counts = [0u8; 26];
-    for i in 0..pl_len {
-        let z = (placements[i].2 & zero_plane).count_ones() as usize;
-        zeros[i] = z as u8;
-        if z <= cap {
-            counts[z] += 1;
+    if (required | forbidden).is_zero() {
+        for i in 0..pl_len {
+            let z = (placements[i].2 & zero_plane).count_ones() as usize;
+            zeros[i] = z as u8;
+            if z <= cap {
+                counts[z] += 1;
+            }
+        }
+    } else {
+        for i in 0..pl_len {
+            let mask = placements[i].2;
+            if !(required & !mask).is_zero() || !(forbidden & mask).is_zero() {
+                zeros[i] = u8::MAX;
+                continue;
+            }
+            let z = (mask & zero_plane).count_ones() as usize;
+            zeros[i] = z as u8;
+            if z <= cap {
+                counts[z] += 1;
+            }
         }
     }
 
@@ -84,6 +103,13 @@ pub(crate) fn sort_placements(
             }
             order[j] = val;
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(hints) = hints {
+        order[..kept].sort_by(|&left, &right| {
+            hints[right as usize].total_cmp(&hints[left as usize])
+        });
     }
 
     kept
@@ -163,7 +189,18 @@ pub(crate) fn backtrack<const M: usize>(
     let placements = &data.all_placements[piece_idx];
     let mut order = [0u8; 196];
     let max_zeros = max_zeros_hit::<M>(board, data, piece_idx);
-    let kept = sort_placements(board, data.m, placements, max_zeros, &mut order);
+    let (required, forbidden) = if config.cell_interval {
+        data.cell_interval_prune
+            .placement_constraints::<M>(board, piece_idx + 1)
+    } else {
+        (Bitboard::ZERO, Bitboard::ZERO)
+    };
+    let kept = sort_placements(
+        board, data.m, placements, max_zeros, required, forbidden,
+        #[cfg(not(target_arch = "wasm32"))]
+        None,
+        &mut order,
+    );
 
     let mut found = false;
     // Depth of `solution` on entry. The single-cell endgame pushes one entry
@@ -249,7 +286,12 @@ mod tests {
         let pl = Piece::from_grid(&[&[true, true]]).placements(3, 3);
 
         let mut order = [0u8; 196];
-        let kept = sort_placements(&board, 2, &pl, u32::MAX, &mut order);
+        let kept = sort_placements(
+            &board, 2, &pl, u32::MAX, Bitboard::ZERO, Bitboard::ZERO,
+            #[cfg(not(target_arch = "wasm32"))]
+            None,
+            &mut order,
+        );
         assert_eq!(kept, pl.len());
 
         let mut seen: Vec<u8> = order[..kept].to_vec();
@@ -266,7 +308,12 @@ mod tests {
 
         for budget in 0..=2u32 {
             let mut order = [0u8; 196];
-            let kept = sort_placements(&board, 2, &pl, budget, &mut order);
+            let kept = sort_placements(
+                &board, 2, &pl, budget, Bitboard::ZERO, Bitboard::ZERO,
+                #[cfg(not(target_arch = "wasm32"))]
+                None,
+                &mut order,
+            );
 
             // Exactly the placements the zero-hit budget allows, no more.
             let expected = pl
@@ -295,6 +342,14 @@ mod tests {
         let board = Board::new_solved(3, 3, 3);
         let pl = Piece::from_grid(&[&[true]]).placements(3, 3);
         let mut order = [0u8; 196];
-        assert_eq!(sort_placements(&board, 3, &pl, 0, &mut order), 0);
+        assert_eq!(
+            sort_placements(
+                &board, 3, &pl, 0, Bitboard::ZERO, Bitboard::ZERO,
+                #[cfg(not(target_arch = "wasm32"))]
+                None,
+                &mut order,
+            ),
+            0,
+        );
     }
 }
