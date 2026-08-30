@@ -1,0 +1,7 @@
+# Store and check out text files with consistent Unix line endings.
+* text=auto eol=lf
+
+# Keep generated and static binary assets byte-for-byte unchanged.
+*.gif binary
+*.ico binary
+*.wasm binary
