@@ -170,6 +170,42 @@ mod tests {
     use super::*;
     use crate::level::get_level;
 
+    fn is_cardinally_connected(h: u8, w: u8, flat: &[bool]) -> bool {
+        let Some(start) = flat.iter().position(|&filled| filled) else {
+            return false;
+        };
+
+        let height = h as usize;
+        let width = w as usize;
+        let mut seen = vec![false; flat.len()];
+        let mut stack = vec![start];
+        seen[start] = true;
+        let mut visited = 0;
+
+        while let Some(index) = stack.pop() {
+            visited += 1;
+            let row = index / width;
+            let column = index % width;
+            for (next_row, next_column) in [
+                row.checked_sub(1).map(|r| (r, column)),
+                (row + 1 < height).then_some((row + 1, column)),
+                column.checked_sub(1).map(|c| (row, c)),
+                (column + 1 < width).then_some((row, column + 1)),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let next = next_row * width + next_column;
+                if flat[next] && !seen[next] {
+                    seen[next] = true;
+                    stack.push(next);
+                }
+            }
+        }
+
+        visited == flat.iter().filter(|&&filled| filled).count()
+    }
+
     fn seeded_rng() -> impl Rng {
         <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42)
     }
@@ -190,6 +226,60 @@ mod tests {
             let piece = Piece::from_grid(&refs);
             assert!(piece.cell_count() >= 1, "catalog[{i}]: empty piece");
         }
+    }
+
+    #[test]
+    fn test_shape_catalog_pieces_are_cardinally_connected() {
+        for (i, &(h, w, flat)) in SHAPE_CATALOG.iter().enumerate() {
+            assert!(
+                is_cardinally_connected(h, w, flat),
+                "catalog[{i}] ({h}x{w}) is not cardinally connected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shape_catalog_bounding_boxes_are_tight() {
+        for (i, &(h, w, flat)) in SHAPE_CATALOG.iter().enumerate() {
+            let height = h as usize;
+            let width = w as usize;
+            assert!(
+                flat[..width].iter().any(|&cell| cell),
+                "catalog[{i}]: empty top row"
+            );
+            assert!(
+                flat[(height - 1) * width..].iter().any(|&cell| cell),
+                "catalog[{i}]: empty bottom row"
+            );
+            assert!(
+                (0..height).any(|row| flat[row * width]),
+                "catalog[{i}]: empty left column"
+            );
+            assert!(
+                (0..height).any(|row| flat[row * width + width - 1]),
+                "catalog[{i}]: empty right column"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shape_catalog_entries_are_unique() {
+        let mut shapes = std::collections::HashSet::new();
+        for (i, &(h, w, flat)) in SHAPE_CATALOG.iter().enumerate() {
+            assert!(
+                shapes.insert((h, w, flat.to_vec())),
+                "catalog[{i}] duplicates an earlier shape"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shape_catalog_covers_cell_counts_one_through_fourteen() {
+        let counts = SHAPE_CATALOG
+            .iter()
+            .map(|(_, _, flat)| flat.iter().filter(|&&cell| cell).count())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(counts, (1..=14).collect());
     }
 
     #[test]
