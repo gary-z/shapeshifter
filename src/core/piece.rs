@@ -5,17 +5,14 @@ use crate::core::STRIDE;
 /// The shape is stored as a Bitboard using the 15-column stride layout.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Piece {
-    /// Bitboard with bits set at the piece's filled cells, anchored at (0, 0).
     shape: Bitboard,
-    /// Height of the piece's bounding box.
     height: u8,
-    /// Width of the piece's bounding box.
     width: u8,
 }
 
 impl Piece {
-    /// Create a piece from a 2D grid of booleans (true = filled).
-    /// The grid must be non-empty, fit within 5x5, and be tight (no empty border rows/cols).
+    /// Create a piece from a non-empty rectangular grid that fits within 5×5.
+    /// At least one cell must be `true`.
     pub fn from_grid(grid: &[&[bool]]) -> Self {
         let height = grid.len();
         assert!(height >= 1 && height <= 5, "piece height must be in [1, 5]");
@@ -53,7 +50,6 @@ impl Piece {
         self.width
     }
 
-    /// Number of filled cells in the piece.
     pub const fn cell_count(&self) -> u32 {
         self.shape.count_ones_const()
     }
@@ -79,7 +75,6 @@ impl Piece {
         s.count_ones() * 2 - v_internal * 2
     }
 
-    /// Return the piece's shape shifted to board position (row, col).
     pub fn placed_at(&self, row: usize, col: usize) -> Bitboard {
         let offset = (row * STRIDE + col) as u32;
         self.shape << offset
@@ -167,7 +162,6 @@ mod tests {
 
     #[test]
     fn test_placements_count() {
-        // 1x1 piece on a 3x3 board -> 9 placements
         let piece = Piece::from_grid(&[&[true]]);
         let placements = piece.placements(3, 3);
         assert_eq!(placements.len(), 9);
@@ -175,7 +169,6 @@ mod tests {
 
     #[test]
     fn test_placements_2x2_on_3x3() {
-        // 2x2 piece on 3x3 board -> 2*2 = 4 placements
         let piece = Piece::from_grid(&[&[true, true], &[true, true]]);
         let placements = piece.placements(3, 3);
         assert_eq!(placements.len(), 4);
@@ -183,7 +176,6 @@ mod tests {
 
     #[test]
     fn test_placements_exact_fit() {
-        // 3x3 piece on 3x3 board -> 1 placement
         let piece = Piece::from_grid(&[
             &[true, true, true],
             &[true, true, true],
@@ -199,7 +191,6 @@ mod tests {
     fn test_placements_positions_correct() {
         let piece = Piece::from_grid(&[&[true]]);
         let placements = piece.placements(3, 3);
-        // Verify corners
         assert!(placements.iter().any(|&(r, c, _)| r == 0 && c == 0));
         assert!(placements.iter().any(|&(r, c, _)| r == 0 && c == 2));
         assert!(placements.iter().any(|&(r, c, _)| r == 2 && c == 0));
@@ -246,8 +237,6 @@ mod tests {
         let row = &[true];
         Piece::from_grid(&[row, row, row, row, row, row]);
     }
-
-    // --- Perimeter tests ---
 
     #[test]
     fn test_perimeter_single_cell() {

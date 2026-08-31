@@ -2,120 +2,83 @@ mod backtrack;
 #[cfg(not(target_arch = "wasm32"))]
 mod parallel;
 mod precompute;
-pub(crate) mod prune;
-pub(crate) mod pruning;
+mod pruning;
 
 use std::cell::Cell;
-use std::sync::atomic::Ordering;
 
 use crate::core::bitboard::Bitboard;
+use crate::core::board::Board;
 use crate::game::Game;
 
-/// Format a count with SI suffix (e.g. 1234567 → "1.2M nodes").
-/// Only the parallel solver's progress bar uses this, and it is not built for wasm.
 #[cfg(not(target_arch = "wasm32"))]
-fn format_count(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}B nodes", n as f64 / 1e9)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M nodes", n as f64 / 1e6)
-    } else if n >= 1_000 {
-        format!("{:.1}K nodes", n as f64 / 1e3)
+fn format_count(count: u64) -> String {
+    if count >= 1_000_000_000 {
+        format!("{:.1}B nodes", count as f64 / 1e9)
+    } else if count >= 1_000_000 {
+        format!("{:.1}M nodes", count as f64 / 1e6)
+    } else if count >= 1_000 {
+        format!("{:.1}K nodes", count as f64 / 1e3)
     } else {
-        format!("{} nodes", n)
+        format!("{} nodes", count)
     }
 }
 
-/// A solution is a list of (row, col) placements, one per piece in original order.
+/// A list of (row, column) placements in the puzzle's original piece order.
 pub type Solution = Vec<(usize, usize)>;
 
-/// Result of a solve attempt: optional solution + number of nodes visited.
 pub struct SolveResult {
     pub solution: Option<Solution>,
     pub nodes_visited: u64,
-    /// Final progress fraction (0.0–1.0) of naive search space explored.
+    /// Final fraction (0.0–1.0) of the naive search space accounted for.
     /// Only meaningful for parallel solves; 0.0 for serial.
     pub progress: f64,
 }
 
-/// Configuration controlling which pruning techniques are enabled.
-#[derive(Clone)]
-pub struct PruningConfig {
-    pub total_deficit_global: bool,
-    pub jaggedness: bool,
-    pub single_cell_endgame: bool,
-}
-
-impl Default for PruningConfig {
-    fn default() -> Self {
-        Self {
-            total_deficit_global: true,
-            jaggedness: true,
-            single_cell_endgame: true,
-        }
-    }
-}
-
-impl PruningConfig {
-    /// All pruning disabled.
-    pub fn none() -> Self {
-        Self {
-            total_deficit_global: false,
-            jaggedness: false,
-            single_cell_endgame: false,
-        }
-    }
-
-    /// Only the specified prune enabled.
-    pub fn only(mut self, f: impl FnOnce(&mut Self)) -> Self {
-        f(&mut self);
-        self
-    }
-}
-
-/// All precomputed data needed by the backtracking solver.
-/// Bundled into a single struct to keep the backtrack signature small.
-pub(crate) struct SolverData {
-    pub(crate) all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
-    pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
-    pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
-    pub(crate) parity_prune: prune::parity::ParityPrune,
-    pub(crate) mc_prune: prune::mc::McPrune,
-    pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
-    pub(crate) single_cell_start: usize,
-    pub(crate) m: u8,
-    pub(crate) h: u8,
-    pub(crate) w: u8,
+struct SolverData {
+    placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    total_deficit: pruning::TotalDeficitBound,
+    jaggedness: pruning::JaggednessBound,
+    partition_reachability: pruning::PartitionReachability,
+    monte_carlo: pruning::MonteCarloBounds,
+    equivalent_pair_skips: Vec<Option<Vec<bool>>>,
+    single_cell_suffix_start: usize,
+    modulus: u8,
+    height: u8,
+    width: u8,
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) progress_weights: Vec<f64>,
+    progress_weights: Vec<f64>,
 }
 
-/// Main entry point. Tries progressively looser hit-count thresholds
-/// (p50, p75, p90, p95, max+1), reusing precomputed data across attempts.
+/// Solve a game, optionally using all available CPU cores.
+///
+/// `exhaustive` keeps searching after the first solution and is primarily used
+/// to benchmark the bounded search tree.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
-    let config = PruningConfig::default();
-
-    let (board, order, data) = prepare_solver(game, &config);
-    let num_levels = data.mc_prune.levels.len();
+    let (board, piece_order, data) = prepare_search(game);
+    let level_count = data.monte_carlo.level_count();
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
     let mut first_solution: Option<Solution> = None;
-    for level_idx in 0..num_levels {
-        data.mc_prune.level_idx.store(level_idx, Ordering::Relaxed);
+    for level_index in 0..level_count {
+        data.monte_carlo.select_level(level_index);
         macro_rules! dispatch {
             ($m:literal) => {{
                 if parallel {
                     #[cfg(not(target_arch = "wasm32"))]
-                    { parallel::run_parallel::<$m>(&board, &order, &data, &config, exhaustive) }
+                    {
+                        parallel::solve_parallel::<$m>(&board, &piece_order, &data, exhaustive)
+                    }
                     #[cfg(target_arch = "wasm32")]
-                    { run_serial(&board, &order, &data, &config, exhaustive) }
+                    {
+                        solve_serial(&board, &piece_order, &data, exhaustive)
+                    }
                 } else {
-                    run_serial(&board, &order, &data, &config, exhaustive)
+                    solve_serial(&board, &piece_order, &data, exhaustive)
                 }
             }};
         }
-        let result = match data.m {
+        let result = match data.modulus {
             2 => dispatch!(2),
             3 => dispatch!(3),
             4 => dispatch!(4),
@@ -126,7 +89,10 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
         last_progress = result.progress;
         if result.solution.is_some() {
             if !exhaustive {
-                return SolveResult { nodes_visited: total_nodes, ..result };
+                return SolveResult {
+                    nodes_visited: total_nodes,
+                    ..result
+                };
             }
             if first_solution.is_none() {
                 first_solution = result.solution;
@@ -141,86 +107,109 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     }
 }
 
-/// Build sorted placements, skip tables, and all precomputed pruning data.
-fn prepare_solver(game: &Game, _config: &PruningConfig) -> (crate::core::board::Board, Vec<usize>, SolverData) {
-    let board = game.board().clone();
+fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
+    let board = *game.board();
     let pieces = game.pieces();
-    let h = board.height();
-    let w = board.width();
-    let n = pieces.len();
+    let height = board.height();
+    let width = board.width();
 
-    let mut indexed: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
+    let mut ordered_placements: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.placements(h, w)))
+        .map(|(index, piece)| (index, piece.placements(height, width)))
         .collect();
-    indexed.sort_by(|(i, a_pl), (j, b_pl)| {
-        a_pl.len()
-            .cmp(&b_pl.len())
+    ordered_placements.sort_by(|(i, a_placements), (j, b_placements)| {
+        a_placements
+            .len()
+            .cmp(&b_placements.len())
             .then_with(|| pieces[*j].perimeter().cmp(&pieces[*i].perimeter()))
             .then_with(|| pieces[*j].cell_count().cmp(&pieces[*i].cell_count()))
             .then_with(|| pieces[*i].shape().limbs().cmp(&pieces[*j].shape().limbs()))
     });
 
-    let order: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-    let all_placements: Vec<Vec<(usize, usize, Bitboard)>> =
-        indexed.into_iter().map(|(_, p)| p).collect();
+    let piece_order: Vec<usize> = ordered_placements
+        .iter()
+        .map(|(original_index, _)| *original_index)
+        .collect();
+    let placements: Vec<Vec<(usize, usize, Bitboard)>> = ordered_placements
+        .into_iter()
+        .map(|(_, placements)| placements)
+        .collect();
+    let equivalent_pair_skips = build_equivalent_pair_skips(&placements);
 
-    let skip_tables: Vec<Option<Vec<bool>>> = (0..n).map(|i| {
-        if i == 0 { return None; }
-        let prev_pl = &all_placements[i - 1];
-        let curr_pl = &all_placements[i];
-        let num_prev = prev_pl.len();
-        let num_curr = curr_pl.len();
-        let mut table = vec![false; num_prev * num_curr];
-        let mut seen = std::collections::HashSet::new();
-        let mut any_skips = false;
-        for a in 0..num_prev {
-            let mask_a = prev_pl[a].2;
-            for b in 0..num_curr {
-                let mask_b = curr_pl[b].2;
-                let key = (mask_a & mask_b, mask_a ^ mask_b);
-                if !seen.insert(key) {
-                    table[a * num_curr + b] = true;
-                    any_skips = true;
-                }
-            }
-        }
-        if any_skips { Some(table) } else { None }
-    }).collect();
-
-    let single_cell_start = (0..n)
-        .rposition(|i| pieces[order[i]].cell_count() != 1)
-        .map(|i| i + 1)
+    let single_cell_suffix_start = (0..pieces.len())
+        .rposition(|index| pieces[piece_order[index]].cell_count() != 1)
+        .map(|index| index + 1)
         .unwrap_or(0);
 
-    let m = board.m();
     let data = precompute::build_solver_data(
-        &board, pieces, &order, all_placements, skip_tables,
-        single_cell_start, h, w, m,
+        &board,
+        pieces,
+        &piece_order,
+        placements,
+        equivalent_pair_skips,
+        single_cell_suffix_start,
+        height,
+        width,
+        board.m(),
     );
 
-    (board, order, data)
+    (board, piece_order, data)
 }
 
-/// Dispatch serial backtrack monomorphized on M to eliminate runtime divs.
-fn dispatch_backtrack(
-    board: &crate::core::board::Board,
+fn build_equivalent_pair_skips(
+    placements: &[Vec<(usize, usize, Bitboard)>],
+) -> Vec<Option<Vec<bool>>> {
+    (0..placements.len())
+        .map(|piece_index| {
+            if piece_index == 0 {
+                return None;
+            }
+
+            let previous = &placements[piece_index - 1];
+            let current = &placements[piece_index];
+            let mut skips = vec![false; previous.len() * current.len()];
+            let mut seen_effects = std::collections::HashSet::new();
+            let mut has_skips = false;
+
+            for (previous_index, &(_, _, previous_mask)) in previous.iter().enumerate() {
+                for (current_index, &(_, _, current_mask)) in current.iter().enumerate() {
+                    let combined_effect =
+                        (previous_mask & current_mask, previous_mask ^ current_mask);
+                    if !seen_effects.insert(combined_effect) {
+                        skips[previous_index * current.len() + current_index] = true;
+                        has_skips = true;
+                    }
+                }
+            }
+
+            has_skips.then_some(skips)
+        })
+        .collect()
+}
+
+fn backtrack_for_modulus(
+    board: &Board,
     data: &SolverData,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
-    config: &PruningConfig,
     exhaustive: bool,
 ) -> bool {
     macro_rules! go {
         ($m:literal) => {
             backtrack::backtrack::<$m>(
-                board, prune::mc::HitCounter::new(), data, 0, usize::MAX,
-                solution, nodes, config, exhaustive,
+                board,
+                pruning::HitCounter::new(),
+                data,
+                0,
+                usize::MAX,
+                solution,
+                nodes,
+                exhaustive,
             )
         };
     }
-    match data.m {
+    match data.modulus {
         2 => go!(2),
         3 => go!(3),
         4 => go!(4),
@@ -229,28 +218,20 @@ fn dispatch_backtrack(
     }
 }
 
-/// Serial backtrack with pre-built data.
-fn run_serial(
-    board: &crate::core::board::Board,
-    order: &[usize],
+fn solve_serial(
+    board: &Board,
+    piece_order: &[usize],
     data: &SolverData,
-    config: &PruningConfig,
     exhaustive: bool,
 ) -> SolveResult {
-    let n = data.all_placements.len();
+    let piece_count = data.placements.len();
     let nodes = Cell::new(0u64);
-    let mut sorted_solution = Vec::with_capacity(n);
+    let mut sorted_solution = Vec::with_capacity(piece_count);
 
-    let found = dispatch_backtrack(
-        board, data, &mut sorted_solution, &nodes, config, exhaustive,
-    );
+    let found = backtrack_for_modulus(board, data, &mut sorted_solution, &nodes, exhaustive);
 
     let solution = if found {
-        let mut solution = vec![(0, 0); n];
-        for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
-            solution[order[sorted_idx]] = (row, col);
-        }
-        Some(solution)
+        Some(restore_piece_order(&sorted_solution, piece_order))
     } else {
         None
     };
@@ -262,54 +243,55 @@ fn run_serial(
     }
 }
 
-/// Kept for tests that call it directly.
-pub fn solve_with_config(game: &Game, config: &PruningConfig) -> SolveResult {
-    let (board, order, data) = prepare_solver(game, config);
-    run_serial(&board, &order, &data, config, false)
+fn restore_piece_order(sorted_solution: &[(usize, usize)], piece_order: &[usize]) -> Solution {
+    let mut solution = vec![(0, 0); sorted_solution.len()];
+    for (sorted_index, &placement) in sorted_solution.iter().enumerate() {
+        solution[piece_order[sorted_index]] = placement;
+    }
+    solution
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::board::Board;
-    use crate::game::Game;
     use crate::core::piece::Piece;
+    use crate::game::Game;
 
     fn verify_solution(game: &Game, solution: &Solution) {
-        let mut board = game.board().clone();
-        for (i, &(row, col)) in solution.iter().enumerate() {
-            let mask = game.pieces()[i].placed_at(row, col);
+        let mut board = *game.board();
+        for (piece_index, &(row, column)) in solution.iter().enumerate() {
+            let mask = game.pieces()[piece_index].placed_at(row, column);
             board.apply_piece(mask);
         }
         assert!(board.is_solved(), "solution did not solve the board");
     }
 
     #[test]
-    fn test_trivial_solve() {
+    fn trivial_solve() {
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 1);
-        assert_eq!(sol[0], (0, 0));
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 1);
+        assert_eq!(solution[0], (0, 0));
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_two_pieces() {
+    fn two_pieces() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece, piece]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 2);
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 2);
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_no_solution() {
+    fn no_solution() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
@@ -318,32 +300,29 @@ mod tests {
     }
 
     #[test]
-    fn test_all_single_cells() {
-        // 3x3, m=2. Board all 1s. Nine 1x1 pieces.
+    fn solves_single_cell_suffix() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 9]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 9);
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 9);
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_single_cells_m3() {
-        // 3x3, m=3. Cell (0,0)=1 needs 2 hits, cell (0,1)=2 needs 1 hit. 3 pieces total.
+    fn solves_single_cell_suffix_with_modulus_three() {
         let grid: &[&[u8]] = &[&[1, 2, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
         let game = Game::new(board, vec![piece; 3]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 3);
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 3);
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_single_cells_insufficient() {
-        // 3x3, m=2. Two 1s but only one piece.
+    fn rejects_insufficient_single_cell_suffix() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -352,37 +331,36 @@ mod tests {
     }
 
     #[test]
-    fn test_mixed_then_single() {
-        // Mix of multi-cell and single-cell pieces.
+    fn solves_multi_cell_then_single_cell_piece() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        let big = Piece::from_grid(&[&[true, true], &[true, false]]); // L-shape, 3 cells
-        let small = Piece::from_grid(&[&[true]]); // 1x1
-        let game = Game::new(board, vec![big, small]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 2);
-        verify_solution(&game, &sol);
+        let l_shape = Piece::from_grid(&[&[true, true], &[true, false]]);
+        let single_cell = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![l_shape, single_cell]);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 2);
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_generated_game_solvable() {
+    fn generated_game_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
         let game = crate::generate::generate_for_level(1, &mut rng).unwrap();
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), game.pieces().len());
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), game.pieces().len());
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_generated_level_5_solvable() {
+    fn generated_level_5_solvable() {
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(123);
         let game = crate::generate::generate_for_level(5, &mut rng).unwrap();
-        let sol = solve(&game, false, false).solution.unwrap();
-        verify_solution(&game, &sol);
+        let solution = solve(&game, false, false).solution.unwrap();
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_total_deficit_pruning() {
+    fn rejects_insufficient_piece_cells() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
         assert_eq!(board.total_deficit(), 9);
@@ -392,19 +370,19 @@ mod tests {
     }
 
     #[test]
-    fn test_solution_maps_to_original_order() {
+    fn solution_maps_to_original_order() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
-        let p0 = Piece::from_grid(&[&[true]]);
-        let p1 = Piece::from_grid(&[&[true, true]]);
-        let game = Game::new(board, vec![p0, p1]);
-        let sol = solve(&game, false, false).solution.unwrap();
-        assert_eq!(sol.len(), 2);
-        verify_solution(&game, &sol);
+        let single_cell = Piece::from_grid(&[&[true]]);
+        let domino = Piece::from_grid(&[&[true, true]]);
+        let game = Game::new(board, vec![single_cell, domino]);
+        let solution = solve(&game, false, false).solution.unwrap();
+        assert_eq!(solution.len(), 2);
+        verify_solution(&game, &solution);
     }
 
     #[test]
-    fn test_coverage_pruning_unreachable() {
+    fn rejects_piece_with_unavoidable_extra_cells() {
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0], &[0, 0, 1]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true], &[true], &[true]]);
@@ -413,392 +391,108 @@ mod tests {
     }
 
     #[test]
-    fn test_generated_levels_solvable() {
+    fn generated_levels_solvable() {
         for level in [1, 5, 10, 20, 25, 30] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(42);
             let game = crate::generate::generate_for_level(level, &mut rng).unwrap();
             let result = solve(&game, false, false);
-            assert!(result.solution.is_some(), "level {level} should be solvable");
+            assert!(
+                result.solution.is_some(),
+                "level {level} should be solvable"
+            );
             verify_solution(&game, &result.solution.unwrap());
         }
     }
 
-    /// Fuzz test: generate many random games across a variety of board sizes, M values,
-    /// and piece counts. Every generated game is guaranteed solvable by construction.
-    /// Verify the solver finds a valid solution for each.
     #[test]
-    fn test_fuzz_soundness() {
-        use rayon::prelude::*;
+    fn solves_generated_games_across_board_sizes_and_moduli() {
         use crate::generate::generate_game;
         use crate::level::LevelSpec;
+        use rayon::prelude::*;
 
-        // Test configurations: (M, rows, cols, num_pieces)
-        let configs: Vec<(u8, u8, u8, u8)> = vec![
-            // Small boards
-            (2, 3, 3, 4), (2, 3, 3, 8),
-            (3, 3, 3, 3), (3, 3, 3, 7),
-            // Medium boards
-            (2, 4, 3, 5), (2, 4, 3, 8),
-            (2, 4, 4, 6), (2, 4, 4, 10),
-            (3, 4, 3, 6), (3, 4, 4, 8),
-            (4, 4, 4, 6), (4, 4, 4, 10),
-            // Larger boards (fewer configs, lower piece counts)
-            (2, 6, 6, 8), (3, 6, 6, 8), (4, 6, 6, 8), (5, 6, 6, 6),
+        let configurations: Vec<(u8, u8, u8, u8)> = vec![
+            (2, 3, 3, 4),
+            (2, 3, 3, 8),
+            (3, 3, 3, 3),
+            (3, 3, 3, 7),
+            (2, 4, 3, 5),
+            (2, 4, 3, 8),
+            (2, 4, 4, 6),
+            (2, 4, 4, 10),
+            (3, 4, 3, 6),
+            (3, 4, 4, 8),
+            (4, 4, 4, 6),
+            (4, 4, 4, 10),
+            (2, 6, 6, 8),
+            (3, 6, 6, 8),
+            (4, 6, 6, 8),
+            (5, 6, 6, 6),
         ];
 
         let seeds: Vec<u64> = (0..5).collect();
 
-        let failures: Vec<String> = configs
+        let failures: Vec<String> = configurations
             .par_iter()
-            .flat_map(|&(m, rows, cols, shapes)| {
-                let spec = LevelSpec {
+            .flat_map_iter(|&(modulus, rows, columns, piece_count)| {
+                let specification = LevelSpec {
                     level: 0,
-                    shifts: m,
+                    shifts: modulus,
                     rows,
-                    columns: cols,
-                    shapes,
+                    columns,
+                    shapes: piece_count,
                 };
-                seeds.par_iter().filter_map(move |&seed| {
-                    let mut rng =
-                        <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                    let game = generate_game(&spec, &mut rng);
+                seeds.iter().filter_map(move |&seed| {
+                    let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
+                    let game = generate_game(&specification, &mut rng);
                     let result = solve(&game, false, false);
                     match result.solution {
                         None => Some(format!(
                             "FAIL: no solution found for M={} {}x{} pieces={} seed={}",
-                            m, rows, cols, shapes, seed
+                            modulus, rows, columns, piece_count, seed
                         )),
-                        Some(ref s) => {
-                            // Verify the solution is correct.
-                            let mut board = game.board().clone();
-                            for (i, &(row, col)) in s.iter().enumerate() {
-                                let mask = game.pieces()[i].placed_at(row, col);
+                        Some(ref solution) => {
+                            let mut board = *game.board();
+                            for (piece_index, &(row, column)) in solution.iter().enumerate() {
+                                let mask = game.pieces()[piece_index].placed_at(row, column);
                                 board.apply_piece(mask);
                             }
                             if !board.is_solved() {
                                 Some(format!(
                                     "FAIL: invalid solution for M={} {}x{} pieces={} seed={}",
-                                    m, rows, cols, shapes, seed
+                                    modulus, rows, columns, piece_count, seed
                                 ))
                             } else {
                                 None
                             }
                         }
                     }
-                }).collect::<Vec<_>>()
+                })
             })
             .collect();
 
         if !failures.is_empty() {
-            for f in &failures[..failures.len().min(20)] {
-                eprintln!("{}", f);
+            for failure in &failures[..failures.len().min(20)] {
+                eprintln!("{}", failure);
             }
             panic!("{} fuzz test failures (showing first 20)", failures.len());
         }
     }
 
-    // --- Per-prune effectiveness and soundness tests ---
-
-    /// Helper: generate games from a set of configs, solve with given pruning config,
-    /// verify soundness, return total nodes visited.
-    fn fuzz_with_config(
-        config: &PruningConfig,
-        configs: &[(u8, u8, u8, u8)],
-        seeds: &[u64],
-    ) -> (u64, usize) {
-        use crate::generate::generate_game;
-        use crate::level::LevelSpec;
-
-        let mut total_nodes = 0u64;
-        let mut failures = 0usize;
-        for &(m, rows, cols, shapes) in configs {
-            let spec = LevelSpec {
-                level: 0, shifts: m, rows, columns: cols, shapes,
-            };
-            for &seed in seeds {
-                let mut rng =
-                    <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = generate_game(&spec, &mut rng);
-                let result = solve_with_config(&game, config);
-                total_nodes += result.nodes_visited;
-                match &result.solution {
-                    None => failures += 1,
-                    Some(s) => {
-                        let mut board = game.board().clone();
-                        for (i, &(row, col)) in s.iter().enumerate() {
-                            let mask = game.pieces()[i].placed_at(row, col);
-                            board.apply_piece(mask);
-                        }
-                        if !board.is_solved() {
-                            failures += 1;
-                        }
-                    }
-                }
-            }
-        }
-        (total_nodes, failures)
-    }
-
-    /// Small configs suitable for brute-force comparison.
-    fn small_configs() -> Vec<(u8, u8, u8, u8)> {
-        vec![
-            (2, 3, 3, 4), (2, 3, 3, 8),
-            (3, 3, 3, 3), (3, 3, 3, 5),
-            (2, 4, 3, 5), (2, 4, 4, 6),
-            (3, 4, 3, 6), (3, 4, 4, 8),
-            (4, 3, 3, 3), (4, 4, 3, 4),
-        ]
-    }
-
-    fn test_seeds() -> Vec<u64> {
-        (0..5).collect()
-    }
-
-    #[test]
-    fn test_prune_total_deficit_global() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.total_deficit_global = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "total_deficit_global prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "total_deficit_global should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_prune_jaggedness() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.jaggedness = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "jaggedness prune caused failures");
-        assert!(nodes_with <= nodes_without,
-            "jaggedness should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_prune_single_cell_endgame() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let no_prune = PruningConfig::none();
-        let with_prune = PruningConfig::none().only(|c| c.single_cell_endgame = true);
-
-        let (nodes_without, _) = fuzz_with_config(&no_prune, &configs, &seeds);
-        let (nodes_with, fail_with) = fuzz_with_config(&with_prune, &configs, &seeds);
-
-        assert_eq!(fail_with, 0, "single_cell_endgame caused failures");
-        assert!(nodes_with <= nodes_without,
-            "single_cell_endgame should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_all_prunes_sound() {
-        // Full config should solve everything the no-prune config solves.
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let (_, fail_all) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        assert_eq!(fail_all, 0, "all prunes combined caused failures");
-    }
-
-    #[test]
-    fn test_parity_partition_soundness() {
-        let configs = vec![
-            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
-            (3, 3, 3, 5), (3, 3, 3, 7),
-            (2, 4, 3, 5), (2, 4, 3, 8),
-            (2, 4, 4, 6), (2, 4, 4, 10),
-            (3, 4, 4, 8), (3, 4, 4, 12),
-            (4, 4, 4, 6), (4, 4, 4, 10),
-        ];
-        let seeds = test_seeds();
-        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        assert_eq!(failures, 0, "parity partition caused {} failures", failures);
-    }
-
-    #[test]
-    fn test_parity_partition_soundness_stress() {
-        let configs = vec![
-            (2, 6, 6, 8), (2, 6, 6, 12),
-            (3, 6, 6, 8), (4, 6, 6, 8),
-            (5, 6, 6, 6),
-        ];
-        let seeds: Vec<u64> = (0..5).collect();
-        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        assert_eq!(failures, 0, "parity partition stress test had {} failures", failures);
-    }
-
-    #[test]
-    fn test_parity_partition_effectiveness() {
-        let configs = small_configs();
-        let seeds = test_seeds();
-        let (nodes_with, _) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        let mut no_parity = PruningConfig::default();
-        no_parity.total_deficit_global = false;
-        let (nodes_without, _) = fuzz_with_config(&no_parity, &configs, &seeds);
-        assert!(nodes_with <= nodes_without,
-            "parity partitions should reduce nodes: {} vs {}", nodes_with, nodes_without);
-    }
-
-    #[test]
-    fn test_pair_skip_tables_non_identical() {
-        let configs = vec![
-            (2, 3, 3, 4), (2, 3, 3, 6), (2, 3, 3, 8),
-            (2, 4, 3, 5), (2, 4, 3, 8),
-            (2, 4, 4, 6), (2, 4, 4, 10),
-            (3, 4, 4, 8), (3, 4, 4, 12),
-        ];
-        let seeds: Vec<u64> = (0..5).collect();
-
-        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        assert_eq!(failures, 0, "pair skip tables caused {} failures", failures);
-    }
-
-    #[test]
-    fn test_pair_skip_tables_soundness_stress() {
-        let configs = vec![
-            (2, 4, 4, 10), (2, 4, 4, 14),
-            (3, 4, 4, 8), (3, 4, 4, 12),
-            (2, 6, 6, 8), (2, 6, 6, 12),
-            (3, 6, 6, 8), (4, 6, 6, 8),
-        ];
-        let seeds: Vec<u64> = (0..5).collect();
-
-        let (_, failures) = fuzz_with_config(&PruningConfig::default(), &configs, &seeds);
-        assert_eq!(failures, 0, "pair skip stress test had {} failures", failures);
-    }
-
-    // --- Pair-merge reduction tests ---
-
-    #[test]
-    fn test_pair_merge_basic() {
-        let p1x2 = Piece::from_grid(&[&[true, true]]);
-        let p1x1 = Piece::from_grid(&[&[true]]);
-
-        let h = 3u8;
-        let w = 3u8;
-        let pl_a = p1x2.placements(h, w);
-        let pl_b = p1x1.placements(h, w);
-        let mut cells = std::collections::HashSet::new();
-        for &(_, _, ma) in &pl_a {
-            for &(_, _, mb) in &pl_b {
-                let xor = ma ^ mb;
-                if xor.count_ones() == 1 {
-                    cells.insert(xor.lowest_set_bit());
-                }
-            }
-        }
-        assert_eq!(cells.len(), 9, "1x2 + 1x1 should produce all 9 cells on 3x3");
-    }
-
-    #[test]
-    fn test_pair_merge_soundness() {
-        let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
-        let board = Board::from_grid(grid, 2);
-        let p1x2 = Piece::from_grid(&[&[true, true]]);
-        let p1x1 = Piece::from_grid(&[&[true]]);
-        let game = Game::new(board, vec![p1x2, p1x1, p1x1, p1x1]);
-        let result = solve(&game, false, false);
-        assert!(result.solution.is_some(), "pair-merge game should solve");
-        verify_solution(&game, result.solution.as_ref().unwrap());
-    }
-
-    #[test]
-    fn test_pair_merge_soundness_stress() {
-
-        let configs = vec![
-            (2, 4, 4, 10), (2, 4, 4, 14), (2, 6, 6, 12),
-        ];
-
-        for &(m, h, w, n) in &configs {
-            for seed in 0..10u64 {
-                let spec = crate::level::LevelSpec {
-                    level: 99, shifts: m, rows: h, columns: w, shapes: n,
-                };
-                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game, false, false);
-                if let Some(ref sol) = result.solution {
-                    verify_solution(&game, sol);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_pair_merge_no_false_positive() {
-        let grid: &[&[u8]] = &[
-            &[1, 1, 0],
-            &[1, 0, 0],
-            &[0, 0, 0],
-        ];
-        let board = Board::from_grid(grid, 2);
-        let p_l = Piece::from_grid(&[&[true, true], &[true, false]]);
-        let p1x1 = Piece::from_grid(&[&[true]]);
-        let game = Game::new(board, vec![p_l, p1x1, p1x1]);
-        let result = solve(&game, false, false);
-        assert!(result.solution.is_some());
-        verify_solution(&game, result.solution.as_ref().unwrap());
-    }
-
-    // --- Subset reachability no-false-zero-effect test ---
-
-    #[test]
-    fn test_subset_no_false_zero_effect() {
-
-        let configs = vec![
-            (2, 4, 4, 10), (3, 4, 4, 8), (2, 6, 6, 12),
-        ];
-        for &(m, h, w, n) in &configs {
-            for seed in 0..20u64 {
-                let spec = crate::level::LevelSpec {
-                    level: 99, shifts: m, rows: h, columns: w, shapes: n,
-                };
-                let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
-                let game = crate::generate::generate_game(&spec, &mut rng);
-                let result = solve(&game, false, false);
-                if let Some(ref sol) = result.solution {
-                    verify_solution(&game, sol);
-                }
-            }
-        }
-    }
-
-    // --- Cancellation reduction test ---
-
-    #[test]
-    fn test_cancellation_reduction() {
-        let board = Board::new_solved(3, 3, 2);
-        let p = Piece::from_grid(&[&[true, true], &[true, false]]);
-        let game = Game::new(board, vec![p, p, p, p]);
-        let result = solve(&game, false, false);
-        assert!(result.solution.is_some(), "4 identical pieces on solved board should cancel");
-        verify_solution(&game, result.solution.as_ref().unwrap());
-    }
-
-    // --- Progress indicator tests ---
-    // In exhaustive mode, the parallel solver must explore the entire naive
-    // search space, so progress should sum to exactly 1.0.
+    // Exhaustive progress accounts for every branch in the naive search space.
 
     fn assert_progress_complete(result: &SolveResult, label: &str) {
-        let p = result.progress;
+        let progress = result.progress;
         assert!(
-            (p - 1.0).abs() < 1e-9,
+            (progress - 1.0).abs() < 1e-9,
             "{}: expected progress ≈ 1.0, got {:.15} (diff={:.2e})",
-            label, p, (p - 1.0).abs()
+            label,
+            progress,
+            (progress - 1.0).abs()
         );
     }
 
     #[test]
-    fn test_progress_exhaustive_trivial_1_piece() {
-        // 3x3, M=2, one 1x1 piece on a board with cell (0,0)=1.
+    fn exhaustive_progress_for_one_piece() {
         let grid: &[&[u8]] = &[&[1, 0, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -809,8 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_two_pieces() {
-        // 3x3, M=2, two 1x1 pieces.
+    fn exhaustive_progress_for_two_pieces() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -821,8 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_no_solution() {
-        // No solution: 3x3, M=3, one 1x1 piece but two cells need hits.
+    fn exhaustive_progress_for_unsolvable_game() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -833,8 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_multi_cell_pieces() {
-        // 3x3, M=2, mix of multi-cell pieces.
+    fn exhaustive_progress_for_mixed_piece_sizes() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let big = Piece::from_grid(&[&[true, true], &[true, false]]);
@@ -846,8 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_m3() {
-        // 3x3, M=3, three 1x1 pieces: cell (0,0)=1 needs 2 hits, (0,1)=2 needs 1 hit.
+    fn exhaustive_progress_with_modulus_three() {
         let grid: &[&[u8]] = &[&[1, 2, 0], &[0, 0, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 3);
         let piece = Piece::from_grid(&[&[true]]);
@@ -858,21 +548,24 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_generated_levels() {
-        // Test on several generated puzzles to cover diverse piece shapes.
+    fn exhaustive_progress_for_generated_levels() {
         use crate::generate::generate_for_level;
         for (level, seed) in [(1, 42u64), (2, 99), (3, 7), (5, 123)] {
             let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed);
             let game = generate_for_level(level, &mut rng).unwrap();
             let result = solve(&game, true, true);
-            assert!(result.solution.is_some(), "level {} seed {} unsolved", level, seed);
+            assert!(
+                result.solution.is_some(),
+                "level {} seed {} unsolved",
+                level,
+                seed
+            );
             assert_progress_complete(&result, &format!("generated_level_{}_seed_{}", level, seed));
         }
     }
 
     #[test]
-    fn test_progress_exhaustive_all_single_cells() {
-        // 3x3, M=2, nine 1x1 pieces on all-1s board (single-cell endgame path).
+    fn exhaustive_progress_for_single_cell_suffix() {
         let grid: &[&[u8]] = &[&[1, 1, 1], &[1, 1, 1], &[1, 1, 1]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true]]);
@@ -883,8 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_exhaustive_duplicate_pieces() {
-        // Duplicate pieces trigger skip tables; verify progress still sums to 1.0.
+    fn exhaustive_progress_with_equivalent_piece_pairs() {
         let grid: &[&[u8]] = &[&[1, 1, 0], &[1, 1, 0], &[0, 0, 0]];
         let board = Board::from_grid(grid, 2);
         let piece = Piece::from_grid(&[&[true, true]]);
@@ -893,5 +585,4 @@ mod tests {
         assert!(result.solution.is_some());
         assert_progress_complete(&result, "duplicate_pieces");
     }
-
 }

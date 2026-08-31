@@ -99,9 +99,12 @@ pub const SHAPE_CATALOG: [(u8, u8, &[bool]); 75] = [
     (5, 5, &[true, true, false, false, false, false, true, true, false, true, false, false, true, false, true, true, false, true, true, true, true, true, true, false, false]),
 ];
 
-/// Build a Piece from a catalog entry.
-fn piece_from_catalog(_h: u8, w: u8, flat: &[bool]) -> Piece {
-    let grid: Vec<Vec<bool>> = flat.chunks(w as usize).map(|row| row.to_vec()).collect();
+fn piece_from_catalog(height: u8, width: u8, flat: &[bool]) -> Piece {
+    assert_eq!(flat.len(), height as usize * width as usize);
+    let grid: Vec<Vec<bool>> = flat
+        .chunks(width as usize)
+        .map(|row| row.to_vec())
+        .collect();
     let refs: Vec<&[bool]> = grid.iter().map(|r| r.as_slice()).collect();
     Piece::from_grid(&refs)
 }
@@ -113,9 +116,7 @@ pub fn is_known_shape(piece: &Piece) -> bool {
     })
 }
 
-/// Pick a random piece from the shape catalog that fits on the given board.
 fn random_piece(rng: &mut impl Rng, max_h: u8, max_w: u8) -> Piece {
-    // Collect indices of shapes that fit within the board dimensions.
     let candidates: Vec<usize> = SHAPE_CATALOG
         .iter()
         .enumerate()
@@ -148,7 +149,6 @@ pub fn generate_game(spec: &LevelSpec, rng: &mut impl Rng) -> Game {
         let row = rng.random_range(0..=max_row as usize);
         let col = rng.random_range(0..=max_col as usize);
 
-        // Undo this piece (increment deficit) to build the scrambled board.
         let mask = piece.placed_at(row, col);
         board.undo_piece(mask);
 
@@ -212,7 +212,6 @@ mod tests {
 
     #[test]
     fn test_shape_catalog_valid() {
-        // Every catalog entry should produce a valid piece.
         for (i, (h, w, flat)) in SHAPE_CATALOG.iter().enumerate() {
             assert_eq!(
                 flat.len(),
@@ -355,14 +354,12 @@ mod tests {
 
     #[test]
     fn test_small_board_filters_large_pieces() {
-        // A 3x3 board should never get pieces larger than 3x3.
         let mut rng = seeded_rng();
         for _ in 0..200 {
             let piece = random_piece(&mut rng, 3, 3);
             assert!(piece.height() <= 3);
             assert!(piece.width() <= 3);
         }
-        // A 2x2 board should only get pieces that fit in 2x2.
         for _ in 0..200 {
             let piece = random_piece(&mut rng, 2, 2);
             assert!(piece.height() <= 2);

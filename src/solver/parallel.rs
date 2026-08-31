@@ -1,6 +1,4 @@
 //! Parallel backtracking with budget-based work stealing.
-//!
-//! This module is only compiled on non-wasm targets.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -9,408 +7,473 @@ use std::sync::{Condvar, Mutex};
 
 use crate::core::board::Board;
 
-use super::backtrack::{sort_placements, solve_single_cells};
-use super::prune::mc::HitCounter;
-use super::pruning::*;
-use super::{PruningConfig, SolverData, SolveResult, format_count};
+use super::backtrack::{
+    MAX_PLACEMENTS, next_previous_placement, rank_placements, solve_single_cell_suffix,
+};
+use super::pruning::HitCounter;
+use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_is_feasible};
+use super::{SolveResult, SolverData, format_count, restore_piece_order};
 
 struct SearchFrame {
     board: Board,
     hits: HitCounter,
-    piece_idx: usize,
-    /// Sorted, filtered placement indices into data.all_placements[piece_idx].
-    order: [u8; 196],
-    len: u8,
+    piece_index: usize,
+    ranked_indices: [u8; MAX_PLACEMENTS],
+    candidate_count: u8,
     cursor: u8,
-    filtered_out: usize,
+    skipped_count: usize,
 }
 
-pub(crate) struct StealableTask {
-    pub board: Board,
-    pub hits: HitCounter,
-    pub prefix: Vec<(usize, usize)>,
-    pub depth: usize,
-    pub prev_placement: usize,
+struct SearchTask {
+    board: Board,
+    hits: HitCounter,
+    solution_prefix: Vec<(usize, usize)>,
+    piece_index: usize,
+    previous_placement: usize,
 }
 
-pub(crate) struct WorkQueue {
-    queue: Mutex<VecDeque<StealableTask>>,
+struct WorkQueue {
+    queue: Mutex<VecDeque<SearchTask>>,
     condvar: Condvar,
 }
 
 impl WorkQueue {
-    pub fn new() -> Self {
-        Self { queue: Mutex::new(VecDeque::new()), condvar: Condvar::new() }
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::new()),
+            condvar: Condvar::new(),
+        }
     }
 
-    pub fn push(&self, task: StealableTask) {
+    fn push(&self, task: SearchTask) {
         self.queue.lock().unwrap().push_back(task);
         self.condvar.notify_one();
     }
 
-    pub fn push_many(&self, tasks: Vec<StealableTask>) {
-        if tasks.is_empty() { return; }
-        let mut q = self.queue.lock().unwrap();
-        for t in tasks { q.push_back(t); }
+    fn push_many(&self, tasks: Vec<SearchTask>) {
+        if tasks.is_empty() {
+            return;
+        }
+        let mut queue = self.queue.lock().unwrap();
+        for task in tasks {
+            queue.push_back(task);
+        }
         self.condvar.notify_all();
     }
 
-    pub fn pop(&self) -> Option<StealableTask> {
+    fn pop(&self) -> Option<SearchTask> {
         self.queue.lock().unwrap().pop_front()
     }
 
-    pub fn wait_for_task(
-        &self,
-        abort: &AtomicBool,
-        active_count: &AtomicUsize,
-    ) -> Option<StealableTask> {
-        let mut q = self.queue.lock().unwrap();
+    fn wait_for_task(&self, abort: &AtomicBool, active_count: &AtomicUsize) -> Option<SearchTask> {
+        let mut queue = self.queue.lock().unwrap();
         loop {
-            if abort.load(Ordering::Relaxed) { return None; }
-            if let Some(t) = q.pop_front() { return Some(t); }
-            if active_count.load(Ordering::SeqCst) == 0 { return None; }
-            let (new_q, _) = self.condvar.wait_timeout(
-                q, std::time::Duration::from_millis(1)
-            ).unwrap();
-            q = new_q;
+            if abort.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some(task) = queue.pop_front() {
+                return Some(task);
+            }
+            if active_count.load(Ordering::SeqCst) == 0 {
+                return None;
+            }
+            let (resumed_queue, _) = self
+                .condvar
+                .wait_timeout(queue, std::time::Duration::from_millis(1))
+                .unwrap();
+            queue = resumed_queue;
         }
     }
 }
 
-fn build_search_frame<const M: usize>(
+fn build_search_frame<const MODULUS: usize>(
     board: &Board,
     hits: HitCounter,
     data: &SolverData,
-    piece_idx: usize,
-    prev_placement: usize,
-    _config: &PruningConfig,
+    piece_index: usize,
+    previous_placement: usize,
 ) -> SearchFrame {
-    let placements = &data.all_placements[piece_idx];
-    let pl_len = placements.len();
+    let placements = &data.placements[piece_index];
+    let placement_count = placements.len();
 
-    let mut order = [0u8; 196];
-    let max_zeros = max_zeros_hit::<M>(board, data, piece_idx);
-    let kept = sort_placements(board, data.m, placements, max_zeros, &mut order);
+    let mut ranked_indices = [0u8; MAX_PLACEMENTS];
+    let max_zero_cells = max_zero_cells_allowed::<MODULUS>(board, data, piece_index);
+    let ranked_count = rank_placements(
+        board,
+        data.modulus,
+        placements,
+        max_zero_cells,
+        &mut ranked_indices,
+    );
 
-    // Filter in-place: pack surviving indices into the front of order.
-    let mut len = 0u8;
-    for oi in 0..kept {
-        let pl_idx = order[oi] as usize;
-        if filter_placement(data, piece_idx, pl_idx, prev_placement) {
-            order[len as usize] = pl_idx as u8;
-            len += 1;
+    let mut candidate_count = 0u8;
+    for ranked_index in 0..ranked_count {
+        let placement_index = ranked_indices[ranked_index] as usize;
+        if is_canonical_placement_pair(data, piece_index, placement_index, previous_placement) {
+            ranked_indices[candidate_count as usize] = placement_index as u8;
+            candidate_count += 1;
         }
     }
 
-    let filtered_out = pl_len - len as usize;
-    SearchFrame { board: board.clone(), hits, piece_idx, order, len, cursor: 0, filtered_out }
-}
-
-#[inline]
-fn next_prev_placement(data: &SolverData, piece_idx: usize, pl_idx: usize) -> usize {
-    let next = piece_idx + 1;
-    if next < data.all_placements.len() && data.skip_tables[next].is_some() { pl_idx } else { usize::MAX }
+    SearchFrame {
+        board: *board,
+        hits,
+        piece_index,
+        ranked_indices,
+        candidate_count,
+        cursor: 0,
+        skipped_count: placement_count - candidate_count as usize,
+    }
 }
 
 fn split_work(
     stack: &mut [SearchFrame],
     solution_prefix: &[(usize, usize)],
-    base_solution_len: usize,
+    base_solution_length: usize,
     data: &SolverData,
-    wq: &WorkQueue,
+    work_queue: &WorkQueue,
 ) {
-    for (si, frame) in stack.iter_mut().enumerate() {
-        if frame.cursor >= frame.len { continue; }
+    for (stack_index, frame) in stack.iter_mut().enumerate() {
+        if frame.cursor >= frame.candidate_count {
+            continue;
+        }
         let mut tasks = Vec::new();
-        for ci in frame.cursor..frame.len {
-            let pl_idx = frame.order[ci as usize] as usize;
-            let mask = data.all_placements[frame.piece_idx][pl_idx].2;
-            let mut board = frame.board.clone();
+        for candidate_index in frame.cursor..frame.candidate_count {
+            let placement_index = frame.ranked_indices[candidate_index as usize] as usize;
+            let mask = data.placements[frame.piece_index][placement_index].2;
+            let mut board = frame.board;
             board.apply_piece(mask);
             let mut hits = frame.hits;
             hits.apply_piece(mask);
-            let depth = frame.piece_idx + 1;
-            let prefix_len = base_solution_len + si;
-            let mut prefix = solution_prefix[..prefix_len].to_vec();
-            let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
-            prefix.push((row, col));
-            let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
-            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
+            let next_piece_index = frame.piece_index + 1;
+            let prefix_length = base_solution_length + stack_index;
+            let mut task_solution = solution_prefix[..prefix_length].to_vec();
+            let (row, column, _) = data.placements[frame.piece_index][placement_index];
+            task_solution.push((row, column));
+            let previous_placement =
+                next_previous_placement(data, frame.piece_index, placement_index);
+            tasks.push(SearchTask {
+                board,
+                hits,
+                solution_prefix: task_solution,
+                piece_index: next_piece_index,
+                previous_placement,
+            });
         }
-        frame.cursor = frame.len;
-        wq.push_many(tasks);
+        frame.cursor = frame.candidate_count;
+        work_queue.push_many(tasks);
         return;
     }
 }
 
-const SPLIT_BUDGET: u64 = 4096;
+const NODES_BETWEEN_SPLITS: u64 = 4096;
 
-fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
-    let mut old = atomic.load(Ordering::Relaxed);
+fn add_progress(progress: &std::sync::atomic::AtomicU64, value: f64) {
+    let mut old = progress.load(Ordering::Relaxed);
     loop {
-        let new_val = f64::from_bits(old) + val;
-        match atomic.compare_exchange_weak(old, new_val.to_bits(), Ordering::Relaxed, Ordering::Relaxed) {
+        let new_value = f64::from_bits(old) + value;
+        match progress.compare_exchange_weak(
+            old,
+            new_value.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
             Ok(_) => break,
-            Err(x) => old = x,
+            Err(current) => old = current,
         }
     }
 }
 
-fn backtrack_stealing<const M: usize>(
+fn backtrack_with_stealing<const MODULUS: usize>(
     initial_board: &Board,
     initial_hits: HitCounter,
     data: &SolverData,
-    start_depth: usize,
-    initial_prev_placement: usize,
+    start_piece_index: usize,
+    initial_previous_placement: usize,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
-    config: &PruningConfig,
     abort: &AtomicBool,
-    wq: &WorkQueue,
+    work_queue: &WorkQueue,
     idle_count: &AtomicUsize,
     exhaustive: bool,
     progress: &std::sync::atomic::AtomicU64,
 ) -> bool {
-    let n = data.all_placements.len();
-    let base_solution_len = solution.len();
+    let piece_count = data.placements.len();
+    let base_solution_length = solution.len();
 
-    let task_weight = if start_depth < n {
-        data.all_placements[start_depth].len() as f64 * data.progress_weights[start_depth]
+    let task_weight = if start_piece_index < piece_count {
+        data.placements[start_piece_index].len() as f64 * data.progress_weights[start_piece_index]
     } else {
         0.0
     };
 
-    if start_depth == n {
+    if start_piece_index == piece_count {
         return initial_board.is_solved();
     }
-    if config.single_cell_endgame && start_depth >= data.single_cell_start {
-        let num_remaining = n - start_depth;
-        let result = solve_single_cells(initial_board, data.m, data.h, data.w, num_remaining, solution);
-        atomic_add_f64(progress, task_weight);
+    if start_piece_index >= data.single_cell_suffix_start {
+        let remaining_pieces = piece_count - start_piece_index;
+        let result = solve_single_cell_suffix(
+            initial_board,
+            data.modulus,
+            data.height,
+            data.width,
+            remaining_pieces,
+            solution,
+        );
+        add_progress(progress, task_weight);
         return result;
     }
 
-    if !prune_node::<M>(initial_board, data, start_depth, config) {
-        atomic_add_f64(progress, task_weight);
+    if !state_is_feasible::<MODULUS>(initial_board, data, start_piece_index) {
+        add_progress(progress, task_weight);
         return false;
     }
 
-    let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
-    let first_frame = build_search_frame::<M>(
-        initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
+    let mut stack: Vec<SearchFrame> = Vec::with_capacity(piece_count - start_piece_index);
+    let first_frame = build_search_frame::<MODULUS>(
+        initial_board,
+        initial_hits,
+        data,
+        start_piece_index,
+        initial_previous_placement,
     );
-    let mut progress_local: f64 = 0.0;
-    progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
-    nodes.set(nodes.get() + first_frame.filtered_out as u64);
+    let mut accumulated_progress = 0.0;
+    accumulated_progress +=
+        first_frame.skipped_count as f64 * data.progress_weights[start_piece_index];
+    nodes.set(nodes.get() + first_frame.skipped_count as u64);
     stack.push(first_frame);
 
-    let mut budget = SPLIT_BUDGET;
+    let mut nodes_until_split = NODES_BETWEEN_SPLITS;
     let mut found = false;
-    // Exhaustive mode keeps searching after a hit, so the first solution found
-    // is stashed and restored on the way out.
-    let mut found_solution: Option<Vec<(usize, usize)>> = None;
+    let mut first_solution: Option<Vec<(usize, usize)>> = None;
 
     loop {
-        if abort.load(Ordering::Relaxed) { break; }
-        if stack.is_empty() { break; }
+        if abort.load(Ordering::Relaxed) {
+            break;
+        }
+        if stack.is_empty() {
+            break;
+        }
 
         let frame = stack.last_mut().unwrap();
-        if frame.cursor >= frame.len {
+        if frame.cursor >= frame.candidate_count {
             stack.pop();
             continue;
         }
 
-        let pl_idx = frame.order[frame.cursor as usize] as usize;
+        let placement_index = frame.ranked_indices[frame.cursor as usize] as usize;
         frame.cursor += 1;
-        let piece_idx = frame.piece_idx;
-        let mask = data.all_placements[piece_idx][pl_idx].2;
+        let piece_index = frame.piece_index;
+        let mask = data.placements[piece_index][placement_index].2;
 
-        let mut board = frame.board.clone();
+        let mut board = frame.board;
         board.apply_piece(mask);
 
-        let mut new_hits = frame.hits;
-        new_hits.apply_piece(mask);
-        if data.mc_prune.exceeds_hit_threshold(&new_hits, piece_idx + 1) {
-            progress_local += data.progress_weights[piece_idx];
+        let mut hits_after_placement = frame.hits;
+        hits_after_placement.apply_piece(mask);
+        if data
+            .monte_carlo
+            .exceeds_hit_threshold(&hits_after_placement, piece_index + 1)
+        {
+            accumulated_progress += data.progress_weights[piece_index];
             nodes.set(nodes.get() + 1);
             continue;
         }
 
-        let sol_depth = base_solution_len + stack.len() - 1;
-        solution.truncate(sol_depth);
-        let (row, col, _) = data.all_placements[piece_idx][pl_idx];
-        solution.push((row, col));
+        let solution_depth = base_solution_length + stack.len() - 1;
+        solution.truncate(solution_depth);
+        let (row, column, _) = data.placements[piece_index][placement_index];
+        solution.push((row, column));
 
         nodes.set(nodes.get() + 1);
 
-        let next_piece = piece_idx + 1;
+        let next_piece_index = piece_index + 1;
 
-        if next_piece == n {
-            progress_local += data.progress_weights[piece_idx];
+        if next_piece_index == piece_count {
+            accumulated_progress += data.progress_weights[piece_index];
             if board.is_solved() {
                 found = true;
                 if !exhaustive {
-                    atomic_add_f64(progress, progress_local);
+                    add_progress(progress, accumulated_progress);
                     return true;
                 }
-                if found_solution.is_none() {
-                    found_solution = Some(solution.clone());
+                if first_solution.is_none() {
+                    first_solution = Some(solution.clone());
                 }
             }
             continue;
         }
 
-        if config.single_cell_endgame && next_piece >= data.single_cell_start {
-            progress_local += data.progress_weights[piece_idx];
-            let num_remaining = n - next_piece;
-            let saved_len = solution.len();
-            if solve_single_cells(&board, data.m, data.h, data.w, num_remaining, solution) {
+        if next_piece_index >= data.single_cell_suffix_start {
+            accumulated_progress += data.progress_weights[piece_index];
+            let remaining_pieces = piece_count - next_piece_index;
+            let solution_length = solution.len();
+            if solve_single_cell_suffix(
+                &board,
+                data.modulus,
+                data.height,
+                data.width,
+                remaining_pieces,
+                solution,
+            ) {
                 found = true;
                 if !exhaustive {
-                    atomic_add_f64(progress, progress_local);
+                    add_progress(progress, accumulated_progress);
                     return true;
                 }
-                if found_solution.is_none() {
-                    found_solution = Some(solution.clone());
+                if first_solution.is_none() {
+                    first_solution = Some(solution.clone());
                 }
-                solution.truncate(saved_len);
+                solution.truncate(solution_length);
             }
             continue;
         }
 
-        if !prune_node::<M>(&board, data, next_piece, config) {
-            progress_local += data.progress_weights[piece_idx];
+        if !state_is_feasible::<MODULUS>(&board, data, next_piece_index) {
+            accumulated_progress += data.progress_weights[piece_index];
             continue;
         }
 
-        budget = budget.saturating_sub(1);
-        if budget == 0 {
-            budget = SPLIT_BUDGET;
-            if progress_local > 0.0 {
-                atomic_add_f64(progress, progress_local);
-                progress_local = 0.0;
+        nodes_until_split = nodes_until_split.saturating_sub(1);
+        if nodes_until_split == 0 {
+            nodes_until_split = NODES_BETWEEN_SPLITS;
+            if accumulated_progress > 0.0 {
+                add_progress(progress, accumulated_progress);
+                accumulated_progress = 0.0;
             }
             if idle_count.load(Ordering::Relaxed) > 0 {
-                split_work(&mut stack, solution, base_solution_len, data, wq);
+                split_work(&mut stack, solution, base_solution_length, data, work_queue);
             }
         }
 
-        let next_prev = next_prev_placement(data, piece_idx, pl_idx);
-        let new_frame = build_search_frame::<M>(
-            &board, new_hits, data, next_piece, next_prev, config,
+        let previous_placement = next_previous_placement(data, piece_index, placement_index);
+        let next_frame = build_search_frame::<MODULUS>(
+            &board,
+            hits_after_placement,
+            data,
+            next_piece_index,
+            previous_placement,
         );
-        progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
-        nodes.set(nodes.get() + new_frame.filtered_out as u64);
-        stack.push(new_frame);
+        accumulated_progress +=
+            next_frame.skipped_count as f64 * data.progress_weights[next_piece_index];
+        nodes.set(nodes.get() + next_frame.skipped_count as u64);
+        stack.push(next_frame);
     }
 
-    if progress_local > 0.0 {
-        atomic_add_f64(progress, progress_local);
+    if accumulated_progress > 0.0 {
+        add_progress(progress, accumulated_progress);
     }
 
-    if let Some(sol) = found_solution {
+    if let Some(first_solution) = first_solution {
         solution.clear();
-        solution.extend_from_slice(&sol);
+        solution.extend_from_slice(&first_solution);
     }
 
     found
 }
 
-/// Parallel backtrack with pre-built data.
-pub(crate) fn run_parallel<const M: usize>(
+pub(super) fn solve_parallel<const MODULUS: usize>(
     board: &Board,
-    order: &[usize],
+    piece_order: &[usize],
     data: &SolverData,
-    config: &PruningConfig,
     exhaustive: bool,
 ) -> SolveResult {
-    let n = data.all_placements.len();
+    let piece_count = data.placements.len();
 
-    let wq = WorkQueue::new();
-    wq.push(StealableTask {
-        board: board.clone(),
+    let work_queue = WorkQueue::new();
+    work_queue.push(SearchTask {
+        board: *board,
         hits: HitCounter::new(),
-        prefix: Vec::new(),
-        depth: 0,
-        prev_placement: usize::MAX,
+        solution_prefix: Vec::new(),
+        piece_index: 0,
+        previous_placement: usize::MAX,
     });
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
+    let thread_count = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
         .unwrap_or(4);
 
     let abort = AtomicBool::new(false);
-    let result: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
+    let first_solution: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
     let total_nodes = std::sync::atomic::AtomicU64::new(0);
     let active_count = AtomicUsize::new(0);
     let idle_count = AtomicUsize::new(0);
     let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
-    let workers_alive = AtomicUsize::new(num_threads);
+    let workers_alive = AtomicUsize::new(thread_count);
 
-    let total_space: f64 = data.all_placements.iter()
-        .map(|p| p.len() as f64)
+    let total_space: f64 = data
+        .placements
+        .iter()
+        .map(|placements| placements.len() as f64)
         .product();
     eprintln!("search space: {:.3e}", total_space);
 
     let solve_start = std::time::Instant::now();
 
-    std::thread::scope(|s| {
-        s.spawn(|| {
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
             let bar_width = 30;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(200));
-                if abort.load(Ordering::Relaxed)
-                    || workers_alive.load(Ordering::Relaxed) == 0 { break; }
+                if abort.load(Ordering::Relaxed) || workers_alive.load(Ordering::Relaxed) == 0 {
+                    break;
+                }
 
-                let p = f64::from_bits(progress.load(Ordering::Relaxed)).min(1.0);
-                let pct = p * 100.0;
+                let progress_fraction = f64::from_bits(progress.load(Ordering::Relaxed)).min(1.0);
+                let percentage = progress_fraction * 100.0;
                 let nodes_so_far = total_nodes.load(Ordering::Relaxed);
                 let elapsed = solve_start.elapsed().as_secs_f64();
 
-                let filled = (p * bar_width as f64) as usize;
-                let bar: String = (0..bar_width).map(|i| if i < filled { '#' } else { ' ' }).collect();
+                let filled = (progress_fraction * bar_width as f64) as usize;
+                let bar: String = (0..bar_width)
+                    .map(|position| if position < filled { '#' } else { ' ' })
+                    .collect();
 
                 let nodes_str = format_count(nodes_so_far);
-                eprint!("\r\x1b[K[{}] {:.1}%  {}  {:.1}s", bar, pct, nodes_str, elapsed);
+                eprint!(
+                    "\r\x1b[K[{}] {:.1}%  {}  {:.1}s",
+                    bar, percentage, nodes_str, elapsed
+                );
             }
             eprint!("\r\x1b[K");
         });
 
-        for _ in 0..num_threads {
-            s.spawn(|| {
+        for _ in 0..thread_count {
+            scope.spawn(|| {
                 let nodes = Cell::new(0u64);
-                let mut solution = Vec::with_capacity(n);
+                let mut solution = Vec::with_capacity(piece_count);
 
                 loop {
-                    if abort.load(Ordering::Relaxed) { break; }
+                    if abort.load(Ordering::Relaxed) {
+                        break;
+                    }
 
-                    let task = wq.pop().or_else(|| {
+                    let task = work_queue.pop().or_else(|| {
                         idle_count.fetch_add(1, Ordering::Relaxed);
-                        let t = wq.wait_for_task(&abort, &active_count);
+                        let task = work_queue.wait_for_task(&abort, &active_count);
                         idle_count.fetch_sub(1, Ordering::Relaxed);
-                        t
+                        task
                     });
                     let task = match task {
-                        Some(t) => t,
+                        Some(task) => task,
                         None => break,
                     };
                     active_count.fetch_add(1, Ordering::SeqCst);
 
                     solution.clear();
-                    solution.extend_from_slice(&task.prefix);
+                    solution.extend_from_slice(&task.solution_prefix);
                     nodes.set(0);
 
-                    let found = backtrack_stealing::<M>(
+                    let found = backtrack_with_stealing::<MODULUS>(
                         &task.board,
                         task.hits,
                         data,
-                        task.depth,
-                        task.prev_placement,
+                        task.piece_index,
+                        task.previous_placement,
                         &mut solution,
                         &nodes,
-                        config,
                         &abort,
-                        &wq,
+                        &work_queue,
                         &idle_count,
                         exhaustive,
                         &progress,
@@ -423,7 +486,7 @@ pub(crate) fn run_parallel<const M: usize>(
                         if !exhaustive {
                             abort.store(true, Ordering::Relaxed);
                         }
-                        let mut guard = result.lock().unwrap();
+                        let mut guard = first_solution.lock().unwrap();
                         if guard.is_none() {
                             *guard = Some(solution.clone());
                         }
@@ -434,16 +497,11 @@ pub(crate) fn run_parallel<const M: usize>(
         }
     });
 
-    let result = result.into_inner().unwrap();
+    let first_solution = first_solution.into_inner().unwrap();
     let nodes_visited = total_nodes.load(Ordering::Relaxed);
 
-    let solution = result.map(|sorted_solution| {
-        let mut solution = vec![(0, 0); n];
-        for (sorted_idx, &(row, col)) in sorted_solution.iter().enumerate() {
-            solution[order[sorted_idx]] = (row, col);
-        }
-        solution
-    });
+    let solution =
+        first_solution.map(|sorted_solution| restore_piece_order(&sorted_solution, piece_order));
 
     let final_progress = f64::from_bits(progress.load(Ordering::Relaxed));
 

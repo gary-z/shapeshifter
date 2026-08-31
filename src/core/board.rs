@@ -8,13 +8,9 @@ pub const MAX_M: usize = 5;
 /// The planes are mutually exclusive — each cell appears in exactly one plane.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Board {
-    /// One bitboard per digit value 0..M.
     planes: [Bitboard; MAX_M],
-    /// Number of digit states. Cells hold values in [0, M).
     m: u8,
-    /// Board height.
     height: u8,
-    /// Board width.
     width: u8,
     /// Total deficit: sum of per-cell decrements still needed to solve.
     /// = sum_{d=1}^{M-1} d * popcount(planes[d])
@@ -93,7 +89,6 @@ impl Board {
         self.width
     }
 
-    /// Get the value at cell (row, col).
     pub fn get(&self, row: usize, col: usize) -> u8 {
         let index = (row * crate::core::STRIDE + col) as u32;
         for d in 0..self.m as usize {
@@ -104,13 +99,11 @@ impl Board {
         unreachable!("cell ({row}, {col}) not found in any plane");
     }
 
-    /// Get the bitboard plane for digit `d`.
     #[inline(always)]
     pub const fn plane(&self, d: u8) -> Bitboard {
         self.planes[d as usize]
     }
 
-    /// Returns true if every cell is 0 (the board is solved).
     #[inline(always)]
     pub fn is_solved(&self) -> bool {
         self.total_deficit == 0
@@ -165,18 +158,11 @@ impl Board {
         }
     }
 
-    /// Total deficit: sum of per-cell hits still needed to reach all-zero (cached, O(1)).
-    /// = sum_{d=1}^{M-1} d * popcount(planes[d])
     #[inline(always)]
     pub fn total_deficit(&self) -> u32 {
         self.total_deficit
     }
 
-    /// Split jaggedness into (horizontal, vertical) components.
-    /// Horizontal = mismatching (r,c)-(r,c+1) pairs. Vertical = (r,c)-(r+1,c) pairs.
-    /// Takes precomputed masks to avoid rebuilding them per call.
-    ///
-    /// Bitboard mask of all valid cells on this board.
     pub fn valid_mask(&self) -> Bitboard {
         let mut mask = Bitboard::ZERO;
         for d in 0..self.m as usize {
@@ -207,7 +193,6 @@ mod tests {
     use super::*;
 
     fn sample_grid() -> Board {
-        // 3x3 board, m=3
         let grid: &[&[u8]] = &[&[0, 1, 2], &[2, 1, 0], &[1, 0, 2]];
         Board::from_grid(grid, 3)
     }
@@ -256,9 +241,7 @@ mod tests {
 
     #[test]
     fn test_apply_piece_single_cell() {
-        // 3x3, m=3, all zeros. Apply decrements: 0 wraps to M-1=2, then 2→1, then 1→0.
         let mut board = Board::new_solved(3, 3, 3);
-        // Piece covering only (0,0)
         let piece = Bitboard::from_bit(0);
 
         board.apply_piece(piece);
@@ -274,9 +257,7 @@ mod tests {
 
     #[test]
     fn test_apply_piece_multi_cell() {
-        // 3x3, m=2, all zeros
         let mut board = Board::new_solved(3, 3, 2);
-        // Piece covering (0,0) and (0,1)
         let mut piece = Bitboard::ZERO;
         piece.set_bit(0);  // (0,0)
         piece.set_bit(1);  // (0,1)
@@ -301,7 +282,6 @@ mod tests {
 
     #[test]
     fn test_undo_piece_restores_deficit() {
-        // m=3, cell at deficit 0, undo = apply M-1=2 times: 0→2→1
         let mut board = Board::new_solved(3, 3, 3);
         let piece = Bitboard::from_bit(0);
 
@@ -333,13 +313,11 @@ mod tests {
     fn test_valid_mask() {
         let board = Board::new_solved(3, 4, 2);
         let mask = board.valid_mask();
-        // 3 rows, 4 cols
         for r in 0..3 {
             for c in 0..4 {
                 assert!(mask.get_bit((r * 15 + c) as u32));
             }
         }
-        // Outside should be unset
         assert!(!mask.get_bit(4));  // col 4 in row 0
         assert!(!mask.get_bit(14)); // col 14 in row 0
     }
@@ -347,7 +325,6 @@ mod tests {
     #[test]
     fn test_plane() {
         let board = sample_grid();
-        // plane(0) should have bits set where value is 0
         let p0 = board.plane(0);
         assert!(p0.get_bit(0 * 15 + 0)); // (0,0) = 0
         assert!(p0.get_bit(1 * 15 + 2)); // (1,2) = 0

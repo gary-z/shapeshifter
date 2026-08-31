@@ -256,7 +256,6 @@ fn run_bench(
         }
         drop(result_tx);
 
-        // Print header, then stream results as they arrive.
         if show_nodes_per_sec {
             println!(
                 "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
@@ -314,7 +313,6 @@ fn run_bench(
 
         results.sort_by_key(|r| (r.level, r.game_idx));
 
-        // Per-level summary.
         println!("\n{:<8} {:<7} {:<7} {:<10}", "Level", "OK", "Rate", "Board");
         println!("{}", "-".repeat(35));
 
@@ -358,7 +356,7 @@ fn print_usage() {
            historical [PATH]       Benchmark historical puzzles from JSONL file\n\n\
          Options:\n  \
            --parallel       Use parallel solver (each game gets all cores)\n  \
-           --exhaustive     Explore full search tree (no early termination)\n  \
+           --exhaustive     Continue through bounded tree (no early termination)\n  \
            --timeout SECS   Timeout per game (default: 5 for simulated, 60 for historical)\n  \
            --games-per N    Games per level for simulated mode (default: 5)\n  \
            -h, --help       Show this help"
