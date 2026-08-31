@@ -88,9 +88,10 @@ The sampled bounds are combined with deterministic checks:
 
 ## Development
 
-Run the same release test suite used by CI:
+Run the CI checks locally:
 
 ```bash
+cargo fmt --all -- --check
 cargo test --release --all-targets
 ```
 

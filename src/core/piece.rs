@@ -1,5 +1,5 @@
-use crate::core::bitboard::Bitboard;
 use crate::core::STRIDE;
+use crate::core::bitboard::Bitboard;
 
 /// A puzzle piece defined by its filled cells, anchored at (0, 0).
 /// The shape is stored as a Bitboard using the 15-column stride layout.
@@ -143,20 +143,20 @@ mod tests {
         assert_eq!(piece.height(), 2);
         assert_eq!(piece.width(), 2);
         assert_eq!(piece.cell_count(), 3);
-        assert!(piece.shape().get_bit(0));        // (0,0)
-        assert!(piece.shape().get_bit(1));        // (0,1)
-        assert!(piece.shape().get_bit(15));       // (1,0)
-        assert!(!piece.shape().get_bit(16));      // (1,1) empty
+        assert!(piece.shape().get_bit(0)); // (0,0)
+        assert!(piece.shape().get_bit(1)); // (0,1)
+        assert!(piece.shape().get_bit(15)); // (1,0)
+        assert!(!piece.shape().get_bit(16)); // (1,1) empty
     }
 
     #[test]
     fn test_placed_at() {
         let piece = Piece::from_grid(&[&[true, true], &[true, false]]);
         let placed = piece.placed_at(2, 3);
-        assert!(placed.get_bit(2 * 15 + 3));     // (2,3)
-        assert!(placed.get_bit(2 * 15 + 4));     // (2,4)
-        assert!(placed.get_bit(3 * 15 + 3));     // (3,3)
-        assert!(!placed.get_bit(3 * 15 + 4));    // (3,4) empty
+        assert!(placed.get_bit(2 * 15 + 3)); // (2,3)
+        assert!(placed.get_bit(2 * 15 + 4)); // (2,4)
+        assert!(placed.get_bit(3 * 15 + 3)); // (3,3)
+        assert!(!placed.get_bit(3 * 15 + 4)); // (3,4) empty
         assert_eq!(placed.count_ones(), 3);
     }
 

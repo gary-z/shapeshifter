@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use shapeshifter::generate;
-use shapeshifter::puzzle::{generate_html_guide, PuzzleJson};
+use shapeshifter::puzzle::{PuzzleJson, generate_html_guide};
 use shapeshifter::solver;
 
 fn solve_one(
@@ -35,13 +35,21 @@ fn solve_one(
 
     if worker {
         let solved = result.solution.is_some();
-        println!("{} {} {}", result.nodes_visited, elapsed.as_millis(), solved);
+        println!(
+            "{} {} {}",
+            result.nodes_visited,
+            elapsed.as_millis(),
+            solved
+        );
         return solved;
     }
 
     println!(
         "Level {}: {}x{}, M={}, {} pieces",
-        puzzle.level, puzzle.rows, puzzle.columns, puzzle.m,
+        puzzle.level,
+        puzzle.rows,
+        puzzle.columns,
+        puzzle.m,
         puzzle.pieces.len()
     );
 
@@ -57,8 +65,7 @@ fn solve_one(
                         .join("solution.html")
                 })
                 .unwrap_or_else(|| Path::new("solution.html").to_path_buf());
-            let output = output_path
-                .unwrap_or_else(|| default_output.to_str().unwrap());
+            let output = output_path.unwrap_or_else(|| default_output.to_str().unwrap());
 
             let html = generate_html_guide(puzzle, &solution, assets_dir);
             std::fs::write(output, &html).expect("failed to write solution HTML");
@@ -171,7 +178,9 @@ fn main() {
                     continue;
                 }
             };
-            if !solve_one(&puzzle, parallel, exhaustive, worker, assets_dir, None, None) {
+            if !solve_one(
+                &puzzle, parallel, exhaustive, worker, assets_dir, None, None,
+            ) {
                 all_ok = false;
             }
         }
