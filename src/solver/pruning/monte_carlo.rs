@@ -50,8 +50,8 @@ impl HitCounter {
         // early depths when all counts are small.
         let most_significant_bit = 7 - threshold.leading_zeros() as usize;
         let mut high_bits = Bitboard::ZERO;
-        for bit in most_significant_bit..NUM_PLANES {
-            high_bits = high_bits | self.planes[bit];
+        for plane in self.planes.iter().skip(most_significant_bit) {
+            high_bits |= *plane;
         }
         if high_bits.is_zero() {
             return false;
@@ -60,8 +60,7 @@ impl HitCounter {
         // Full comparison via parallel subtraction: count - threshold.
         // borrow = 1 means count < threshold; borrow = 0 means count >= threshold.
         let mut borrow = Bitboard::ZERO;
-        for bit in 0..NUM_PLANES {
-            let count_plane = self.planes[bit];
+        for (bit, count_plane) in self.planes.iter().copied().enumerate() {
             if (threshold >> bit) & 1 == 1 {
                 borrow = !count_plane | borrow;
             } else {

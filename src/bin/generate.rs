@@ -105,7 +105,7 @@ fn print_puzzle(
         "rows": spec.rows,
         "columns": spec.columns,
         "board": (0..spec.rows).map(|r| {
-            (0..spec.columns).map(|c| game.board().get(r as usize, c as usize) as u8).collect::<Vec<_>>()
+            (0..spec.columns).map(|c| game.board().get(r as usize, c as usize)).collect::<Vec<_>>()
         }).collect::<Vec<_>>(),
         "pieces": game.pieces().iter().map(|p| {
             (0..p.height() as usize).map(|r| {

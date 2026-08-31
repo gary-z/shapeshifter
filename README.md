@@ -92,6 +92,7 @@ Run the CI checks locally:
 
 ```bash
 cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --release --all-targets
 ```
 

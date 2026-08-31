@@ -25,6 +25,8 @@ fn format_count(count: u64) -> String {
 
 /// A list of (row, column) placements in the puzzle's original piece order.
 pub type Solution = Vec<(usize, usize)>;
+type Placement = (usize, usize, Bitboard);
+type PiecePlacements = Vec<Placement>;
 
 pub struct SolveResult {
     pub solution: Option<Solution>,
@@ -35,7 +37,7 @@ pub struct SolveResult {
 }
 
 struct SolverData {
-    placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    placements: Vec<PiecePlacements>,
     total_deficit: pruning::TotalDeficitBound,
     jaggedness: pruning::JaggednessBound,
     partition_reachability: pruning::PartitionReachability,
@@ -113,7 +115,7 @@ fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
     let height = board.height();
     let width = board.width();
 
-    let mut ordered_placements: Vec<(usize, Vec<(usize, usize, Bitboard)>)> = pieces
+    let mut ordered_placements: Vec<(usize, PiecePlacements)> = pieces
         .iter()
         .enumerate()
         .map(|(index, piece)| (index, piece.placements(height, width)))
@@ -131,7 +133,7 @@ fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
         .iter()
         .map(|(original_index, _)| *original_index)
         .collect();
-    let placements: Vec<Vec<(usize, usize, Bitboard)>> = ordered_placements
+    let placements: Vec<PiecePlacements> = ordered_placements
         .into_iter()
         .map(|(_, placements)| placements)
         .collect();
@@ -149,17 +151,12 @@ fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
         placements,
         equivalent_pair_skips,
         single_cell_suffix_start,
-        height,
-        width,
-        board.m(),
     );
 
     (board, piece_order, data)
 }
 
-fn build_equivalent_pair_skips(
-    placements: &[Vec<(usize, usize, Bitboard)>],
-) -> Vec<Option<Vec<bool>>> {
+fn build_equivalent_pair_skips(placements: &[PiecePlacements]) -> Vec<Option<Vec<bool>>> {
     (0..placements.len())
         .map(|piece_index| {
             if piece_index == 0 {
@@ -198,11 +195,13 @@ fn backtrack_for_modulus(
     macro_rules! go {
         ($m:literal) => {
             backtrack::backtrack::<$m>(
-                board,
-                pruning::HitCounter::new(),
+                backtrack::SearchPosition {
+                    board: *board,
+                    hits: pruning::HitCounter::new(),
+                    piece_index: 0,
+                    previous_placement: usize::MAX,
+                },
                 data,
-                0,
-                usize::MAX,
                 solution,
                 nodes,
                 exhaustive,

@@ -1,5 +1,4 @@
-use super::SolverData;
-use crate::core::bitboard::Bitboard;
+use super::{PiecePlacements, SolverData};
 use crate::core::board::Board;
 use crate::core::piece::Piece;
 
@@ -7,13 +6,13 @@ pub(super) fn build_solver_data(
     board: &Board,
     pieces: &[Piece],
     piece_order: &[usize],
-    placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    placements: Vec<PiecePlacements>,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
     single_cell_suffix_start: usize,
-    height: u8,
-    width: u8,
-    modulus: u8,
 ) -> SolverData {
+    let height = board.height();
+    let width = board.width();
+    let modulus = board.m();
     let total_deficit = super::pruning::TotalDeficitBound::precompute(pieces, piece_order);
     let jaggedness =
         super::pruning::JaggednessBound::precompute(pieces, piece_order, height, width);

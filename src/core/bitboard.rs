@@ -160,11 +160,11 @@ impl Bitboard {
         let arr = self.v.to_array();
 
         let mut result = [0u64; 4];
-        for i in limb_shift..4 {
+        for (i, result_limb) in result.iter_mut().enumerate().skip(limb_shift) {
             let src = i - limb_shift;
-            result[i] = arr[src] << bit_shift;
+            *result_limb = arr[src] << bit_shift;
             if bit_shift > 0 && src > 0 {
-                result[i] |= arr[src - 1] >> (64 - bit_shift);
+                *result_limb |= arr[src - 1] >> (64 - bit_shift);
             }
         }
         Self {
@@ -182,12 +182,12 @@ impl Bitboard {
         let arr = self.v.to_array();
 
         let mut result = [0u64; 4];
-        for i in 0..4 {
+        for (i, result_limb) in result.iter_mut().enumerate() {
             let src = i + limb_shift;
             if src < 4 {
-                result[i] = arr[src] >> bit_shift;
+                *result_limb = arr[src] >> bit_shift;
                 if bit_shift > 0 && src + 1 < 4 {
-                    result[i] |= arr[src + 1] << (64 - bit_shift);
+                    *result_limb |= arr[src + 1] << (64 - bit_shift);
                 }
             }
         }

@@ -21,6 +21,17 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Clippy
+      run: rustup component add clippy
+    - name: Check compiler and Clippy warnings
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
   build:
     name: Build
     runs-on: ubuntu-latest

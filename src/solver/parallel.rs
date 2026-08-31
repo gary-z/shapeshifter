@@ -2,13 +2,14 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use crate::core::board::Board;
 
 use super::backtrack::{
-    MAX_PLACEMENTS, next_previous_placement, rank_placements, solve_single_cell_suffix,
+    MAX_PLACEMENTS, SearchPosition, next_previous_placement, rank_placements,
+    solve_single_cell_suffix,
 };
 use super::pruning::HitCounter;
 use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_is_feasible};
@@ -25,16 +26,22 @@ struct SearchFrame {
 }
 
 struct SearchTask {
-    board: Board,
-    hits: HitCounter,
+    position: SearchPosition,
     solution_prefix: Vec<(usize, usize)>,
-    piece_index: usize,
-    previous_placement: usize,
 }
 
 struct WorkQueue {
     queue: Mutex<VecDeque<SearchTask>>,
     condvar: Condvar,
+}
+
+struct WorkerContext<'a> {
+    data: &'a SolverData,
+    abort: &'a AtomicBool,
+    work_queue: &'a WorkQueue,
+    idle_count: &'a AtomicUsize,
+    progress: &'a AtomicU64,
+    exhaustive: bool,
 }
 
 impl WorkQueue {
@@ -153,11 +160,13 @@ fn split_work(
             let previous_placement =
                 next_previous_placement(data, frame.piece_index, placement_index);
             tasks.push(SearchTask {
-                board,
-                hits,
+                position: SearchPosition {
+                    board,
+                    hits,
+                    piece_index: next_piece_index,
+                    previous_placement,
+                },
                 solution_prefix: task_solution,
-                piece_index: next_piece_index,
-                previous_placement,
             });
         }
         frame.cursor = frame.candidate_count;
@@ -168,7 +177,7 @@ fn split_work(
 
 const NODES_BETWEEN_SPLITS: u64 = 4096;
 
-fn add_progress(progress: &std::sync::atomic::AtomicU64, value: f64) {
+fn add_progress(progress: &AtomicU64, value: f64) {
     let mut old = progress.load(Ordering::Relaxed);
     loop {
         let new_value = f64::from_bits(old) + value;
@@ -185,19 +194,24 @@ fn add_progress(progress: &std::sync::atomic::AtomicU64, value: f64) {
 }
 
 fn backtrack_with_stealing<const MODULUS: usize>(
-    initial_board: &Board,
-    initial_hits: HitCounter,
-    data: &SolverData,
-    start_piece_index: usize,
-    initial_previous_placement: usize,
+    initial_position: SearchPosition,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
-    abort: &AtomicBool,
-    work_queue: &WorkQueue,
-    idle_count: &AtomicUsize,
-    exhaustive: bool,
-    progress: &std::sync::atomic::AtomicU64,
+    context: &WorkerContext<'_>,
 ) -> bool {
+    let SearchPosition {
+        board: initial_board,
+        hits: initial_hits,
+        piece_index: start_piece_index,
+        previous_placement: initial_previous_placement,
+    } = initial_position;
+    let data = context.data;
+    let abort = context.abort;
+    let work_queue = context.work_queue;
+    let idle_count = context.idle_count;
+    let progress = context.progress;
+    let exhaustive = context.exhaustive;
+
     let piece_count = data.placements.len();
     let base_solution_length = solution.len();
 
@@ -213,7 +227,7 @@ fn backtrack_with_stealing<const MODULUS: usize>(
     if start_piece_index >= data.single_cell_suffix_start {
         let remaining_pieces = piece_count - start_piece_index;
         let result = solve_single_cell_suffix(
-            initial_board,
+            &initial_board,
             data.modulus,
             data.height,
             data.width,
@@ -224,14 +238,14 @@ fn backtrack_with_stealing<const MODULUS: usize>(
         return result;
     }
 
-    if !state_is_feasible::<MODULUS>(initial_board, data, start_piece_index) {
+    if !state_is_feasible::<MODULUS>(&initial_board, data, start_piece_index) {
         add_progress(progress, task_weight);
         return false;
     }
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(piece_count - start_piece_index);
     let first_frame = build_search_frame::<MODULUS>(
-        initial_board,
+        &initial_board,
         initial_hits,
         data,
         start_piece_index,
@@ -382,11 +396,13 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
 
     let work_queue = WorkQueue::new();
     work_queue.push(SearchTask {
-        board: *board,
-        hits: HitCounter::new(),
+        position: SearchPosition {
+            board: *board,
+            hits: HitCounter::new(),
+            piece_index: 0,
+            previous_placement: usize::MAX,
+        },
         solution_prefix: Vec::new(),
-        piece_index: 0,
-        previous_placement: usize::MAX,
     });
 
     let thread_count = std::thread::available_parallelism()
@@ -395,10 +411,10 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
 
     let abort = AtomicBool::new(false);
     let first_solution: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
-    let total_nodes = std::sync::atomic::AtomicU64::new(0);
+    let total_nodes = AtomicU64::new(0);
     let active_count = AtomicUsize::new(0);
     let idle_count = AtomicUsize::new(0);
-    let progress = std::sync::atomic::AtomicU64::new(0f64.to_bits());
+    let progress = AtomicU64::new(0f64.to_bits());
     let workers_alive = AtomicUsize::new(thread_count);
 
     let total_space: f64 = data
@@ -409,6 +425,14 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
     eprintln!("search space: {:.3e}", total_space);
 
     let solve_start = std::time::Instant::now();
+    let worker_context = WorkerContext {
+        data,
+        abort: &abort,
+        work_queue: &work_queue,
+        idle_count: &idle_count,
+        progress: &progress,
+        exhaustive,
+    };
 
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -465,18 +489,10 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
                     nodes.set(0);
 
                     let found = backtrack_with_stealing::<MODULUS>(
-                        &task.board,
-                        task.hits,
-                        data,
-                        task.piece_index,
-                        task.previous_placement,
+                        task.position,
                         &mut solution,
                         &nodes,
-                        &abort,
-                        &work_queue,
-                        &idle_count,
-                        exhaustive,
-                        &progress,
+                        &worker_context,
                     );
 
                     active_count.fetch_sub(1, Ordering::SeqCst);

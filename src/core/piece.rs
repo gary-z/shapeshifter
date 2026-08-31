@@ -15,9 +15,9 @@ impl Piece {
     /// At least one cell must be `true`.
     pub fn from_grid(grid: &[&[bool]]) -> Self {
         let height = grid.len();
-        assert!(height >= 1 && height <= 5, "piece height must be in [1, 5]");
+        assert!((1..=5).contains(&height), "piece height must be in [1, 5]");
         let width = grid[0].len();
-        assert!(width >= 1 && width <= 5, "piece width must be in [1, 5]");
+        assert!((1..=5).contains(&width), "piece width must be in [1, 5]");
 
         let mut shape = Bitboard::ZERO;
         for (r, row) in grid.iter().enumerate() {
