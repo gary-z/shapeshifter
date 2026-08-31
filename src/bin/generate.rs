@@ -59,7 +59,6 @@ fn main() {
     }
 
     if let (Some(start), Some(end)) = (start_level, end_level) {
-        // Range mode: one puzzle per level.
         let base_seed = seed.unwrap_or(42);
         for lvl in start..=end {
             let spec = match get_level(lvl) {

@@ -19,18 +19,12 @@ impl Default for Bitboard {
 impl Bitboard {
     pub const ZERO: Bitboard = Bitboard { v: u64x4::from_array([0; 4]) };
 
-    #[inline(always)]
-    pub const fn new(limbs: [u64; 4]) -> Self {
-        Self { v: u64x4::from_array(limbs) }
-    }
-
-    /// Access the underlying limbs (for backwards compat).
+    /// Access the underlying SIMD lanes as scalar limbs.
     #[inline(always)]
     pub fn limbs(&self) -> [u64; 4] {
         self.v.to_array()
     }
 
-    /// Create a bitboard with a single bit set.
     #[inline(always)]
     pub fn from_bit(index: u32) -> Self {
         let mut arr = [0u64; 4];
@@ -38,14 +32,12 @@ impl Bitboard {
         Self { v: u64x4::from_array(arr) }
     }
 
-    /// Check if a specific bit is set.
     #[inline(always)]
     pub fn get_bit(&self, index: u32) -> bool {
         let arr = self.v.to_array();
         (arr[index as usize / 64] >> (index % 64)) & 1 != 0
     }
 
-    /// Set a specific bit.
     #[inline(always)]
     pub fn set_bit(&mut self, index: u32) {
         let mut arr = self.v.to_array();
@@ -53,7 +45,6 @@ impl Bitboard {
         self.v = u64x4::from_array(arr);
     }
 
-    /// Clear a specific bit.
     #[inline(always)]
     pub fn clear_bit(&mut self, index: u32) {
         let mut arr = self.v.to_array();
@@ -61,7 +52,6 @@ impl Bitboard {
         self.v = u64x4::from_array(arr);
     }
 
-    /// Returns true if all bits are zero.
     #[inline(always)]
     pub fn is_zero(&self) -> bool {
         self.v.simd_eq(u64x4::splat(0)).all()
@@ -185,34 +175,7 @@ impl Bitboard {
         Self { v: u64x4::from_array(result) }
     }
 
-    /// Bitwise AND.
-    #[inline(always)]
-    pub fn and(&self, other: &Bitboard) -> Self {
-        Self { v: self.v & other.v }
-    }
-
-    /// Bitwise OR.
-    #[inline(always)]
-    pub fn or(&self, other: &Bitboard) -> Self {
-        Self { v: self.v | other.v }
-    }
-
-    /// Bitwise XOR.
-    #[inline(always)]
-    pub fn xor(&self, other: &Bitboard) -> Self {
-        Self { v: self.v ^ other.v }
-    }
-
-    /// Bitwise NOT (inverts all 256 bits).
-    #[inline(always)]
-    pub fn not(&self) -> Self {
-        Self { v: !self.v }
-    }
 }
-
-// ---------------------------------------------------------------------------
-// Operator trait impls — all delegate to SIMD vector ops
-// ---------------------------------------------------------------------------
 
 impl std::ops::BitAnd for Bitboard {
     type Output = Self;

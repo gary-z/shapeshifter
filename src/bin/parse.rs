@@ -1,13 +1,11 @@
 //! Parse a Neopets Shapeshifter HTML page into puzzle JSON.
 //!
-//! Replaces the Python parse_html.py script with a native Rust implementation.
 //! Reads HTML from a file argument or stdin, writes JSON to stdout or a file.
 
 use regex::Regex;
 use shapeshifter::puzzle::PuzzleJson;
 
 fn parse_shapeshifter_html(html: &str) -> PuzzleJson {
-    // Extract level number.
     let level = Regex::new(r"LEVEL\s+(\d+)")
         .unwrap()
         .captures(html)
@@ -20,7 +18,6 @@ fn parse_shapeshifter_html(html: &str) -> PuzzleJson {
         std::process::exit(1);
     }
 
-    // Extract board dimensions.
     let gx: usize = Regex::new(r"gX\s*=\s*(\d+)")
         .unwrap()
         .captures(html)
@@ -44,10 +41,8 @@ fn parse_shapeshifter_html(html: &str) -> PuzzleJson {
         cell_map.insert((col, row), icon);
     }
 
-    // Parse icon cycle from the GOAL section.
     let (m, icon_to_val, icon_list) = parse_icon_cycle(html);
 
-    // Build board grid.
     let mut board = Vec::with_capacity(gy);
     for row in 0..gy {
         let mut board_row = Vec::with_capacity(gx);
@@ -62,7 +57,6 @@ fn parse_shapeshifter_html(html: &str) -> PuzzleJson {
         board.push(board_row);
     }
 
-    // Parse piece shapes.
     let pieces = parse_pieces(html);
 
     PuzzleJson {
@@ -80,7 +74,6 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
     let goal_pos = html.find("GOAL");
 
     if let Some(gp) = goal_pos {
-        // Find the table containing the GOAL marker.
         let search_start = gp.saturating_sub(2000);
         let table_start = html[search_start..gp].rfind("<table").map(|p| p + search_start);
         let table_end = html[gp..].find("</table>").map(|p| p + gp + 8);
@@ -96,7 +89,6 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
                 }
             }
 
-            // Find the GOAL icon.
             let goal_icon_re =
                 Regex::new(r"/(\w+)_0\.gif[^>]*>[^<]*<br><b><small>GOAL").unwrap();
             let goal_icon = goal_icon_re
@@ -144,7 +136,6 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
 fn parse_pieces(html: &str) -> Vec<Vec<Vec<bool>>> {
     let mut pieces = Vec::new();
 
-    // Parse shapes from ACTIVE SHAPE and NEXT SHAPES sections.
     let active_pos = html.find("ACTIVE SHAPE");
     let next_pos = html.find("NEXT SHAPES");
 
@@ -171,7 +162,6 @@ fn parse_pieces(html: &str) -> Vec<Vec<Vec<bool>>> {
 fn parse_shape_tables(section: &str) -> Vec<Vec<Vec<bool>>> {
     let mut shapes = Vec::new();
 
-    // Find inner shape tables (cellpadding=0 cellspacing=0).
     let table_re = Regex::new(
         r"(?si)<table\s+border=.?0.?\s+cellpadding=.?0.?\s+cellspacing=.?0.?>(.*?)</table>",
     )
@@ -260,7 +250,6 @@ fn main() {
         println!("{}", json);
     }
 
-    // Append to history file if this is a new, complete game.
     if let Some(ref path) = history_path {
         use shapeshifter::level::get_level;
 
@@ -270,7 +259,6 @@ fn main() {
         if in_progress {
             eprintln!("Game already in progress (fewer pieces than expected). Skipping history.");
         } else {
-            // Read existing history, append if not duplicate.
             let existing = std::fs::read_to_string(path).unwrap_or_default();
             if !existing.lines().any(|line| line == json) {
                 use std::io::Write;

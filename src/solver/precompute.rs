@@ -1,64 +1,58 @@
+use super::SolverData;
 use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 use crate::core::piece::Piece;
-use super::SolverData;
 
-/// Build all precomputed data needed by the backtracking solver.
-///
-/// This includes: suffix sums, jaggedness masks, parity partitions,
-/// and hit-count MC levels.
-pub(crate) fn build_solver_data(
+pub(super) fn build_solver_data(
     board: &Board,
     pieces: &[Piece],
-    order: &[usize],
-    all_placements: Vec<Vec<(usize, usize, Bitboard)>>,
-    skip_tables: Vec<Option<Vec<bool>>>,
-    single_cell_start: usize,
-    h: u8,
-    w: u8,
-    m: u8,
+    piece_order: &[usize],
+    placements: Vec<Vec<(usize, usize, Bitboard)>>,
+    equivalent_pair_skips: Vec<Option<Vec<bool>>>,
+    single_cell_suffix_start: usize,
+    height: u8,
+    width: u8,
+    modulus: u8,
 ) -> SolverData {
-    let n = pieces.len();
+    let total_deficit = super::pruning::TotalDeficitBound::precompute(pieces, piece_order);
+    let jaggedness =
+        super::pruning::JaggednessBound::precompute(pieces, piece_order, height, width);
+    let partition_reachability =
+        super::pruning::PartitionReachability::precompute(pieces, piece_order, height, width);
 
-    // Precompute suffix sums/maxes of piece properties.
-    let total_deficit_prune = super::prune::total_deficit::TotalDeficitPrune::precompute(pieces, order);
-    let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
-
-    let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
-
-    // Compute progress weights: fraction of naive search space per placement at each depth.
-    // Only the parallel solver reports progress, and it is not built for wasm.
     #[cfg(not(target_arch = "wasm32"))]
     let progress_weights: Vec<f64> = {
-        let mut suffix_products = vec![1.0f64; n + 1];
-        for d in (0..n).rev() {
-            suffix_products[d] = suffix_products[d + 1] * all_placements[d].len() as f64;
+        let piece_count = pieces.len();
+        let mut suffix_products = vec![1.0f64; piece_count + 1];
+        for piece_index in (0..piece_count).rev() {
+            suffix_products[piece_index] =
+                suffix_products[piece_index + 1] * placements[piece_index].len() as f64;
         }
         let total_space = suffix_products[0];
-        (0..n)
-            .map(|d| if total_space > 0.0 { suffix_products[d + 1] / total_space } else { 0.0 })
+        (0..piece_count)
+            .map(|piece_index| {
+                if total_space > 0.0 {
+                    suffix_products[piece_index + 1] / total_space
+                } else {
+                    0.0
+                }
+            })
             .collect()
     };
 
-    let mc_levels = super::prune::mc::precompute_mc(board, &all_placements, m);
-    let num_levels = mc_levels.len();
-    let mc_prune = super::prune::mc::McPrune {
-        levels: mc_levels,
-        level_idx: std::sync::atomic::AtomicUsize::new(num_levels.saturating_sub(1)),
-        n_pieces: n,
-    };
+    let monte_carlo = super::pruning::MonteCarloBounds::precompute(board, &placements, modulus);
 
     SolverData {
-        all_placements,
-        total_deficit_prune,
-        jaggedness_prune,
-        parity_prune,
-        mc_prune,
-        skip_tables,
-        single_cell_start,
-        m,
-        h,
-        w,
+        placements,
+        total_deficit,
+        jaggedness,
+        partition_reachability,
+        monte_carlo,
+        equivalent_pair_skips,
+        single_cell_suffix_start,
+        modulus,
+        height,
+        width,
         #[cfg(not(target_arch = "wasm32"))]
         progress_weights,
     }

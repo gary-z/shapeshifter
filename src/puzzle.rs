@@ -33,29 +33,10 @@ impl PuzzleJson {
         Game::new(board, pieces)
     }
 
-    /// Get the image path for a cell value, relative to the data directory.
-    pub fn icon_src(&self, val: u8, assets_dir: &str) -> String {
-        if !self.icons.is_empty() && (val as usize) < self.icons.len() {
-            format!("{}/{}_0.gif", assets_dir, self.icons[val as usize])
-        } else {
-            format!("{}/val_{}.png", assets_dir, val)
-        }
-    }
-
-    /// Get the highlighted image path (the _1 variant used by the game on hover).
-    pub fn icon_src_highlight(&self, val: u8, assets_dir: &str) -> String {
-        if !self.icons.is_empty() && (val as usize) < self.icons.len() {
-            format!("{}/{}_1.gif", assets_dir, self.icons[val as usize])
-        } else {
-            format!("{}/val_{}.png", assets_dir, val)
-        }
-    }
 }
 
-/// The shared board.js component, embedded at compile time.
 const BOARD_JS: &str = include_str!("../web/board.js");
 
-/// CSS shared between the web app and standalone solution files.
 const SOLUTION_CSS: &str = r#"
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; max-width: 800px; margin: 0 auto; padding: 20px; }
 .step-nav { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 15px; }
@@ -70,13 +51,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #
 .solved { color: #2ecc71; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }
 "#;
 
-/// Generate a self-contained HTML solution guide.
-///
-/// The output file embeds the puzzle data, solution placements, and the shared
-/// board.js component so it works as a standalone file with no external JS.
+/// Generate an HTML guide with all puzzle data and JavaScript embedded.
 pub fn generate_html_guide(
     puzzle: &PuzzleJson,
-    _game: &Game,
     solution: &[(usize, usize)],
     assets_dir: &str,
 ) -> String {

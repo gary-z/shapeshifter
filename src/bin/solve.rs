@@ -3,11 +3,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use shapeshifter::generate;
-use shapeshifter::puzzle::{self, PuzzleJson};
+use shapeshifter::puzzle::{generate_html_guide, PuzzleJson};
 use shapeshifter::solver;
 
 fn solve_one(
-    puz: &PuzzleJson,
+    puzzle: &PuzzleJson,
     parallel: bool,
     exhaustive: bool,
     worker: bool,
@@ -15,13 +15,13 @@ fn solve_one(
     output_path: Option<&str>,
     json_path: Option<&str>,
 ) -> bool {
-    let game = puz.to_game();
+    let game = puzzle.to_game();
 
-    for (i, piece) in game.pieces().iter().enumerate() {
+    for (piece_index, piece) in game.pieces().iter().enumerate() {
         if !generate::is_known_shape(piece) {
             eprintln!(
                 "Warning: piece {} is not a known Shapeshifter shape ({}x{}, {} cells)",
-                i,
+                piece_index,
                 piece.height(),
                 piece.width(),
                 piece.cell_count(),
@@ -41,8 +41,8 @@ fn solve_one(
 
     println!(
         "Level {}: {}x{}, M={}, {} pieces",
-        puz.level, puz.rows, puz.columns, puz.m,
-        puz.pieces.len()
+        puzzle.level, puzzle.rows, puzzle.columns, puzzle.m,
+        puzzle.pieces.len()
     );
 
     match result.solution {
@@ -57,12 +57,12 @@ fn solve_one(
                         .join("solution.html")
                 })
                 .unwrap_or_else(|| Path::new("solution.html").to_path_buf());
-            let out = output_path
+            let output = output_path
                 .unwrap_or_else(|| default_output.to_str().unwrap());
 
-            let html = puzzle::generate_html_guide(puz, &game, &solution, assets_dir);
-            std::fs::write(out, &html).expect("failed to write solution HTML");
-            println!("Written to {}", out);
+            let html = generate_html_guide(puzzle, &solution, assets_dir);
+            std::fs::write(output, &html).expect("failed to write solution HTML");
+            println!("Written to {}", output);
             true
         }
         None => {
@@ -106,7 +106,7 @@ fn main() {
                      Stdin accepts single JSON or JSONL (one puzzle per line).\n\n\
                      Options:\n  \
                        --parallel        Use parallel solver (all cores)\n  \
-                       --exhaustive      Explore full search tree\n  \
+                       --exhaustive      Continue through the bounded search tree\n  \
                        --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
@@ -121,17 +121,23 @@ fn main() {
         i += 1;
     }
 
-    // File argument: single puzzle.
     if let Some(path) = json_path {
-        let puz = PuzzleJson::load(path);
-        let ok = solve_one(&puz, parallel, exhaustive, worker, assets_dir, output_path.map(|s| s.as_str()), json_path.map(|s| s.as_str()));
-        if !ok && !worker {
+        let puzzle = PuzzleJson::load(path);
+        let solved = solve_one(
+            &puzzle,
+            parallel,
+            exhaustive,
+            worker,
+            assets_dir,
+            output_path.map(String::as_str),
+            json_path.map(String::as_str),
+        );
+        if !solved && !worker {
             std::process::exit(1);
         }
         return;
     }
 
-    // Stdin: read all input, then try JSONL (line-by-line) or single JSON.
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
@@ -140,26 +146,32 @@ fn main() {
     let lines: Vec<&str> = input.lines().filter(|l| !l.trim().is_empty()).collect();
 
     if lines.len() <= 1 {
-        // Single JSON object (may or may not have a trailing newline).
-        let puz: PuzzleJson =
+        let puzzle: PuzzleJson =
             serde_json::from_str(&input).expect("failed to parse puzzle JSON from stdin");
-        let ok = solve_one(&puz, parallel, exhaustive, worker, assets_dir, output_path.map(|s| s.as_str()), None);
-        if !ok && !worker {
+        let solved = solve_one(
+            &puzzle,
+            parallel,
+            exhaustive,
+            worker,
+            assets_dir,
+            output_path.map(String::as_str),
+            None,
+        );
+        if !solved && !worker {
             std::process::exit(1);
         }
     } else {
-        // JSONL: one puzzle per line.
         let mut all_ok = true;
-        for (idx, line) in lines.iter().enumerate() {
-            let puz: PuzzleJson = match serde_json::from_str(line) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error parsing line {}: {}", idx + 1, e);
+        for (line_index, line) in lines.iter().enumerate() {
+            let puzzle: PuzzleJson = match serde_json::from_str(line) {
+                Ok(puzzle) => puzzle,
+                Err(error) => {
+                    eprintln!("Error parsing line {}: {}", line_index + 1, error);
                     all_ok = false;
                     continue;
                 }
             };
-            if !solve_one(&puz, parallel, exhaustive, worker, assets_dir, None, None) {
+            if !solve_one(&puzzle, parallel, exhaustive, worker, assets_dir, None, None) {
                 all_ok = false;
             }
         }
