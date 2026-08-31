@@ -1,4 +1,4 @@
-use std::simd::{u64x4, num::SimdUint, cmp::SimdPartialEq};
+use std::simd::{cmp::SimdPartialEq, num::SimdUint, u64x4};
 
 /// A 256-bit bitboard stored as a SIMD u64x4 vector.
 /// Bit index `i` lives in lane `i / 64`, bit position `i % 64`.
@@ -17,7 +17,9 @@ impl Default for Bitboard {
 }
 
 impl Bitboard {
-    pub const ZERO: Bitboard = Bitboard { v: u64x4::from_array([0; 4]) };
+    pub const ZERO: Bitboard = Bitboard {
+        v: u64x4::from_array([0; 4]),
+    };
 
     /// Access the underlying SIMD lanes as scalar limbs.
     #[inline(always)]
@@ -29,7 +31,9 @@ impl Bitboard {
     pub fn from_bit(index: u32) -> Self {
         let mut arr = [0u64; 4];
         arr[index as usize / 64] = 1u64 << (index % 64);
-        Self { v: u64x4::from_array(arr) }
+        Self {
+            v: u64x4::from_array(arr),
+        }
     }
 
     #[inline(always)]
@@ -61,10 +65,18 @@ impl Bitboard {
     #[inline(always)]
     pub fn lowest_set_bit(&self) -> u32 {
         let arr = self.v.to_array();
-        if arr[0] != 0 { return arr[0].trailing_zeros(); }
-        if arr[1] != 0 { return 64 + arr[1].trailing_zeros(); }
-        if arr[2] != 0 { return 128 + arr[2].trailing_zeros(); }
-        if arr[3] != 0 { return 192 + arr[3].trailing_zeros(); }
+        if arr[0] != 0 {
+            return arr[0].trailing_zeros();
+        }
+        if arr[1] != 0 {
+            return 64 + arr[1].trailing_zeros();
+        }
+        if arr[2] != 0 {
+            return 128 + arr[2].trailing_zeros();
+        }
+        if arr[3] != 0 {
+            return 192 + arr[3].trailing_zeros();
+        }
         256
     }
 
@@ -79,58 +91,63 @@ impl Bitboard {
     #[inline(always)]
     pub const fn count_ones_const(&self) -> u32 {
         let arr = self.v.to_array();
-        arr[0].count_ones()
-            + arr[1].count_ones()
-            + arr[2].count_ones()
-            + arr[3].count_ones()
+        arr[0].count_ones() + arr[1].count_ones() + arr[2].count_ones() + arr[3].count_ones()
     }
 
     /// Shift right by 1 bit (one cell horizontally). Specialized for performance.
     #[inline(always)]
     pub fn shr_1(&self) -> Self {
         let arr = self.v.to_array();
-        Self { v: u64x4::from_array([
-            (arr[0] >> 1) | (arr[1] << 63),
-            (arr[1] >> 1) | (arr[2] << 63),
-            (arr[2] >> 1) | (arr[3] << 63),
-            arr[3] >> 1,
-        ])}
+        Self {
+            v: u64x4::from_array([
+                (arr[0] >> 1) | (arr[1] << 63),
+                (arr[1] >> 1) | (arr[2] << 63),
+                (arr[2] >> 1) | (arr[3] << 63),
+                arr[3] >> 1,
+            ]),
+        }
     }
 
     /// Shift left by 1 bit (one cell horizontally). Specialized for performance.
     #[inline(always)]
     pub fn shl_1(&self) -> Self {
         let arr = self.v.to_array();
-        Self { v: u64x4::from_array([
-            arr[0] << 1,
-            (arr[1] << 1) | (arr[0] >> 63),
-            (arr[2] << 1) | (arr[1] >> 63),
-            (arr[3] << 1) | (arr[2] >> 63),
-        ])}
+        Self {
+            v: u64x4::from_array([
+                arr[0] << 1,
+                (arr[1] << 1) | (arr[0] >> 63),
+                (arr[2] << 1) | (arr[1] >> 63),
+                (arr[3] << 1) | (arr[2] >> 63),
+            ]),
+        }
     }
 
     /// Shift right by STRIDE bits (one cell vertically). Specialized for performance.
     #[inline(always)]
     pub fn shr_stride(&self) -> Self {
         let arr = self.v.to_array();
-        Self { v: u64x4::from_array([
-            (arr[0] >> crate::core::STRIDE) | (arr[1] << (64 - crate::core::STRIDE)),
-            (arr[1] >> crate::core::STRIDE) | (arr[2] << (64 - crate::core::STRIDE)),
-            (arr[2] >> crate::core::STRIDE) | (arr[3] << (64 - crate::core::STRIDE)),
-            arr[3] >> crate::core::STRIDE,
-        ])}
+        Self {
+            v: u64x4::from_array([
+                (arr[0] >> crate::core::STRIDE) | (arr[1] << (64 - crate::core::STRIDE)),
+                (arr[1] >> crate::core::STRIDE) | (arr[2] << (64 - crate::core::STRIDE)),
+                (arr[2] >> crate::core::STRIDE) | (arr[3] << (64 - crate::core::STRIDE)),
+                arr[3] >> crate::core::STRIDE,
+            ]),
+        }
     }
 
     /// Shift left by STRIDE bits (one cell vertically). Specialized for performance.
     #[inline(always)]
     pub fn shl_stride(&self) -> Self {
         let arr = self.v.to_array();
-        Self { v: u64x4::from_array([
-            arr[0] << crate::core::STRIDE,
-            (arr[1] << crate::core::STRIDE) | (arr[0] >> (64 - crate::core::STRIDE)),
-            (arr[2] << crate::core::STRIDE) | (arr[1] >> (64 - crate::core::STRIDE)),
-            (arr[3] << crate::core::STRIDE) | (arr[2] >> (64 - crate::core::STRIDE)),
-        ])}
+        Self {
+            v: u64x4::from_array([
+                arr[0] << crate::core::STRIDE,
+                (arr[1] << crate::core::STRIDE) | (arr[0] >> (64 - crate::core::STRIDE)),
+                (arr[2] << crate::core::STRIDE) | (arr[1] >> (64 - crate::core::STRIDE)),
+                (arr[3] << crate::core::STRIDE) | (arr[2] >> (64 - crate::core::STRIDE)),
+            ]),
+        }
     }
 
     /// Shift left by `n` bits. Bits shifted beyond 256 are lost.
@@ -150,7 +167,9 @@ impl Bitboard {
                 result[i] |= arr[src - 1] >> (64 - bit_shift);
             }
         }
-        Self { v: u64x4::from_array(result) }
+        Self {
+            v: u64x4::from_array(result),
+        }
     }
 
     /// Shift right by `n` bits. Bits shifted below 0 are lost.
@@ -172,9 +191,10 @@ impl Bitboard {
                 }
             }
         }
-        Self { v: u64x4::from_array(result) }
+        Self {
+            v: u64x4::from_array(result),
+        }
     }
-
 }
 
 impl std::ops::BitAnd for Bitboard {

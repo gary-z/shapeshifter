@@ -1,7 +1,7 @@
-use serde::Deserialize;
 use crate::core::board::Board;
-use crate::game::Game;
 use crate::core::piece::Piece;
+use crate::game::Game;
+use serde::Deserialize;
 
 #[derive(Deserialize, serde::Serialize)]
 pub struct PuzzleJson {
@@ -25,14 +25,17 @@ impl PuzzleJson {
         let grid: Vec<&[u8]> = self.board.iter().map(|r| r.as_slice()).collect();
         let board = Board::from_grid(&grid, self.m);
 
-        let pieces: Vec<Piece> = self.pieces.iter().map(|shape| {
-            let rows: Vec<&[bool]> = shape.iter().map(|r| r.as_slice()).collect();
-            Piece::from_grid(&rows)
-        }).collect();
+        let pieces: Vec<Piece> = self
+            .pieces
+            .iter()
+            .map(|shape| {
+                let rows: Vec<&[bool]> = shape.iter().map(|r| r.as_slice()).collect();
+                Piece::from_grid(&rows)
+            })
+            .collect();
 
         Game::new(board, pieces)
     }
-
 }
 
 const BOARD_JS: &str = include_str!("../web/board.js");
@@ -57,9 +60,8 @@ pub fn generate_html_guide(
     solution: &[(usize, usize)],
     assets_dir: &str,
 ) -> String {
-    let placements_json = serde_json::to_string(
-        &solution.iter().map(|&(r, c)| [r, c]).collect::<Vec<_>>()
-    ).unwrap();
+    let placements_json =
+        serde_json::to_string(&solution.iter().map(|&(r, c)| [r, c]).collect::<Vec<_>>()).unwrap();
     let puzzle_json = serde_json::to_string(puzzle).unwrap();
 
     format!(

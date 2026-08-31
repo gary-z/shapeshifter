@@ -259,8 +259,8 @@ mod tests {
     fn test_apply_piece_multi_cell() {
         let mut board = Board::new_solved(3, 3, 2);
         let mut piece = Bitboard::ZERO;
-        piece.set_bit(0);  // (0,0)
-        piece.set_bit(1);  // (0,1)
+        piece.set_bit(0); // (0,0)
+        piece.set_bit(1); // (0,1)
 
         board.apply_piece(piece);
         assert_eq!(board.get(0, 0), 1);
@@ -318,7 +318,7 @@ mod tests {
                 assert!(mask.get_bit((r * 15 + c) as u32));
             }
         }
-        assert!(!mask.get_bit(4));  // col 4 in row 0
+        assert!(!mask.get_bit(4)); // col 4 in row 0
         assert!(!mask.get_bit(14)); // col 14 in row 0
     }
 
@@ -364,5 +364,4 @@ mod tests {
         let grid: &[&[u8]] = &[&[0, 0, 0], &[0, 0, 0]]; // height 2
         Board::from_grid(grid, 2);
     }
-
 }

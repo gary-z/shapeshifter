@@ -94,7 +94,11 @@ fn main() {
     }
 }
 
-fn print_puzzle(game: &shapeshifter::game::Game, level: u32, spec: &shapeshifter::level::LevelSpec) {
+fn print_puzzle(
+    game: &shapeshifter::game::Game,
+    level: u32,
+    spec: &shapeshifter::level::LevelSpec,
+) {
     let puz = serde_json::json!({
         "level": level,
         "m": spec.shifts,

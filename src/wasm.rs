@@ -28,10 +28,7 @@ pub fn solve_puzzle(json: &str) -> String {
             )
         }
         None => {
-            format!(
-                r#"{{"solved": false, "nodes": {}}}"#,
-                result.nodes_visited
-            )
+            format!(r#"{{"solved": false, "nodes": {}}}"#, result.nodes_visited)
         }
     }
 }

@@ -146,7 +146,11 @@ fn run_task(
     }
 }
 
-fn game_to_json(game: &shapeshifter::game::Game, level: u32, spec: &shapeshifter::level::LevelSpec) -> String {
+fn game_to_json(
+    game: &shapeshifter::game::Game,
+    level: u32,
+    spec: &shapeshifter::level::LevelSpec,
+) -> String {
     let puz_json = serde_json::json!({
         "level": level,
         "m": spec.shifts,
@@ -164,11 +168,7 @@ fn game_to_json(game: &shapeshifter::game::Game, level: u32, spec: &shapeshifter
     puz_json.to_string()
 }
 
-fn build_simulated_tasks(
-    start_level: u32,
-    end_level: u32,
-    games_per: u32,
-) -> Vec<Task> {
+fn build_simulated_tasks(start_level: u32, end_level: u32, games_per: u32) -> Vec<Task> {
     let mut tasks = Vec::new();
     for level in start_level..=end_level {
         let spec = match get_level(level) {
@@ -296,7 +296,13 @@ fn run_bench(
                 };
                 println!(
                     "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
-                    r.level, r.game_idx, r.n_pieces, r.board_desc, nodes_str, time_str, nps_str,
+                    r.level,
+                    r.game_idx,
+                    r.n_pieces,
+                    r.board_desc,
+                    nodes_str,
+                    time_str,
+                    nps_str,
                     r.status,
                 );
             } else {

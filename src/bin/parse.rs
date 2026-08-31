@@ -75,7 +75,9 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
 
     if let Some(gp) = goal_pos {
         let search_start = gp.saturating_sub(2000);
-        let table_start = html[search_start..gp].rfind("<table").map(|p| p + search_start);
+        let table_start = html[search_start..gp]
+            .rfind("<table")
+            .map(|p| p + search_start);
         let table_end = html[gp..].find("</table>").map(|p| p + gp + 8);
 
         if let (Some(start), Some(end)) = (table_start, table_end) {
@@ -89,8 +91,7 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
                 }
             }
 
-            let goal_icon_re =
-                Regex::new(r"/(\w+)_0\.gif[^>]*>[^<]*<br><b><small>GOAL").unwrap();
+            let goal_icon_re = Regex::new(r"/(\w+)_0\.gif[^>]*>[^<]*<br><b><small>GOAL").unwrap();
             let goal_icon = goal_icon_re
                 .captures(cycle_section)
                 .map(|c| c.get(1).unwrap().as_str())
@@ -102,7 +103,10 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
             }
 
             let m = cycle_icons.len() as u8;
-            let goal_idx = cycle_icons.iter().position(|&i| i == goal_icon).unwrap_or(0);
+            let goal_idx = cycle_icons
+                .iter()
+                .position(|&i| i == goal_icon)
+                .unwrap_or(0);
 
             let mut icon_to_val = std::collections::HashMap::new();
             let mut icon_list = vec![String::new(); m as usize];
@@ -127,8 +131,11 @@ fn parse_icon_cycle(html: &str) -> (u8, std::collections::HashMap<&str, u8>, Vec
     icons.sort();
     icons.dedup();
     let m = icons.len() as u8;
-    let icon_to_val: std::collections::HashMap<&str, u8> =
-        icons.iter().enumerate().map(|(i, &icon)| (icon, i as u8)).collect();
+    let icon_to_val: std::collections::HashMap<&str, u8> = icons
+        .iter()
+        .enumerate()
+        .map(|(i, &icon)| (icon, i as u8))
+        .collect();
     let icon_list: Vec<String> = icons.iter().map(|s| s.to_string()).collect();
     (m, icon_to_val, icon_list)
 }
@@ -233,7 +240,9 @@ fn main() {
     } else {
         use std::io::Read;
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).expect("failed to read stdin");
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .expect("failed to read stdin");
         buf
     };
 
@@ -244,7 +253,12 @@ fn main() {
         std::fs::write(path, &json).expect("failed to write output");
         eprintln!(
             "Level {}: {}x{}, M={}, {} pieces → {}",
-            puzzle.level, puzzle.rows, puzzle.columns, puzzle.m, puzzle.pieces.len(), path
+            puzzle.level,
+            puzzle.rows,
+            puzzle.columns,
+            puzzle.m,
+            puzzle.pieces.len(),
+            path
         );
     } else {
         println!("{}", json);
@@ -253,8 +267,8 @@ fn main() {
     if let Some(ref path) = history_path {
         use shapeshifter::level::get_level;
 
-        let in_progress = get_level(puzzle.level)
-            .is_some_and(|spec| puzzle.pieces.len() < spec.shapes as usize);
+        let in_progress =
+            get_level(puzzle.level).is_some_and(|spec| puzzle.pieces.len() < spec.shapes as usize);
 
         if in_progress {
             eprintln!("Game already in progress (fewer pieces than expected). Skipping history.");

@@ -1,9 +1,9 @@
 use rand::{Rng, RngExt};
 
 use crate::core::board::Board;
+use crate::core::piece::Piece;
 use crate::game::Game;
 use crate::level::LevelSpec;
-use crate::core::piece::Piece;
 
 /// The 75 piece shapes used by the real Shapeshifter game, extracted from
 /// puzzle_history.jsonl. Each entry is (height, width, flat grid of bools).
@@ -34,69 +34,361 @@ pub const SHAPE_CATALOG: [(u8, u8, &[bool]); 75] = [
     (2, 3, &[true, false, true, true, true, true]),
     (2, 3, &[true, true, true, true, false, true]),
     (3, 2, &[true, true, false, true, true, true]),
-    (3, 3, &[false, false, true, false, false, true, true, true, true]),
-    (3, 3, &[false, false, true, false, true, true, true, true, false]),
-    (3, 3, &[false, false, true, true, true, true, true, false, false]),
-    (3, 3, &[false, true, false, true, true, true, false, true, false]),
-    (3, 3, &[false, true, true, false, true, false, true, true, false]),
-    (3, 3, &[true, false, false, true, true, false, false, true, true]),
-    (3, 3, &[true, false, false, true, true, true, false, false, true]),
-    (3, 3, &[true, false, false, true, true, true, true, false, false]),
-    (3, 3, &[true, true, false, false, true, false, false, true, true]),
-    (3, 3, &[true, true, false, false, true, true, false, false, true]),
-    (3, 3, &[true, true, true, true, false, false, true, false, false]),
+    (
+        3,
+        3,
+        &[false, false, true, false, false, true, true, true, true],
+    ),
+    (
+        3,
+        3,
+        &[false, false, true, false, true, true, true, true, false],
+    ),
+    (
+        3,
+        3,
+        &[false, false, true, true, true, true, true, false, false],
+    ),
+    (
+        3,
+        3,
+        &[false, true, false, true, true, true, false, true, false],
+    ),
+    (
+        3,
+        3,
+        &[false, true, true, false, true, false, true, true, false],
+    ),
+    (
+        3,
+        3,
+        &[true, false, false, true, true, false, false, true, true],
+    ),
+    (
+        3,
+        3,
+        &[true, false, false, true, true, true, false, false, true],
+    ),
+    (
+        3,
+        3,
+        &[true, false, false, true, true, true, true, false, false],
+    ),
+    (
+        3,
+        3,
+        &[true, true, false, false, true, false, false, true, true],
+    ),
+    (
+        3,
+        3,
+        &[true, true, false, false, true, true, false, false, true],
+    ),
+    (
+        3,
+        3,
+        &[true, true, true, true, false, false, true, false, false],
+    ),
     // 6 cells
     (3, 2, &[true, true, true, true, true, true]),
-    (3, 3, &[false, false, true, false, true, true, true, true, true]),
-    (3, 3, &[false, true, false, true, true, true, true, false, true]),
-    (3, 3, &[false, true, true, false, true, false, true, true, true]),
-    (3, 3, &[false, true, true, false, true, true, true, true, false]),
-    (3, 3, &[true, false, true, true, true, true, false, true, false]),
-    (3, 3, &[true, true, false, false, true, true, true, true, false]),
-    (3, 3, &[true, true, false, true, true, false, false, true, true]),
-    (3, 4, &[true, true, true, true, true, false, false, false, true, false, false, false]),
-    (4, 3, &[false, true, false, true, true, false, false, true, true, false, true, false]),
+    (
+        3,
+        3,
+        &[false, false, true, false, true, true, true, true, true],
+    ),
+    (
+        3,
+        3,
+        &[false, true, false, true, true, true, true, false, true],
+    ),
+    (
+        3,
+        3,
+        &[false, true, true, false, true, false, true, true, true],
+    ),
+    (
+        3,
+        3,
+        &[false, true, true, false, true, true, true, true, false],
+    ),
+    (
+        3,
+        3,
+        &[true, false, true, true, true, true, false, true, false],
+    ),
+    (
+        3,
+        3,
+        &[true, true, false, false, true, true, true, true, false],
+    ),
+    (
+        3,
+        3,
+        &[true, true, false, true, true, false, false, true, true],
+    ),
+    (
+        3,
+        4,
+        &[
+            true, true, true, true, true, false, false, false, true, false, false, false,
+        ],
+    ),
+    (
+        4,
+        3,
+        &[
+            false, true, false, true, true, false, false, true, true, false, true, false,
+        ],
+    ),
     // 7 cells
-    (3, 3, &[true, false, true, true, false, true, true, true, true]),
-    (3, 3, &[true, false, true, true, true, true, true, false, true]),
-    (3, 3, &[true, true, true, false, true, false, true, true, true]),
-    (3, 4, &[false, true, false, false, true, true, false, true, false, true, true, true]),
-    (3, 4, &[false, true, true, false, true, true, false, false, false, true, true, true]),
-    (3, 4, &[false, true, true, true, false, false, true, false, true, true, true, false]),
-    (3, 4, &[true, true, true, false, true, false, true, false, false, false, true, true]),
-    (4, 3, &[true, true, false, true, false, false, true, true, true, false, false, true]),
+    (
+        3,
+        3,
+        &[true, false, true, true, false, true, true, true, true],
+    ),
+    (
+        3,
+        3,
+        &[true, false, true, true, true, true, true, false, true],
+    ),
+    (
+        3,
+        3,
+        &[true, true, true, false, true, false, true, true, true],
+    ),
+    (
+        3,
+        4,
+        &[
+            false, true, false, false, true, true, false, true, false, true, true, true,
+        ],
+    ),
+    (
+        3,
+        4,
+        &[
+            false, true, true, false, true, true, false, false, false, true, true, true,
+        ],
+    ),
+    (
+        3,
+        4,
+        &[
+            false, true, true, true, false, false, true, false, true, true, true, false,
+        ],
+    ),
+    (
+        3,
+        4,
+        &[
+            true, true, true, false, true, false, true, false, false, false, true, true,
+        ],
+    ),
+    (
+        4,
+        3,
+        &[
+            true, true, false, true, false, false, true, true, true, false, false, true,
+        ],
+    ),
     // 8 cells
-    (3, 3, &[true, true, true, true, false, true, true, true, true]),
-    (3, 4, &[true, true, true, false, true, false, true, true, true, true, false, false]),
-    (4, 3, &[false, true, false, true, true, true, true, false, true, true, false, true]),
-    (4, 3, &[false, true, true, true, true, false, false, true, true, false, true, true]),
-    (4, 4, &[false, true, false, true, true, true, true, true, false, false, true, false, false, false, true, false]),
+    (
+        3,
+        3,
+        &[true, true, true, true, false, true, true, true, true],
+    ),
+    (
+        3,
+        4,
+        &[
+            true, true, true, false, true, false, true, true, true, true, false, false,
+        ],
+    ),
+    (
+        4,
+        3,
+        &[
+            false, true, false, true, true, true, true, false, true, true, false, true,
+        ],
+    ),
+    (
+        4,
+        3,
+        &[
+            false, true, true, true, true, false, false, true, true, false, true, true,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            false, true, false, true, true, true, true, true, false, false, true, false, false,
+            false, true, false,
+        ],
+    ),
     // 9 cells
-    (3, 4, &[true, false, false, true, true, false, true, true, true, true, true, true]),
-    (3, 4, &[true, true, false, true, true, false, true, true, true, true, true, false]),
-    (3, 4, &[true, true, true, false, true, false, false, true, true, true, true, true]),
-    (4, 4, &[false, true, true, true, true, true, false, true, false, true, false, false, false, true, true, false]),
-    (4, 4, &[true, true, false, false, true, false, false, false, true, false, true, false, true, true, true, true]),
-    (4, 4, &[true, true, true, false, false, false, true, true, true, true, true, false, false, true, false, false]),
-    (4, 5, &[true, true, false, false, false, false, true, true, true, false, false, false, true, false, false, false, false, true, true, true]),
+    (
+        3,
+        4,
+        &[
+            true, false, false, true, true, false, true, true, true, true, true, true,
+        ],
+    ),
+    (
+        3,
+        4,
+        &[
+            true, true, false, true, true, false, true, true, true, true, true, false,
+        ],
+    ),
+    (
+        3,
+        4,
+        &[
+            true, true, true, false, true, false, false, true, true, true, true, true,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            false, true, true, true, true, true, false, true, false, true, false, false, false,
+            true, true, false,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            true, true, false, false, true, false, false, false, true, false, true, false, true,
+            true, true, true,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            true, true, true, false, false, false, true, true, true, true, true, false, false,
+            true, false, false,
+        ],
+    ),
+    (
+        4,
+        5,
+        &[
+            true, true, false, false, false, false, true, true, true, false, false, false, true,
+            false, false, false, false, true, true, true,
+        ],
+    ),
     // 10 cells
-    (4, 4, &[false, true, false, true, true, true, false, true, false, true, true, true, true, true, false, false]),
-    (4, 4, &[true, false, false, true, true, false, true, true, true, false, true, false, true, true, true, false]),
-    (4, 4, &[true, true, false, true, true, false, false, true, true, true, true, true, false, false, true, false]),
-    (4, 5, &[false, true, false, true, false, true, true, true, true, true, false, false, true, false, true, false, false, true, false, false]),
-    (5, 4, &[false, true, false, false, false, true, true, true, false, false, true, false, true, true, true, false, true, false, true, false]),
+    (
+        4,
+        4,
+        &[
+            false, true, false, true, true, true, false, true, false, true, true, true, true, true,
+            false, false,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            true, false, false, true, true, false, true, true, true, false, true, false, true,
+            true, true, false,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            true, true, false, true, true, false, false, true, true, true, true, true, false,
+            false, true, false,
+        ],
+    ),
+    (
+        4,
+        5,
+        &[
+            false, true, false, true, false, true, true, true, true, true, false, false, true,
+            false, true, false, false, true, false, false,
+        ],
+    ),
+    (
+        5,
+        4,
+        &[
+            false, true, false, false, false, true, true, true, false, false, true, false, true,
+            true, true, false, true, false, true, false,
+        ],
+    ),
     // 11 cells
-    (4, 4, &[true, true, false, true, false, true, true, true, true, true, true, false, true, false, true, false]),
-    (4, 4, &[true, true, true, true, true, false, true, true, false, true, true, false, false, false, true, true]),
-    (4, 5, &[false, true, false, false, false, false, true, true, true, true, true, true, false, true, false, false, true, false, true, true]),
-    (5, 4, &[false, false, false, true, true, false, true, true, true, false, true, false, true, true, true, false, true, false, true, false]),
+    (
+        4,
+        4,
+        &[
+            true, true, false, true, false, true, true, true, true, true, true, false, true, false,
+            true, false,
+        ],
+    ),
+    (
+        4,
+        4,
+        &[
+            true, true, true, true, true, false, true, true, false, true, true, false, false,
+            false, true, true,
+        ],
+    ),
+    (
+        4,
+        5,
+        &[
+            false, true, false, false, false, false, true, true, true, true, true, true, false,
+            true, false, false, true, false, true, true,
+        ],
+    ),
+    (
+        5,
+        4,
+        &[
+            false, false, false, true, true, false, true, true, true, false, true, false, true,
+            true, true, false, true, false, true, false,
+        ],
+    ),
     // 12 cells
-    (5, 4, &[false, true, true, true, true, true, true, true, false, false, true, false, false, true, true, false, false, false, true, true]),
+    (
+        5,
+        4,
+        &[
+            false, true, true, true, true, true, true, true, false, false, true, false, false,
+            true, true, false, false, false, true, true,
+        ],
+    ),
     // 13 cells
-    (4, 5, &[true, true, false, true, true, false, true, true, false, true, false, false, true, true, true, true, true, true, false, false]),
+    (
+        4,
+        5,
+        &[
+            true, true, false, true, true, false, true, true, false, true, false, false, true,
+            true, true, true, true, true, false, false,
+        ],
+    ),
     // 14 cells
-    (5, 5, &[true, true, false, false, false, false, true, false, false, true, false, true, false, true, true, true, true, true, false, true, false, false, true, true, true]),
-    (5, 5, &[true, true, false, false, false, false, true, true, false, true, false, false, true, false, true, true, false, true, true, true, true, true, true, false, false]),
+    (
+        5,
+        5,
+        &[
+            true, true, false, false, false, false, true, false, false, true, false, true, false,
+            true, true, true, true, true, false, true, false, false, true, true, true,
+        ],
+    ),
+    (
+        5,
+        5,
+        &[
+            true, true, false, false, false, false, true, true, false, true, false, false, true,
+            false, true, true, false, true, true, true, true, true, true, false, false,
+        ],
+    ),
 ];
 
 fn piece_from_catalog(height: u8, width: u8, flat: &[bool]) -> Piece {
@@ -111,9 +403,9 @@ fn piece_from_catalog(height: u8, width: u8, flat: &[bool]) -> Piece {
 
 /// Returns true if the given piece matches one of the 75 known game shapes.
 pub fn is_known_shape(piece: &Piece) -> bool {
-    SHAPE_CATALOG.iter().any(|&(h, w, flat)| {
-        *piece == piece_from_catalog(h, w, flat)
-    })
+    SHAPE_CATALOG
+        .iter()
+        .any(|&(h, w, flat)| *piece == piece_from_catalog(h, w, flat))
 }
 
 fn random_piece(rng: &mut impl Rng, max_h: u8, max_w: u8) -> Piece {
