@@ -28,3 +28,11 @@ jobs:
           exit 1
         fi
         echo "WASM files are up to date."
+    - name: Upload mismatched rebuild
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: rebuilt-wasm
+        path: |
+          web/pkg/shapeshifter.js
+          web/pkg/shapeshifter_bg.wasm
