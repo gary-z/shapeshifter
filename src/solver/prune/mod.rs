@@ -7,4 +7,5 @@
 pub(crate) mod mc;
 pub(crate) mod jaggedness;
 pub(crate) mod parity;
+pub(crate) mod projected_jaggedness;
 pub(crate) mod total_deficit;

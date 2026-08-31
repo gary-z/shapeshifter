@@ -25,6 +25,10 @@ pub(crate) fn build_solver_data(
     let jaggedness_prune = super::prune::jaggedness::JaggednessPrune::precompute(pieces, order, h, w);
 
     let parity_prune = super::prune::parity::ParityPrune::precompute(pieces, order, h, w, m);
+    let projected_jaggedness_prune =
+        super::prune::projected_jaggedness::ProjectedJaggednessPrune::precompute(
+            pieces, order, h, w, m,
+        );
 
     // Compute progress weights: fraction of naive search space per placement at each depth.
     // Only the parallel solver reports progress, and it is not built for wasm.
@@ -53,6 +57,7 @@ pub(crate) fn build_solver_data(
         total_deficit_prune,
         jaggedness_prune,
         parity_prune,
+        projected_jaggedness_prune,
         mc_prune,
         skip_tables,
         single_cell_start,

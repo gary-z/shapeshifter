@@ -11,12 +11,14 @@ use crate::core::board::Board;
 
 use super::backtrack::{sort_placements, solve_single_cells};
 use super::prune::mc::HitCounter;
+use super::prune::projected_jaggedness::ProjectedState;
 use super::pruning::*;
 use super::{PruningConfig, SolverData, SolveResult, format_count};
 
 struct SearchFrame {
     board: Board,
     hits: HitCounter,
+    projected: ProjectedState,
     piece_idx: usize,
     /// Sorted, filtered placement indices into data.all_placements[piece_idx].
     order: [u8; 196],
@@ -28,6 +30,7 @@ struct SearchFrame {
 pub(crate) struct StealableTask {
     pub board: Board,
     pub hits: HitCounter,
+    pub projected: ProjectedState,
     pub prefix: Vec<(usize, usize)>,
     pub depth: usize,
     pub prev_placement: usize,
@@ -80,6 +83,7 @@ impl WorkQueue {
 fn build_search_frame<const M: usize>(
     board: &Board,
     hits: HitCounter,
+    projected: ProjectedState,
     data: &SolverData,
     piece_idx: usize,
     prev_placement: usize,
@@ -103,7 +107,7 @@ fn build_search_frame<const M: usize>(
     }
 
     let filtered_out = pl_len - len as usize;
-    SearchFrame { board: board.clone(), hits, piece_idx, order, len, cursor: 0, filtered_out }
+    SearchFrame { board: board.clone(), hits, projected, piece_idx, order, len, cursor: 0, filtered_out }
 }
 
 #[inline]
@@ -112,7 +116,7 @@ fn next_prev_placement(data: &SolverData, piece_idx: usize, pl_idx: usize) -> us
     if next < data.all_placements.len() && data.skip_tables[next].is_some() { pl_idx } else { usize::MAX }
 }
 
-fn split_work(
+fn split_work<const M: usize>(
     stack: &mut [SearchFrame],
     solution_prefix: &[(usize, usize)],
     base_solution_len: usize,
@@ -129,13 +133,17 @@ fn split_work(
             board.apply_piece(mask);
             let mut hits = frame.hits;
             hits.apply_piece(mask);
+            let mut projected = frame.projected;
+            let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
+            if M == 2 {
+                projected.apply_piece(&data.projected_jaggedness_prune, frame.piece_idx, row, col);
+            }
             let depth = frame.piece_idx + 1;
             let prefix_len = base_solution_len + si;
             let mut prefix = solution_prefix[..prefix_len].to_vec();
-            let (row, col, _) = data.all_placements[frame.piece_idx][pl_idx];
             prefix.push((row, col));
             let next_prev = next_prev_placement(data, frame.piece_idx, pl_idx);
-            tasks.push(StealableTask { board, hits, prefix, depth, prev_placement: next_prev });
+            tasks.push(StealableTask { board, hits, projected, prefix, depth, prev_placement: next_prev });
         }
         frame.cursor = frame.len;
         wq.push_many(tasks);
@@ -159,6 +167,7 @@ fn atomic_add_f64(atomic: &std::sync::atomic::AtomicU64, val: f64) {
 fn backtrack_stealing<const M: usize>(
     initial_board: &Board,
     initial_hits: HitCounter,
+    initial_projected: ProjectedState,
     data: &SolverData,
     start_depth: usize,
     initial_prev_placement: usize,
@@ -190,14 +199,14 @@ fn backtrack_stealing<const M: usize>(
         return result;
     }
 
-    if !prune_node::<M>(initial_board, data, start_depth, config) {
+    if !prune_node::<M>(initial_board, &initial_projected, data, start_depth, config) {
         atomic_add_f64(progress, task_weight);
         return false;
     }
 
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(n - start_depth);
     let first_frame = build_search_frame::<M>(
-        initial_board, initial_hits, data, start_depth, initial_prev_placement, config,
+        initial_board, initial_hits, initial_projected, data, start_depth, initial_prev_placement, config,
     );
     let mut progress_local: f64 = 0.0;
     progress_local += first_frame.filtered_out as f64 * data.progress_weights[start_depth];
@@ -236,9 +245,14 @@ fn backtrack_stealing<const M: usize>(
             continue;
         }
 
+        let (row, col, _) = data.all_placements[piece_idx][pl_idx];
+        let mut projected = frame.projected;
+        if M == 2 {
+            projected.apply_piece(&data.projected_jaggedness_prune, piece_idx, row, col);
+        }
+
         let sol_depth = base_solution_len + stack.len() - 1;
         solution.truncate(sol_depth);
-        let (row, col, _) = data.all_placements[piece_idx][pl_idx];
         solution.push((row, col));
 
         nodes.set(nodes.get() + 1);
@@ -278,7 +292,7 @@ fn backtrack_stealing<const M: usize>(
             continue;
         }
 
-        if !prune_node::<M>(&board, data, next_piece, config) {
+        if !prune_node::<M>(&board, &projected, data, next_piece, config) {
             progress_local += data.progress_weights[piece_idx];
             continue;
         }
@@ -291,13 +305,13 @@ fn backtrack_stealing<const M: usize>(
                 progress_local = 0.0;
             }
             if idle_count.load(Ordering::Relaxed) > 0 {
-                split_work(&mut stack, solution, base_solution_len, data, wq);
+                split_work::<M>(&mut stack, solution, base_solution_len, data, wq);
             }
         }
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
         let new_frame = build_search_frame::<M>(
-            &board, new_hits, data, next_piece, next_prev, config,
+            &board, new_hits, projected, data, next_piece, next_prev, config,
         );
         progress_local += new_frame.filtered_out as f64 * data.progress_weights[next_piece];
         nodes.set(nodes.get() + new_frame.filtered_out as u64);
@@ -330,6 +344,7 @@ pub(crate) fn run_parallel<const M: usize>(
     wq.push(StealableTask {
         board: board.clone(),
         hits: HitCounter::new(),
+        projected: ProjectedState::from_board(board),
         prefix: Vec::new(),
         depth: 0,
         prev_placement: usize::MAX,
@@ -403,6 +418,7 @@ pub(crate) fn run_parallel<const M: usize>(
                     let found = backtrack_stealing::<M>(
                         &task.board,
                         task.hits,
+                        task.projected,
                         data,
                         task.depth,
                         task.prev_placement,

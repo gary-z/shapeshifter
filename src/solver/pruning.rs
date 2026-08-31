@@ -18,6 +18,7 @@
 //!
 
 use crate::core::board::Board;
+use super::prune::projected_jaggedness::ProjectedState;
 use super::SolverData;
 
 
@@ -83,6 +84,7 @@ pub(crate) fn max_zeros_hit<const M: usize>(
 #[inline(always)]
 pub(crate) fn prune_node<const M: usize>(
     board: &Board,
+    projected: &ProjectedState,
     data: &SolverData,
     piece_idx: usize,
     config: &super::PruningConfig,
@@ -96,5 +98,6 @@ pub(crate) fn prune_node<const M: usize>(
     // MC bounds (forward + reverse) + deterministic jaggedness (all share one jagg computation).
     if !data.mc_prune.try_prune::<M>(board, piece_idx, &data.jaggedness_prune) { return false; }
     if config.total_deficit_global && !data.parity_prune.try_prune(board, piece_idx, M as u8, rb) { return false; }
+    if M == 2 && !data.projected_jaggedness_prune.try_prune(projected, piece_idx) { return false; }
     true
 }

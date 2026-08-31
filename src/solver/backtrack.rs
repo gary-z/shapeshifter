@@ -4,6 +4,7 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
 use super::prune::mc::HitCounter;
+use super::prune::projected_jaggedness::ProjectedState;
 use super::pruning::*;
 use super::{PruningConfig, SolverData};
 
@@ -141,6 +142,7 @@ pub(crate) fn next_prev_placement(data: &SolverData, piece_idx: usize, pl_idx: u
 pub(crate) fn backtrack<const M: usize>(
     board: &Board,
     hits: HitCounter,
+    projected: ProjectedState,
     data: &SolverData,
     piece_idx: usize,
     prev_placement: usize,
@@ -158,7 +160,7 @@ pub(crate) fn backtrack<const M: usize>(
         return solve_single_cells(board, data.m, data.h, data.w, num_remaining, solution);
     }
 
-    if !prune_node::<M>(board, data, piece_idx, config) { return false; }
+    if !prune_node::<M>(board, &projected, data, piece_idx, config) { return false; }
 
     let placements = &data.all_placements[piece_idx];
     let mut order = [0u8; 196];
@@ -191,6 +193,16 @@ pub(crate) fn backtrack<const M: usize>(
             continue;
         }
 
+        let mut new_projected = projected;
+        if M == 2 {
+            new_projected.apply_piece(
+                &data.projected_jaggedness_prune,
+                piece_idx,
+                placements[pl_idx].0,
+                placements[pl_idx].1,
+            );
+        }
+
         solution.push((placements[pl_idx].0, placements[pl_idx].1));
 
         let next_prev = next_prev_placement(data, piece_idx, pl_idx);
@@ -198,6 +210,7 @@ pub(crate) fn backtrack<const M: usize>(
         if backtrack::<M>(
             &board,
             new_hits,
+            new_projected,
             data,
             piece_idx + 1,
             next_prev,

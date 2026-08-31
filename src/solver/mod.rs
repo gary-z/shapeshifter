@@ -80,6 +80,7 @@ pub(crate) struct SolverData {
     pub(crate) total_deficit_prune: prune::total_deficit::TotalDeficitPrune,
     pub(crate) jaggedness_prune: prune::jaggedness::JaggednessPrune,
     pub(crate) parity_prune: prune::parity::ParityPrune,
+    pub(crate) projected_jaggedness_prune: prune::projected_jaggedness::ProjectedJaggednessPrune,
     pub(crate) mc_prune: prune::mc::McPrune,
     pub(crate) skip_tables: Vec<Option<Vec<bool>>>,
     pub(crate) single_cell_start: usize,
@@ -212,10 +213,11 @@ fn dispatch_backtrack(
     config: &PruningConfig,
     exhaustive: bool,
 ) -> bool {
+    let projected = prune::projected_jaggedness::ProjectedState::from_board(board);
     macro_rules! go {
         ($m:literal) => {
             backtrack::backtrack::<$m>(
-                board, prune::mc::HitCounter::new(), data, 0, usize::MAX,
+                board, prune::mc::HitCounter::new(), projected, data, 0, usize::MAX,
                 solution, nodes, config, exhaustive,
             )
         };
