@@ -1,0 +1,30 @@
+name: Check WASM is up to date
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  check:
+    name: Generated package
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install WebAssembly target
+      run: rustup target add wasm32-unknown-unknown
+    - name: Checksum committed package
+      run: sha256sum web/pkg/shapeshifter.js web/pkg/shapeshifter_bg.wasm | tee /tmp/wasm-before.sha
+    - name: Rebuild package
+      run: ./web/build.sh
+    - name: Verify committed package matches rebuild
+      run: |
+        sha256sum web/pkg/shapeshifter.js web/pkg/shapeshifter_bg.wasm | tee /tmp/wasm-after.sha
+        if ! diff -q /tmp/wasm-before.sha /tmp/wasm-after.sha > /dev/null 2>&1; then
+          echo "::error::Committed WASM files are out of sync with Rust source. Run './web/build.sh' and commit the result."
+          diff /tmp/wasm-before.sha /tmp/wasm-after.sha || true
+          exit 1
+        fi
+        echo "WASM files are up to date."

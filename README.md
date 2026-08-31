@@ -103,4 +103,4 @@ rustup target add wasm32-unknown-unknown
 ./web/build.sh
 ```
 
-`web/build.sh` installs `wasm-pack` when it is missing and writes the generated package to `web/pkg/`. Serve the repository root with a static HTTP server to test `index.html` locally.
+The repository pins Rust in `rust-toolchain` and `wasm-pack` in `web/.wasm-pack-version`. `web/build.sh` installs the pinned `wasm-pack` version when needed and writes the generated package to `web/pkg/`. Serve the repository root with a static HTTP server to test `index.html` locally.
