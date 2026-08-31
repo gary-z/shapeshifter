@@ -47,7 +47,7 @@ impl PartitionReachability {
             for &piece_index in piece_order {
                 let piece = &pieces[piece_index];
                 let mut counts = vec![0u32; offset_count];
-                for offset in 0..offset_count {
+                for (offset, count) in counts.iter_mut().enumerate() {
                     for piece_row in 0..piece.height() as usize {
                         for piece_column in 0..piece.width() as usize {
                             if piece
@@ -55,7 +55,7 @@ impl PartitionReachability {
                                 .get_bit((piece_row * STRIDE + piece_column) as u32)
                                 && contains_piece_cell(piece_row, piece_column, offset)
                             {
-                                counts[offset] += 1;
+                                *count += 1;
                             }
                         }
                     }

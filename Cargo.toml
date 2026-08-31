@@ -3,6 +3,12 @@ name = "shapeshifter"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
 [dependencies]
 rand = "0.10.0"
 regex = "1"

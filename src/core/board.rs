@@ -23,8 +23,8 @@ impl Board {
     pub fn from_grid(grid: &[&[u8]], m: u8) -> Self {
         let height = grid.len();
         let width = if height > 0 { grid[0].len() } else { 0 };
-        assert!(height >= 3 && height <= 14, "height must be in [3, 14]");
-        assert!(width >= 3 && width <= 14, "width must be in [3, 14]");
+        assert!((3..=14).contains(&height), "height must be in [3, 14]");
+        assert!((3..=14).contains(&width), "width must be in [3, 14]");
         assert!(m >= 2 && m as usize <= MAX_M, "m must be in [2, {MAX_M}]");
 
         let mut planes = [Bitboard::ZERO; MAX_M];
@@ -38,9 +38,8 @@ impl Board {
         }
 
         let mut total_deficit = 0u32;
-        for d in 1..m as usize {
-            let cnt = planes[d].count_ones();
-            total_deficit += d as u32 * cnt;
+        for (deficit, plane) in planes.iter().enumerate().take(m as usize).skip(1) {
+            total_deficit += deficit as u32 * plane.count_ones();
         }
 
         Self {
@@ -54,8 +53,8 @@ impl Board {
 
     /// Create a board where all cells are 0.
     pub fn new_solved(height: u8, width: u8, m: u8) -> Self {
-        assert!(height >= 3 && height <= 14);
-        assert!(width >= 3 && width <= 14);
+        assert!((3..=14).contains(&height));
+        assert!((3..=14).contains(&width));
         assert!(m >= 2 && m as usize <= MAX_M);
 
         let mut mask = Bitboard::ZERO;
@@ -91,9 +90,9 @@ impl Board {
 
     pub fn get(&self, row: usize, col: usize) -> u8 {
         let index = (row * crate::core::STRIDE + col) as u32;
-        for d in 0..self.m as usize {
-            if self.planes[d].get_bit(index) {
-                return d as u8;
+        for (value, plane) in self.planes.iter().enumerate().take(self.m as usize) {
+            if plane.get_bit(index) {
+                return value as u8;
             }
         }
         unreachable!("cell ({row}, {col}) not found in any plane");
@@ -116,8 +115,8 @@ impl Board {
     pub fn apply_piece(&mut self, piece_mask: Bitboard) {
         if self.m == 2 {
             // M=2 fast path: toggling deficit 0↔1 is just XOR on both planes.
-            self.planes[0] = self.planes[0] ^ piece_mask;
-            self.planes[1] = self.planes[1] ^ piece_mask;
+            self.planes[0] ^= piece_mask;
+            self.planes[1] ^= piece_mask;
             // For M=2, total_deficit = popcount(planes[1]).
             self.total_deficit = self.planes[1].count_ones();
             return;
@@ -165,8 +164,8 @@ impl Board {
 
     pub fn valid_mask(&self) -> Bitboard {
         let mut mask = Bitboard::ZERO;
-        for d in 0..self.m as usize {
-            mask |= self.planes[d];
+        for plane in self.planes.iter().take(self.m as usize) {
+            mask |= *plane;
         }
         mask
     }
@@ -298,9 +297,9 @@ mod tests {
         let mut board = original;
 
         let mut piece = Bitboard::ZERO;
-        piece.set_bit(0 * 15 + 0);
-        piece.set_bit(0 * 15 + 1);
-        piece.set_bit(1 * 15 + 0);
+        piece.set_bit(0);
+        piece.set_bit(1);
+        piece.set_bit(15);
 
         board.apply_piece(piece);
         assert_ne!(board, original);
@@ -326,10 +325,10 @@ mod tests {
     fn test_plane() {
         let board = sample_grid();
         let p0 = board.plane(0);
-        assert!(p0.get_bit(0 * 15 + 0)); // (0,0) = 0
-        assert!(p0.get_bit(1 * 15 + 2)); // (1,2) = 0
+        assert!(p0.get_bit(0)); // (0,0) = 0
+        assert!(p0.get_bit(15 + 2)); // (1,2) = 0
         assert!(p0.get_bit(2 * 15 + 1)); // (2,1) = 0
-        assert!(!p0.get_bit(0 * 15 + 1)); // (0,1) = 1, not 0
+        assert!(!p0.get_bit(1)); // (0,1) = 1, not 0
     }
 
     #[test]
@@ -339,7 +338,7 @@ mod tests {
         assert_eq!(board.get(1, 1), 4);
 
         let mut b = board;
-        let piece = Bitboard::from_bit(1 * 15 + 1); // (1,1)
+        let piece = Bitboard::from_bit(15 + 1); // (1,1)
         b.apply_piece(piece);
         assert_eq!(b.get(1, 1), 3); // 4 - 1 = 3 (decrement)
     }

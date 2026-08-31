@@ -10,6 +10,14 @@ use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_
 pub(super) const MAX_PLACEMENTS: usize = 196;
 const MAX_PIECE_CELLS: usize = 25;
 
+#[derive(Clone, Copy)]
+pub(super) struct SearchPosition {
+    pub(super) board: Board,
+    pub(super) hits: HitCounter,
+    pub(super) piece_index: usize,
+    pub(super) previous_placement: usize,
+}
+
 /// Rank placements by zero cells hit, then by covered deficit.
 /// Placements outside the zero-cell budget are omitted.
 pub(super) fn rank_placements(
@@ -92,7 +100,8 @@ pub(super) fn solve_single_cell_suffix(
         required_hits += deficit as u32 * board.plane(deficit).count_ones();
     }
     let available_pieces = available_pieces as u32;
-    if available_pieces < required_hits || (available_pieces - required_hits) % modulus as u32 != 0
+    if available_pieces < required_hits
+        || !(available_pieces - required_hits).is_multiple_of(modulus as u32)
     {
         return false;
     }
@@ -140,15 +149,19 @@ pub(super) fn next_previous_placement(
 }
 
 pub(super) fn backtrack<const MODULUS: usize>(
-    board: &Board,
-    hits: HitCounter,
+    position: SearchPosition,
     data: &SolverData,
-    piece_index: usize,
-    previous_placement: usize,
     solution: &mut Vec<(usize, usize)>,
     nodes: &Cell<u64>,
     exhaustive: bool,
 ) -> bool {
+    let SearchPosition {
+        board,
+        hits,
+        piece_index,
+        previous_placement,
+    } = position;
+
     if piece_index == data.placements.len() {
         return board.is_solved();
     }
@@ -156,7 +169,7 @@ pub(super) fn backtrack<const MODULUS: usize>(
     if piece_index >= data.single_cell_suffix_start {
         let remaining_pieces = data.placements.len() - piece_index;
         return solve_single_cell_suffix(
-            board,
+            &board,
             data.modulus,
             data.height,
             data.width,
@@ -165,15 +178,15 @@ pub(super) fn backtrack<const MODULUS: usize>(
         );
     }
 
-    if !state_is_feasible::<MODULUS>(board, data, piece_index) {
+    if !state_is_feasible::<MODULUS>(&board, data, piece_index) {
         return false;
     }
 
     let placements = &data.placements[piece_index];
     let mut ranked_indices = [0u8; MAX_PLACEMENTS];
-    let max_zero_cells = max_zero_cells_allowed::<MODULUS>(board, data, piece_index);
+    let max_zero_cells = max_zero_cells_allowed::<MODULUS>(&board, data, piece_index);
     let candidate_count = rank_placements(
-        board,
+        &board,
         data.modulus,
         placements,
         max_zero_cells,
@@ -193,8 +206,8 @@ pub(super) fn backtrack<const MODULUS: usize>(
             continue;
         }
 
-        let mut board = *board;
-        board.apply_piece(mask);
+        let mut board_after_placement = board;
+        board_after_placement.apply_piece(mask);
 
         let mut hits_after_placement = hits;
         hits_after_placement.apply_piece(mask);
@@ -210,11 +223,13 @@ pub(super) fn backtrack<const MODULUS: usize>(
         let previous_placement = next_previous_placement(data, piece_index, placement_index);
 
         if backtrack::<MODULUS>(
-            &board,
-            hits_after_placement,
+            SearchPosition {
+                board: board_after_placement,
+                hits: hits_after_placement,
+                piece_index: piece_index + 1,
+                previous_placement,
+            },
             data,
-            piece_index + 1,
-            previous_placement,
             solution,
             nodes,
             exhaustive,
