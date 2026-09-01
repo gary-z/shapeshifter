@@ -50,7 +50,7 @@ pub(super) fn state_is_feasible<const MODULUS: usize>(
 ) -> bool {
     let remaining_cells = data.total_deficit.remaining_cells(piece_index);
 
-    data.total_deficit.allows(board, piece_index)
+    data.total_deficit.allows::<MODULUS>(board, piece_index)
         && data
             .monte_carlo
             .allows_state::<MODULUS>(board, piece_index, &data.jaggedness)
