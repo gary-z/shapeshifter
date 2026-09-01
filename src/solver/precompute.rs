@@ -13,8 +13,13 @@ pub(super) fn build_solver_data(
     let height = board.height();
     let width = board.width();
     let modulus = board.m();
-    let total_deficit =
-        super::pruning::TotalDeficitBound::precompute(pieces, piece_order, height, width);
+    let total_deficit = super::pruning::TotalDeficitBound::precompute(
+        pieces,
+        piece_order,
+        &placements,
+        height,
+        width,
+    );
     let jaggedness =
         super::pruning::JaggednessBound::precompute(pieces, piece_order, height, width);
     let partition_reachability =
