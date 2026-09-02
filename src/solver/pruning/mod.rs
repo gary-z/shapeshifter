@@ -1,8 +1,10 @@
+mod cell_set;
 mod jaggedness;
 mod monte_carlo;
 mod partition;
 mod total_deficit;
 
+pub(super) use cell_set::CellSetBound;
 pub(super) use jaggedness::JaggednessBound;
 pub(super) use monte_carlo::{HitCounter, MonteCarloBounds};
 pub(super) use partition::PartitionReachability;
@@ -57,4 +59,7 @@ pub(super) fn state_is_feasible<const MODULUS: usize>(
         && data
             .partition_reachability
             .allows(board, piece_index, MODULUS as u8, remaining_cells)
+        && data
+            .cell_set_bound
+            .allows::<MODULUS>(board, piece_index, remaining_cells)
 }
