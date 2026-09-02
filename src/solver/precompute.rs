@@ -19,6 +19,8 @@ pub(super) fn build_solver_data(
         super::pruning::JaggednessBound::precompute(pieces, piece_order, height, width);
     let partition_reachability =
         super::pruning::PartitionReachability::precompute(pieces, piece_order, height, width);
+    let cell_set_bound =
+        super::pruning::CellSetBound::precompute(&placements, height, width, modulus);
 
     #[cfg(not(target_arch = "wasm32"))]
     let progress_weights: Vec<f64> = {
@@ -47,6 +49,7 @@ pub(super) fn build_solver_data(
         total_deficit,
         jaggedness,
         partition_reachability,
+        cell_set_bound,
         monte_carlo,
         equivalent_pair_skips,
         single_cell_suffix_start,
