@@ -19,6 +19,13 @@ pub(super) fn build_solver_data(
         super::pruning::JaggednessBound::precompute(pieces, piece_order, height, width);
     let partition_reachability =
         super::pruning::PartitionReachability::precompute(pieces, piece_order, height, width);
+    let small_component = super::pruning::SmallComponentBound::precompute(
+        pieces,
+        piece_order,
+        height,
+        width,
+        modulus,
+    );
     let cell_set_bound =
         super::pruning::CellSetBound::precompute(&placements, height, width, modulus);
 
@@ -49,6 +56,7 @@ pub(super) fn build_solver_data(
         total_deficit,
         jaggedness,
         partition_reachability,
+        small_component,
         cell_set_bound,
         monte_carlo,
         equivalent_pair_skips,

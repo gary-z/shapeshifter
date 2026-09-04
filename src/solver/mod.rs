@@ -41,6 +41,7 @@ struct SolverData {
     total_deficit: pruning::TotalDeficitBound,
     jaggedness: pruning::JaggednessBound,
     partition_reachability: pruning::PartitionReachability,
+    small_component: pruning::SmallComponentBound,
     cell_set_bound: pruning::CellSetBound,
     monte_carlo: pruning::MonteCarloBounds,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
