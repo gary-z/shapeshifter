@@ -64,6 +64,13 @@ Before search, 100,000 random placement trajectories are sampled in each directi
 - total board deficit in forward and reverse search;
 - horizontal and vertical board jaggedness.
 
+At the native parallel M=3 search boundary (a 10x11 board with at least 22
+pieces), the solver also builds a 200,000-state guided frontier through the
+first eight pieces. Exact suffix distributions on small overlapping regions
+rank spatially coherent partial boards, after which the ordinary parallel DFS
+and all of its pruning bounds take over. If this statistical pre-pass misses,
+the normal progressive Monte Carlo search still runs from the root.
+
 The sampled bounds are combined with deterministic checks:
 
 - remaining piece cells must cover the total deficit;

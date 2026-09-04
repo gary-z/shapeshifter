@@ -1,5 +1,7 @@
 mod backtrack;
 #[cfg(not(target_arch = "wasm32"))]
+mod likelihood;
+#[cfg(not(target_arch = "wasm32"))]
 mod parallel;
 mod precompute;
 mod pruning;
@@ -36,6 +38,18 @@ pub struct SolveResult {
     pub progress: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn should_use_guided_frontier(game: &Game, parallel: bool, exhaustive: bool) -> bool {
+    let board = game.board();
+    // The tables are exponential in M and the large frontier only pays for
+    // itself at the current M=3, 10x11, 22-piece search boundary.
+    parallel
+        && !exhaustive
+        && board.m() == 3
+        && usize::from(board.height()) * usize::from(board.width()) == 110
+        && game.pieces().len() >= 22
+}
+
 struct SolverData {
     placements: Vec<PiecePlacements>,
     total_deficit: pruning::TotalDeficitBound,
@@ -44,6 +58,8 @@ struct SolverData {
     small_component: pruning::SmallComponentBound,
     cell_set_bound: pruning::CellSetBound,
     monte_carlo: pruning::MonteCarloBounds,
+    #[cfg(not(target_arch = "wasm32"))]
+    reverse_likelihood: Option<likelihood::ReverseLikelihood>,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
     single_cell_suffix_start: usize,
     modulus: u8,
@@ -58,20 +74,40 @@ struct SolverData {
 /// `exhaustive` keeps searching after the first solution and is primarily used
 /// to benchmark the bounded search tree.
 pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
-    let (board, piece_order, data) = prepare_search(game);
+    #[cfg(not(target_arch = "wasm32"))]
+    let guided_frontier = should_use_guided_frontier(game, parallel, exhaustive);
+    #[cfg(target_arch = "wasm32")]
+    let guided_frontier = false;
+
+    let (board, piece_order, data) = prepare_search(game, guided_frontier);
     let level_count = data.monte_carlo.level_count();
 
     let mut total_nodes = 0u64;
     let mut last_progress = 0.0;
     let mut first_solution: Option<Solution> = None;
-    for level_index in 0..level_count {
+    let attempt_count = level_count + usize::from(guided_frontier);
+    for attempt_index in 0..attempt_count {
+        let is_guided_attempt = guided_frontier && attempt_index == 0;
+        let level_index = if is_guided_attempt {
+            // Let the spatial model choose the prefix; a percentile envelope
+            // here can discard it before the ranking has any effect.
+            level_count - 1
+        } else {
+            attempt_index - usize::from(guided_frontier)
+        };
         data.monte_carlo.select_level(level_index);
         macro_rules! dispatch {
             ($m:literal) => {{
                 if parallel {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        parallel::solve_parallel::<$m>(&board, &piece_order, &data, exhaustive)
+                        parallel::solve_parallel::<$m>(
+                            &board,
+                            &piece_order,
+                            &data,
+                            exhaustive,
+                            is_guided_attempt,
+                        )
                     }
                     #[cfg(target_arch = "wasm32")]
                     {
@@ -111,7 +147,7 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
     }
 }
 
-fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
+fn prepare_search(game: &Game, guided_frontier: bool) -> (Board, Vec<usize>, SolverData) {
     let board = *game.board();
     let pieces = game.pieces();
     let height = board.height();
@@ -153,6 +189,7 @@ fn prepare_search(game: &Game) -> (Board, Vec<usize>, SolverData) {
         placements,
         equivalent_pair_skips,
         single_cell_suffix_start,
+        guided_frontier,
     );
 
     (board, piece_order, data)

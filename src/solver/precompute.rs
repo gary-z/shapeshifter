@@ -9,6 +9,7 @@ pub(super) fn build_solver_data(
     placements: Vec<PiecePlacements>,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
     single_cell_suffix_start: usize,
+    guided_frontier: bool,
 ) -> SolverData {
     let height = board.height();
     let width = board.width();
@@ -50,6 +51,12 @@ pub(super) fn build_solver_data(
     };
 
     let monte_carlo = super::pruning::MonteCarloBounds::precompute(board, &placements, modulus);
+    #[cfg(not(target_arch = "wasm32"))]
+    let reverse_likelihood = guided_frontier.then(|| {
+        super::likelihood::ReverseLikelihood::precompute(&placements, height, width, modulus)
+    });
+    #[cfg(target_arch = "wasm32")]
+    let _ = guided_frontier;
 
     SolverData {
         placements,
@@ -59,6 +66,8 @@ pub(super) fn build_solver_data(
         small_component,
         cell_set_bound,
         monte_carlo,
+        #[cfg(not(target_arch = "wasm32"))]
+        reverse_likelihood,
         equivalent_pair_skips,
         single_cell_suffix_start,
         modulus,
