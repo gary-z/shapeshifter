@@ -195,6 +195,29 @@ impl Bitboard {
             v: u64x4::from_array(result),
         }
     }
+
+    /// Shift right by an offset within a 5x5 piece shape (0 through 64).
+    #[inline(always)]
+    pub fn shr_shape_offset(&self, n: u32) -> Self {
+        debug_assert!(n <= 64);
+        if n == 0 {
+            return *self;
+        }
+        let arr = self.v.to_array();
+        if n == 64 {
+            return Self {
+                v: u64x4::from_array([arr[1], arr[2], arr[3], 0]),
+            };
+        }
+        Self {
+            v: u64x4::from_array([
+                (arr[0] >> n) | (arr[1] << (64 - n)),
+                (arr[1] >> n) | (arr[2] << (64 - n)),
+                (arr[2] >> n) | (arr[3] << (64 - n)),
+                arr[3] >> n,
+            ]),
+        }
+    }
 }
 
 impl std::ops::BitAnd for Bitboard {
@@ -423,6 +446,21 @@ mod tests {
         let a = Bitboard::from_bit(10);
         let b = a >> 20;
         assert!(b.is_zero());
+    }
+
+    #[test]
+    fn shape_offset_shift_matches_general_shift() {
+        let board = Bitboard {
+            v: u64x4::from_array([
+                0x0123_4567_89ab_cdef,
+                0xfedc_ba98_7654_3210,
+                0x55aa_55aa_55aa_55aa,
+                0xaa55_aa55_aa55_aa55,
+            ]),
+        };
+        for offset in 0..=64 {
+            assert_eq!(board.shr_shape_offset(offset), board.shr(offset));
+        }
     }
 
     #[test]
