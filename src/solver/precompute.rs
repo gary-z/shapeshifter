@@ -29,6 +29,10 @@ pub(super) fn build_solver_data(
     );
     let cell_set_bound =
         super::pruning::CellSetBound::precompute(&placements, height, width, modulus);
+    let anchor_placements = placements
+        .iter()
+        .map(|piece_placements| super::backtrack::AnchorPlacementData::precompute(piece_placements))
+        .collect();
 
     #[cfg(not(target_arch = "wasm32"))]
     let progress_weights: Vec<f64> = {
@@ -65,6 +69,7 @@ pub(super) fn build_solver_data(
         partition_reachability,
         small_component,
         cell_set_bound,
+        anchor_placements,
         monte_carlo,
         #[cfg(not(target_arch = "wasm32"))]
         reverse_likelihood,

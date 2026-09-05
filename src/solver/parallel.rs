@@ -9,8 +9,8 @@ use std::sync::{Condvar, Mutex};
 use crate::core::board::Board;
 
 use super::backtrack::{
-    MAX_PLACEMENTS, SearchPosition, next_previous_placement, rank_placements,
-    solve_single_cell_suffix,
+    MAX_PLACEMENTS, SearchPosition, next_previous_placement, rank_low_zero_hit_placements,
+    rank_placements, solve_single_cell_suffix,
 };
 use super::pruning::HitCounter;
 use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_is_feasible};
@@ -95,13 +95,24 @@ fn likelihood_frontier<const MODULUS: usize>(
             let max_zero_cells =
                 max_zero_cells_allowed::<MODULUS>(&state.position.board, data, piece_index);
             let mut ranked_indices = [0u8; MAX_PLACEMENTS];
-            let ranked_count = rank_placements(
-                &state.position.board,
-                data.modulus,
-                placements,
-                max_zero_cells,
-                &mut ranked_indices,
-            );
+            let ranked_count = if max_zero_cells <= 2 {
+                rank_low_zero_hit_placements(
+                    &state.position.board,
+                    data.modulus,
+                    placements,
+                    &data.anchor_placements[piece_index],
+                    max_zero_cells,
+                    &mut ranked_indices,
+                )
+            } else {
+                rank_placements(
+                    &state.position.board,
+                    data.modulus,
+                    placements,
+                    max_zero_cells,
+                    &mut ranked_indices,
+                )
+            };
             let mut scores = [0i32; MAX_PLACEMENTS];
             likelihood.score_placements(
                 &state.position.board,
@@ -279,13 +290,24 @@ fn build_search_frame<const MODULUS: usize>(
 
     let mut ranked_indices = [0u8; MAX_PLACEMENTS];
     let max_zero_cells = max_zero_cells_allowed::<MODULUS>(board, data, piece_index);
-    let ranked_count = rank_placements(
-        board,
-        data.modulus,
-        placements,
-        max_zero_cells,
-        &mut ranked_indices,
-    );
+    let ranked_count = if max_zero_cells <= 2 {
+        rank_low_zero_hit_placements(
+            board,
+            data.modulus,
+            placements,
+            &data.anchor_placements[piece_index],
+            max_zero_cells,
+            &mut ranked_indices,
+        )
+    } else {
+        rank_placements(
+            board,
+            data.modulus,
+            placements,
+            max_zero_cells,
+            &mut ranked_indices,
+        )
+    };
 
     let mut candidate_count = 0u8;
     for ranked_index in 0..ranked_count {

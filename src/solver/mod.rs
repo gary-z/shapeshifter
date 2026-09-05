@@ -57,6 +57,7 @@ struct SolverData {
     partition_reachability: pruning::PartitionReachability,
     small_component: pruning::SmallComponentBound,
     cell_set_bound: pruning::CellSetBound,
+    anchor_placements: Vec<backtrack::AnchorPlacementData>,
     monte_carlo: pruning::MonteCarloBounds,
     #[cfg(not(target_arch = "wasm32"))]
     reverse_likelihood: Option<likelihood::ReverseLikelihood>,
