@@ -41,7 +41,7 @@
     }
     textarea:focus { border-color: #e94560; }
 
-    button#solve-btn {
+    .input-row button {
         background: #e94560; color: #fff; border: none; border-radius: 8px;
         padding: 0 30px; font-size: 1.1em; font-weight: 600;
         cursor: pointer; transition: background 0.2s, transform 0.1s;
@@ -49,6 +49,8 @@
     }
     button#solve-btn:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
     button#solve-btn:disabled { background: #555; cursor: not-allowed; }
+    button#cancel-btn { background: #555; }
+    button#cancel-btn:disabled { opacity: 0.6; cursor: wait; }
 
     .results-section {
         background: #16213e; border-radius: 10px;
@@ -94,6 +96,7 @@
             <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
         </div>
         <button id="solve-btn" disabled>Solve</button>
+        <button id="cancel-btn" hidden>Cancel</button>
     </div>
 
     <div class="results-section">

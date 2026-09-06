@@ -34,7 +34,6 @@ pub(super) fn build_solver_data(
         .map(|piece_placements| super::backtrack::AnchorPlacementData::precompute(piece_placements))
         .collect();
 
-    #[cfg(not(target_arch = "wasm32"))]
     let progress_weights: Vec<f64> = {
         let piece_count = pieces.len();
         let mut suffix_products = vec![1.0f64; piece_count + 1];
@@ -54,12 +53,9 @@ pub(super) fn build_solver_data(
             .collect()
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
     let reverse_likelihood = guided_frontier.then(|| {
         super::likelihood::ReverseLikelihood::precompute(&placements, height, width, modulus)
     });
-    #[cfg(target_arch = "wasm32")]
-    let _ = guided_frontier;
 
     SolverData {
         placements,
@@ -69,14 +65,12 @@ pub(super) fn build_solver_data(
         small_component,
         cell_set_bound,
         anchor_placements,
-        #[cfg(not(target_arch = "wasm32"))]
         reverse_likelihood,
         equivalent_pair_skips,
         single_cell_suffix_start,
         modulus,
         height,
         width,
-        #[cfg(not(target_arch = "wasm32"))]
         progress_weights,
     }
 }

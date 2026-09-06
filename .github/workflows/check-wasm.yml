@@ -16,12 +16,12 @@ jobs:
     - name: Install WebAssembly target
       run: rustup target add wasm32-unknown-unknown
     - name: Checksum committed package
-      run: sha256sum web/pkg/shapeshifter.js web/pkg/shapeshifter_bg.wasm | tee /tmp/wasm-before.sha
+      run: find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-before.sha
     - name: Rebuild package
       run: ./web/build.sh
     - name: Verify committed package matches rebuild
       run: |
-        sha256sum web/pkg/shapeshifter.js web/pkg/shapeshifter_bg.wasm | tee /tmp/wasm-after.sha
+        find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-after.sha
         if ! diff -q /tmp/wasm-before.sha /tmp/wasm-after.sha > /dev/null 2>&1; then
           echo "::error::Committed WASM files are out of sync with Rust source. Run './web/build.sh' and commit the result."
           diff /tmp/wasm-before.sha /tmp/wasm-after.sha || true
@@ -34,5 +34,5 @@ jobs:
       with:
         name: rebuilt-wasm
         path: |
-          web/pkg/shapeshifter.js
-          web/pkg/shapeshifter_bg.wasm
+          web/pkg/
+          web/pkg-threaded/

@@ -8,6 +8,8 @@ use std::sync::{Condvar, Mutex};
 
 use rayon::prelude::*;
 
+use super::runtime::{self, Duration, Instant};
+
 use crate::core::board::Board;
 
 use super::backtrack::{
@@ -74,7 +76,7 @@ fn expand_frontier<const MODULUS: usize>(
     data: &SolverData,
     piece_index: usize,
     width: usize,
-    deadline: Option<std::time::Instant>,
+    deadline: Option<Instant>,
 ) -> (Vec<FrontierState>, u64) {
     let likelihood = data
         .reverse_likelihood
@@ -89,7 +91,7 @@ fn expand_frontier<const MODULUS: usize>(
             let mut best = BinaryHeap::with_capacity(width.min(chunk.len() * MAX_PLACEMENTS) + 1);
             let mut nodes = 0u64;
             for (state_offset, state) in chunk.iter().enumerate() {
-                if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+                if runtime::cancelled() || deadline.is_some_and(|limit| Instant::now() >= limit) {
                     break;
                 }
                 let max_zero_cells =
@@ -164,7 +166,7 @@ fn expand_frontier<const MODULUS: usize>(
         })
         .collect();
     let nodes = batches.iter().map(|(_, nodes)| nodes).sum();
-    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+    if runtime::cancelled() || deadline.is_some_and(|limit| Instant::now() >= limit) {
         return (Vec::new(), nodes);
     }
 
@@ -206,7 +208,7 @@ fn likelihood_frontier<const MODULUS: usize>(
     data: &SolverData,
     width: usize,
     depth: usize,
-    deadline: Option<std::time::Instant>,
+    deadline: Option<Instant>,
 ) -> (Vec<SearchTask>, u64) {
     eprintln!("building region-guided frontier...");
     let mut states = vec![FrontierState {
@@ -265,6 +267,8 @@ struct WorkerContext<'a> {
     idle_count: &'a AtomicUsize,
     progress: &'a AtomicU64,
     exhaustive: bool,
+    #[cfg(target_arch = "wasm32")]
+    deadline: Option<Instant>,
 }
 
 impl WorkQueue {
@@ -309,7 +313,7 @@ impl WorkQueue {
             }
             let (resumed_queue, _) = self
                 .condvar
-                .wait_timeout(queue, std::time::Duration::from_millis(1))
+                .wait_timeout(queue, Duration::from_millis(1))
                 .unwrap();
             queue = resumed_queue;
         }
@@ -487,8 +491,25 @@ fn backtrack_with_stealing<const MODULUS: usize>(
     let mut nodes_until_split = NODES_BETWEEN_SPLITS;
     let mut found = false;
     let mut first_solution: Option<Vec<(usize, usize)>> = None;
+    #[cfg(target_arch = "wasm32")]
+    let mut until_deadline_check = 0usize;
 
     loop {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if until_deadline_check == 0 {
+                if runtime::cancelled()
+                    || context
+                        .deadline
+                        .is_some_and(|limit| Instant::now() >= limit)
+                {
+                    abort.store(true, Ordering::Relaxed);
+                    work_queue.condvar.notify_all();
+                }
+                until_deadline_check = 4096;
+            }
+            until_deadline_check -= 1;
+        }
         if abort.load(Ordering::Relaxed) {
             break;
         }
@@ -603,7 +624,7 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
     data: &SolverData,
     exhaustive: bool,
     guided_frontier: bool,
-    deadline: Option<std::time::Instant>,
+    deadline: Option<Instant>,
 ) -> SolveResult {
     let piece_count = data.placements.len();
 
@@ -630,7 +651,7 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         0
     };
 
-    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+    if runtime::cancelled() || deadline.is_some_and(|limit| Instant::now() >= limit) {
         return SolveResult {
             solution: None,
             nodes_visited: frontier_nodes,
@@ -638,9 +659,7 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         };
     }
 
-    let thread_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(4);
+    let thread_count = runtime::workers();
 
     let abort = AtomicBool::new(false);
     let first_solution: Mutex<Option<Vec<(usize, usize)>>> = Mutex::new(None);
@@ -657,7 +676,8 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         .product();
     eprintln!("search space: {:.3e}", total_space);
 
-    let solve_start = std::time::Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    let solve_start = Instant::now();
     let worker_context = WorkerContext {
         data,
         abort: &abort,
@@ -665,14 +685,64 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         idle_count: &idle_count,
         progress: &progress,
         exhaustive,
+        #[cfg(target_arch = "wasm32")]
+        deadline,
     };
 
+    let work = || {
+        let nodes = Cell::new(0u64);
+        let mut solution = Vec::with_capacity(piece_count);
+
+        loop {
+            if abort.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let task = work_queue.pop().or_else(|| {
+                idle_count.fetch_add(1, Ordering::Relaxed);
+                let task = work_queue.wait_for_task(&abort, &active_count);
+                idle_count.fetch_sub(1, Ordering::Relaxed);
+                task
+            });
+            let task = match task {
+                Some(task) => task,
+                None => break,
+            };
+            active_count.fetch_add(1, Ordering::SeqCst);
+
+            solution.clear();
+            solution.extend_from_slice(&task.solution_prefix);
+            nodes.set(0);
+
+            let found = backtrack_with_stealing::<MODULUS>(
+                task.position,
+                &mut solution,
+                &nodes,
+                &worker_context,
+            );
+
+            active_count.fetch_sub(1, Ordering::SeqCst);
+            total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
+
+            if found {
+                if !exhaustive {
+                    abort.store(true, Ordering::Relaxed);
+                }
+                let mut guard = first_solution.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(solution.clone());
+                }
+            }
+        }
+        workers_alive.fetch_sub(1, Ordering::Relaxed);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::scope(|scope| {
         scope.spawn(|| {
             let bar_width = 30;
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+                std::thread::sleep(Duration::from_millis(200));
+                if runtime::cancelled() || deadline.is_some_and(|limit| Instant::now() >= limit) {
                     abort.store(true, Ordering::Relaxed);
                     work_queue.condvar.notify_all();
                 }
@@ -700,55 +770,11 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         });
 
         for _ in 0..thread_count {
-            scope.spawn(|| {
-                let nodes = Cell::new(0u64);
-                let mut solution = Vec::with_capacity(piece_count);
-
-                loop {
-                    if abort.load(Ordering::Relaxed) {
-                        break;
-                    }
-
-                    let task = work_queue.pop().or_else(|| {
-                        idle_count.fetch_add(1, Ordering::Relaxed);
-                        let task = work_queue.wait_for_task(&abort, &active_count);
-                        idle_count.fetch_sub(1, Ordering::Relaxed);
-                        task
-                    });
-                    let task = match task {
-                        Some(task) => task,
-                        None => break,
-                    };
-                    active_count.fetch_add(1, Ordering::SeqCst);
-
-                    solution.clear();
-                    solution.extend_from_slice(&task.solution_prefix);
-                    nodes.set(0);
-
-                    let found = backtrack_with_stealing::<MODULUS>(
-                        task.position,
-                        &mut solution,
-                        &nodes,
-                        &worker_context,
-                    );
-
-                    active_count.fetch_sub(1, Ordering::SeqCst);
-                    total_nodes.fetch_add(nodes.get(), Ordering::Relaxed);
-
-                    if found {
-                        if !exhaustive {
-                            abort.store(true, Ordering::Relaxed);
-                        }
-                        let mut guard = first_solution.lock().unwrap();
-                        if guard.is_none() {
-                            *guard = Some(solution.clone());
-                        }
-                    }
-                }
-                workers_alive.fetch_sub(1, Ordering::Relaxed);
-            });
+            scope.spawn(work);
         }
     });
+    #[cfg(target_arch = "wasm32")]
+    runtime::for_each_worker(thread_count, |_| work());
 
     let first_solution = first_solution.into_inner().unwrap();
     let nodes_visited = total_nodes.load(Ordering::Relaxed);
