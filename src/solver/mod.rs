@@ -61,14 +61,7 @@ pub struct PreparedSearch {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn should_use_guided_frontier(game: &Game, parallel: bool, exhaustive: bool) -> bool {
-    let board = game.board();
-    // The tables are exponential in M and the large frontier only pays for
-    // itself at the current M=3, 10x11, 22-piece search boundary.
-    parallel
-        && !exhaustive
-        && board.m() == 3
-        && usize::from(board.height()) * usize::from(board.width()) == 110
-        && game.pieces().len() >= 22
+    parallel && !exhaustive && likelihood::ReverseLikelihood::can_precompute(game.board().m())
 }
 
 struct SolverData {
@@ -79,7 +72,6 @@ struct SolverData {
     small_component: pruning::SmallComponentBound,
     cell_set_bound: pruning::CellSetBound,
     anchor_placements: Vec<backtrack::AnchorPlacementData>,
-    monte_carlo: pruning::MonteCarloBounds,
     #[cfg(not(target_arch = "wasm32"))]
     reverse_likelihood: Option<likelihood::ReverseLikelihood>,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
@@ -108,20 +100,9 @@ pub fn prepare(game: &Game, parallel: bool, exhaustive: bool) -> PreparedSearch 
 
     let (board, piece_order, data) = prepare_search(game, guided_frontier);
     #[cfg(not(target_arch = "wasm32"))]
-    let adaptive = (parallel
-        && !exhaustive
-        && board.m() == 3
-        && usize::from(board.height()) * usize::from(board.width()) == 56)
-        .then(|| adaptive::AdaptiveSearch::precompute(game));
+    let adaptive = (parallel && !exhaustive).then(|| adaptive::AdaptiveSearch::precompute(game));
     #[cfg(not(target_arch = "wasm32"))]
-    let regional = (parallel
-        && !exhaustive
-        && match board.m() {
-            3 => usize::from(board.height()) * usize::from(board.width()) >= 100,
-            4 => usize::from(board.height()) * usize::from(board.width()) >= 64,
-            _ => false,
-        })
-    .then(|| regional::RegionalSearch::precompute(game));
+    let regional = (parallel && !exhaustive).then(|| regional::RegionalSearch::precompute(game));
     PreparedSearch {
         board,
         piece_order,
@@ -153,52 +134,44 @@ impl PreparedSearch {
             regional,
         } = self;
         let (parallel, exhaustive, guided_frontier) = (*parallel, *exhaustive, *guided_frontier);
-        let level_count = data.monte_carlo.level_count();
 
         let mut total_nodes = 0u64;
         #[cfg(not(target_arch = "wasm32"))]
         if adaptive.is_some() || regional.is_some() {
-            // Preserve the existing solver's quick wins before spending time on
-            // a different search tree. Share one deadline across bound levels.
+            // Preserve quick backtracking wins before exploring different trees.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            for level_index in 0..level_count {
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-                data.monte_carlo.select_level(level_index);
-                macro_rules! initial_search {
-                    ($m:literal) => {
-                        parallel::solve_parallel::<$m>(
-                            board,
-                            piece_order,
-                            data,
-                            false,
-                            false,
-                            Some(deadline),
-                        )
-                    };
-                }
-                let result = match data.modulus {
-                    2 => initial_search!(2),
-                    3 => initial_search!(3),
-                    4 => initial_search!(4),
-                    5 => initial_search!(5),
-                    _ => unreachable!(),
+            macro_rules! initial_search {
+                ($m:literal) => {
+                    parallel::solve_parallel::<$m>(
+                        board,
+                        piece_order,
+                        data,
+                        false,
+                        false,
+                        Some(deadline),
+                    )
                 };
-                total_nodes += result.nodes_visited;
-                if result.solution.is_some() {
-                    return SolveResult {
-                        nodes_visited: total_nodes,
-                        ..result
-                    };
-                }
+            }
+            let result = match data.modulus {
+                2 => initial_search!(2),
+                3 => initial_search!(3),
+                4 => initial_search!(4),
+                5 => initial_search!(5),
+                _ => unreachable!(),
+            };
+            total_nodes += result.nodes_visited;
+            if result.solution.is_some() {
+                return SolveResult {
+                    nodes_visited: total_nodes,
+                    ..result
+                };
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(adaptive) = adaptive {
             let workers = std::thread::available_parallelism().map_or(1, usize::from);
-            eprintln!("adaptive search: {workers} workers, 30s budget");
-            let (solution, nodes) = adaptive.solve(std::time::Duration::from_secs(30), workers);
+            eprintln!("adaptive search: {workers} workers, 25s budget");
+            let (solution, nodes) = adaptive.solve(std::time::Duration::from_secs(25), workers);
             total_nodes += nodes;
             if solution.is_some() {
                 return SolveResult {
@@ -211,8 +184,8 @@ impl PreparedSearch {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(regional) = regional {
             let workers = std::thread::available_parallelism().map_or(1, usize::from);
-            eprintln!("regional search: {workers} workers, 30s budget");
-            let (solution, nodes) = regional.solve(std::time::Duration::from_secs(30), workers);
+            eprintln!("regional search: {workers} workers, 25s budget");
+            let (solution, nodes) = regional.solve(std::time::Duration::from_secs(25), workers);
             total_nodes += nodes;
             if solution.is_some() {
                 return SolveResult {
@@ -224,17 +197,11 @@ impl PreparedSearch {
         }
         let mut last_progress = 0.0;
         let mut first_solution: Option<Solution> = None;
-        let attempt_count = level_count + usize::from(guided_frontier);
+        let attempt_count = 1 + usize::from(guided_frontier);
         for attempt_index in 0..attempt_count {
             let is_guided_attempt = guided_frontier && attempt_index == 0;
-            let level_index = if is_guided_attempt {
-                // Let the spatial model choose the prefix; a percentile envelope
-                // here can discard it before the ranking has any effect.
-                level_count - 1
-            } else {
-                attempt_index - usize::from(guided_frontier)
-            };
-            data.monte_carlo.select_level(level_index);
+            #[cfg(target_arch = "wasm32")]
+            let _ = is_guided_attempt;
             macro_rules! dispatch {
                 ($m:literal) => {{
                     if parallel {
@@ -246,7 +213,11 @@ impl PreparedSearch {
                                 data,
                                 exhaustive,
                                 is_guided_attempt,
-                                None,
+                                // Leave time for root backtracking when the
+                                // ranked prefix does not lead to a solution.
+                                is_guided_attempt.then(|| {
+                                    std::time::Instant::now() + std::time::Duration::from_secs(30)
+                                }),
                             )
                         }
                         #[cfg(target_arch = "wasm32")]
@@ -377,7 +348,6 @@ fn backtrack_for_modulus(
             backtrack::backtrack::<$m>(
                 backtrack::SearchPosition {
                     board: *board,
-                    hits: pruning::HitCounter::new(),
                     piece_index: 0,
                     previous_placement: usize::MAX,
                 },
@@ -453,19 +423,21 @@ mod tests {
 
         let mut rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(50_101);
         let game = crate::generate::generate_for_level(50, &mut rng).unwrap();
-        let (board, piece_order, data) = prepare_search(&game, false);
-        let start = Instant::now();
-        let result = parallel::solve_parallel::<3>(
-            &board,
-            &piece_order,
-            &data,
-            false,
-            false,
-            Some(start + Duration::from_millis(10)),
-        );
-        assert!(start.elapsed() < Duration::from_secs(5));
-        if let Some(solution) = result.solution {
-            verify_solution(&game, &solution);
+        let (board, piece_order, data) = prepare_search(&game, true);
+        for guided in [false, true] {
+            let start = Instant::now();
+            let result = parallel::solve_parallel::<3>(
+                &board,
+                &piece_order,
+                &data,
+                false,
+                guided,
+                Some(start + Duration::from_millis(10)),
+            );
+            assert!(start.elapsed() < Duration::from_secs(5));
+            if let Some(solution) = result.solution {
+                verify_solution(&game, &solution);
+            }
         }
     }
 

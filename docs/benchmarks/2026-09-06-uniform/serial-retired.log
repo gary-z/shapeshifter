@@ -1,0 +1,35 @@
+=== serial-level40-120s-offset100.txt ===
+Benchmarking levels 40-40, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+40       100   18     6x6/M3        160918076    134.000ms      17.176s OK
+40       101   18     6x6/M3          7248998    134.000ms    802.000ms OK
+40       102   18     6x6/M3           420703    126.000ms     40.000ms OK
+40       103   18     6x6/M3         14309068    125.000ms       1.429s OK
+40       104   18     6x6/M3                -    118.000ms        >120s TIMEOUT
+
+Level    OK      Rate    Board
+-----------------------------------
+40        4/5       80%  6x6/M3
+
+4 ok, 0 fail, 1 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.
+
+=== serial-level51-120s-offset100.txt ===
+Benchmarking levels 51-51, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+51       100   16     8x8/M2         87280234       1.184s       3.802s OK
+51       101   16     8x8/M2        342232389       1.233s      13.250s OK
+51       102   16     8x8/M2          3417226       1.191s    157.000ms OK
+51       103   16     8x8/M2          4450063       1.193s    164.000ms OK
+51       104   16     8x8/M2        209659810       1.242s      11.113s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+51        5/5      100%  8x8/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 51
+Every tested level achieved at least 50% success.

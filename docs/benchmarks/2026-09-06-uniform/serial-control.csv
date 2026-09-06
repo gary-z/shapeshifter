@@ -1,0 +1,11 @@
+level,game_index,seed,board,pieces,status,preparation_ms,search_ms,search_budget_ms,work_units,source_log
+40,100,40100,6x6/M3,18,OK,375,18527,120000,159768019,serial-level40-120s-offset100.txt
+40,101,40101,6x6/M3,18,OK,409,1440,120000,11865851,serial-level40-120s-offset100.txt
+40,102,40102,6x6/M3,18,OK,390,40,120000,395531,serial-level40-120s-offset100.txt
+40,103,40103,6x6/M3,18,OK,403,1607,120000,14154608,serial-level40-120s-offset100.txt
+40,104,40104,6x6/M3,18,TIMEOUT,412,,120000,,serial-level40-120s-offset100.txt
+51,100,51100,8x8/M2,16,OK,1489,4084,120000,80324997,serial-level51-120s-offset100.txt
+51,101,51101,8x8/M2,16,OK,1524,14973,120000,323493531,serial-level51-120s-offset100.txt
+51,102,51102,8x8/M2,16,OK,1471,159,120000,3042284,serial-level51-120s-offset100.txt
+51,103,51103,8x8/M2,16,OK,1470,166,120000,3813456,serial-level51-120s-offset100.txt
+51,104,51104,8x8/M2,16,OK,1523,11968,120000,196893073,serial-level51-120s-offset100.txt

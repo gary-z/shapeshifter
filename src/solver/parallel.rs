@@ -6,19 +6,19 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
+use rayon::prelude::*;
+
 use crate::core::board::Board;
 
 use super::backtrack::{
     MAX_PLACEMENTS, SearchPosition, next_previous_placement, rank_low_zero_hit_placements,
     rank_placements, solve_single_cell_suffix,
 };
-use super::pruning::HitCounter;
 use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_is_feasible};
 use super::{SolveResult, SolverData, format_count, restore_piece_order};
 
 struct SearchFrame {
     board: Board,
-    hits: HitCounter,
     piece_index: usize,
     ranked_indices: [u8; MAX_PLACEMENTS],
     candidate_count: u8,
@@ -38,27 +38,29 @@ struct FrontierState {
     placement_indices: [u8; MAX_PIECES],
 }
 
-struct ScoredFrontierState {
+/// Keep only a placement descriptor while ranking a layer. Materialize boards
+/// for the globally retained candidates after merging the workers' best lists.
+struct FrontierCandidate {
     score: i32,
     serial: u64,
-    state: FrontierState,
+    placement_index: u8,
 }
 
-impl PartialEq for ScoredFrontierState {
+impl PartialEq for FrontierCandidate {
     fn eq(&self, other: &Self) -> bool {
         (self.score, self.serial) == (other.score, other.serial)
     }
 }
 
-impl Eq for ScoredFrontierState {}
+impl Eq for FrontierCandidate {}
 
-impl PartialOrd for ScoredFrontierState {
+impl PartialOrd for FrontierCandidate {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ScoredFrontierState {
+impl Ord for FrontierCandidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.score, self.serial).cmp(&(other.score, other.serial))
     }
@@ -67,19 +69,149 @@ impl Ord for ScoredFrontierState {
 const GUIDED_FRONTIER_WIDTH: usize = 200_000;
 const GUIDED_FRONTIER_DEPTH: usize = 8;
 
-fn likelihood_frontier<const MODULUS: usize>(
-    board: &Board,
+fn expand_frontier<const MODULUS: usize>(
+    states: &[FrontierState],
     data: &SolverData,
-) -> (Vec<SearchTask>, u64) {
-    eprintln!("building region-guided frontier...");
+    piece_index: usize,
+    width: usize,
+    deadline: Option<std::time::Instant>,
+) -> (Vec<FrontierState>, u64) {
     let likelihood = data
         .reverse_likelihood
         .as_ref()
         .expect("guided frontier requires likelihood precomputation");
+    let placements = &data.placements[piece_index];
+    let chunk_size = states.len().div_ceil(rayon::current_num_threads());
+    let batches: Vec<_> = states
+        .par_chunks(chunk_size)
+        .enumerate()
+        .map(|(chunk_index, chunk)| {
+            let mut best = BinaryHeap::with_capacity(width.min(chunk.len() * MAX_PLACEMENTS) + 1);
+            let mut nodes = 0u64;
+            for (state_offset, state) in chunk.iter().enumerate() {
+                if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+                    break;
+                }
+                let max_zero_cells =
+                    max_zero_cells_allowed::<MODULUS>(&state.position.board, data, piece_index);
+                let mut ranked_indices = [0u8; MAX_PLACEMENTS];
+                let ranked_count = if max_zero_cells <= 2 {
+                    rank_low_zero_hit_placements(
+                        &state.position.board,
+                        data.modulus,
+                        placements,
+                        &data.anchor_placements[piece_index],
+                        max_zero_cells,
+                        &mut ranked_indices,
+                    )
+                } else {
+                    rank_placements(
+                        &state.position.board,
+                        data.modulus,
+                        placements,
+                        max_zero_cells,
+                        &mut ranked_indices,
+                    )
+                };
+                let mut scores = [0i32; MAX_PLACEMENTS];
+                likelihood.score_placements(
+                    &state.position.board,
+                    piece_index,
+                    &ranked_indices[..ranked_count],
+                    &mut scores,
+                );
+
+                for (rank, &placement_index) in ranked_indices[..ranked_count].iter().enumerate() {
+                    let placement_index = placement_index as usize;
+                    if !is_canonical_placement_pair(
+                        data,
+                        piece_index,
+                        placement_index,
+                        state.position.previous_placement,
+                    ) {
+                        continue;
+                    }
+
+                    nodes += 1;
+                    let (_, _, mask) = placements[placement_index];
+                    let mut child_board = state.position.board;
+                    child_board.apply_piece(mask);
+                    let next_piece_index = piece_index + 1;
+                    if next_piece_index < data.placements.len()
+                        && !state_is_feasible::<MODULUS>(&child_board, data, next_piece_index)
+                    {
+                        continue;
+                    }
+
+                    // Parent order and placement rank preserve the serial search's
+                    // tie order, independently of which worker finishes first.
+                    let parent_index = chunk_index * chunk_size + state_offset;
+                    let candidate = FrontierCandidate {
+                        score: scores[placement_index],
+                        serial: (parent_index * MAX_PLACEMENTS + rank) as u64,
+                        placement_index: placement_index as u8,
+                    };
+                    if best.len() == width && best.peek().is_some_and(|worst| candidate >= *worst) {
+                        continue;
+                    }
+                    best.push(candidate);
+                    if best.len() > width {
+                        best.pop();
+                    }
+                }
+            }
+            (best.into_vec(), nodes)
+        })
+        .collect();
+    let nodes = batches.iter().map(|(_, nodes)| nodes).sum();
+    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+        return (Vec::new(), nodes);
+    }
+
+    // A global top-W candidate must be in its worker's top W. Merge all local
+    // lists before truncating, so no partition gets a fixed share of the beam.
+    let mut best: Vec<_> = batches
+        .into_iter()
+        .flat_map(|(entries, _)| entries)
+        .collect();
+    if best.len() > width {
+        best.select_nth_unstable(width);
+        best.truncate(width);
+    }
+    best.sort_unstable();
+    let next_states = best
+        .into_iter()
+        .map(|candidate| {
+            let parent = &states[candidate.serial as usize / MAX_PLACEMENTS];
+            let placement_index = candidate.placement_index as usize;
+            let mut position = parent.position;
+            let mask = placements[placement_index].2;
+            position.board.apply_piece(mask);
+            position.piece_index = piece_index + 1;
+            position.previous_placement =
+                next_previous_placement(data, piece_index, placement_index);
+            let mut placement_indices = parent.placement_indices;
+            placement_indices[piece_index] = candidate.placement_index;
+            FrontierState {
+                position,
+                placement_indices,
+            }
+        })
+        .collect();
+    (next_states, nodes)
+}
+
+fn likelihood_frontier<const MODULUS: usize>(
+    board: &Board,
+    data: &SolverData,
+    width: usize,
+    depth: usize,
+    deadline: Option<std::time::Instant>,
+) -> (Vec<SearchTask>, u64) {
+    eprintln!("building region-guided frontier...");
     let mut states = vec![FrontierState {
         position: SearchPosition {
             board: *board,
-            hits: HitCounter::new(),
             piece_index: 0,
             previous_placement: usize::MAX,
         },
@@ -87,105 +219,11 @@ fn likelihood_frontier<const MODULUS: usize>(
     }];
     let mut nodes = 0u64;
 
-    for piece_index in 0..GUIDED_FRONTIER_DEPTH.min(data.placements.len()) {
-        let mut best = BinaryHeap::with_capacity(GUIDED_FRONTIER_WIDTH + 1);
-        let mut serial = 0u64;
-        for state in states {
-            let placements = &data.placements[piece_index];
-            let max_zero_cells =
-                max_zero_cells_allowed::<MODULUS>(&state.position.board, data, piece_index);
-            let mut ranked_indices = [0u8; MAX_PLACEMENTS];
-            let ranked_count = if max_zero_cells <= 2 {
-                rank_low_zero_hit_placements(
-                    &state.position.board,
-                    data.modulus,
-                    placements,
-                    &data.anchor_placements[piece_index],
-                    max_zero_cells,
-                    &mut ranked_indices,
-                )
-            } else {
-                rank_placements(
-                    &state.position.board,
-                    data.modulus,
-                    placements,
-                    max_zero_cells,
-                    &mut ranked_indices,
-                )
-            };
-            let mut scores = [0i32; MAX_PLACEMENTS];
-            likelihood.score_placements(
-                &state.position.board,
-                piece_index,
-                &ranked_indices[..ranked_count],
-                &mut scores,
-            );
-
-            for &placement_index in &ranked_indices[..ranked_count] {
-                let placement_index = placement_index as usize;
-                if !is_canonical_placement_pair(
-                    data,
-                    piece_index,
-                    placement_index,
-                    state.position.previous_placement,
-                ) {
-                    continue;
-                }
-
-                nodes += 1;
-                let (_, _, mask) = placements[placement_index];
-                let mut child_board = state.position.board;
-                child_board.apply_piece(mask);
-                let mut child_hits = state.position.hits;
-                child_hits.apply_piece(mask);
-                let next_piece_index = piece_index + 1;
-                if data
-                    .monte_carlo
-                    .exceeds_hit_threshold(&child_hits, next_piece_index)
-                    || (next_piece_index < data.placements.len()
-                        && !state_is_feasible::<MODULUS>(&child_board, data, next_piece_index))
-                {
-                    continue;
-                }
-
-                let score = scores[placement_index];
-                serial += 1;
-                if best.len() == GUIDED_FRONTIER_WIDTH
-                    && best.peek().is_some_and(|worst: &ScoredFrontierState| {
-                        (score, serial) >= (worst.score, worst.serial)
-                    })
-                {
-                    continue;
-                }
-                let mut placement_indices = state.placement_indices;
-                placement_indices[piece_index] = placement_index as u8;
-                best.push(ScoredFrontierState {
-                    score,
-                    serial,
-                    state: FrontierState {
-                        position: SearchPosition {
-                            board: child_board,
-                            hits: child_hits,
-                            piece_index: next_piece_index,
-                            previous_placement: next_previous_placement(
-                                data,
-                                piece_index,
-                                placement_index,
-                            ),
-                        },
-                        placement_indices,
-                    },
-                });
-                if best.len() > GUIDED_FRONTIER_WIDTH {
-                    best.pop();
-                }
-            }
-        }
-        states = best
-            .into_sorted_vec()
-            .into_iter()
-            .map(|entry| entry.state)
-            .collect();
+    for piece_index in 0..depth.min(data.placements.len()) {
+        let (next_states, layer_nodes) =
+            expand_frontier::<MODULUS>(&states, data, piece_index, width, deadline);
+        nodes += layer_nodes;
+        states = next_states;
         if states.is_empty() {
             break;
         }
@@ -280,7 +318,6 @@ impl WorkQueue {
 
 fn build_search_frame<const MODULUS: usize>(
     board: &Board,
-    hits: HitCounter,
     data: &SolverData,
     piece_index: usize,
     previous_placement: usize,
@@ -320,7 +357,6 @@ fn build_search_frame<const MODULUS: usize>(
 
     SearchFrame {
         board: *board,
-        hits,
         piece_index,
         ranked_indices,
         candidate_count,
@@ -346,8 +382,6 @@ fn split_work(
             let mask = data.placements[frame.piece_index][placement_index].2;
             let mut board = frame.board;
             board.apply_piece(mask);
-            let mut hits = frame.hits;
-            hits.apply_piece(mask);
             let next_piece_index = frame.piece_index + 1;
             let prefix_length = base_solution_length + stack_index;
             let mut task_solution = solution_prefix[..prefix_length].to_vec();
@@ -358,7 +392,6 @@ fn split_work(
             tasks.push(SearchTask {
                 position: SearchPosition {
                     board,
-                    hits,
                     piece_index: next_piece_index,
                     previous_placement,
                 },
@@ -397,7 +430,6 @@ fn backtrack_with_stealing<const MODULUS: usize>(
 ) -> bool {
     let SearchPosition {
         board: initial_board,
-        hits: initial_hits,
         piece_index: start_piece_index,
         previous_placement: initial_previous_placement,
     } = initial_position;
@@ -442,7 +474,6 @@ fn backtrack_with_stealing<const MODULUS: usize>(
     let mut stack: Vec<SearchFrame> = Vec::with_capacity(piece_count - start_piece_index);
     let first_frame = build_search_frame::<MODULUS>(
         &initial_board,
-        initial_hits,
         data,
         start_piece_index,
         initial_previous_placement,
@@ -478,17 +509,6 @@ fn backtrack_with_stealing<const MODULUS: usize>(
 
         let mut board = frame.board;
         board.apply_piece(mask);
-
-        let mut hits_after_placement = frame.hits;
-        hits_after_placement.apply_piece(mask);
-        if data
-            .monte_carlo
-            .exceeds_hit_threshold(&hits_after_placement, piece_index + 1)
-        {
-            accumulated_progress += data.progress_weights[piece_index];
-            nodes.set(nodes.get() + 1);
-            continue;
-        }
 
         let solution_depth = base_solution_length + stack.len() - 1;
         solution.truncate(solution_depth);
@@ -557,13 +577,8 @@ fn backtrack_with_stealing<const MODULUS: usize>(
         }
 
         let previous_placement = next_previous_placement(data, piece_index, placement_index);
-        let next_frame = build_search_frame::<MODULUS>(
-            &board,
-            hits_after_placement,
-            data,
-            next_piece_index,
-            previous_placement,
-        );
+        let next_frame =
+            build_search_frame::<MODULUS>(&board, data, next_piece_index, previous_placement);
         accumulated_progress +=
             next_frame.skipped_count as f64 * data.progress_weights[next_piece_index];
         nodes.set(nodes.get() + next_frame.skipped_count as u64);
@@ -594,14 +609,19 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
 
     let work_queue = WorkQueue::new();
     let frontier_nodes = if guided_frontier {
-        let (tasks, nodes) = likelihood_frontier::<MODULUS>(board, data);
+        let (tasks, nodes) = likelihood_frontier::<MODULUS>(
+            board,
+            data,
+            GUIDED_FRONTIER_WIDTH,
+            GUIDED_FRONTIER_DEPTH,
+            deadline,
+        );
         work_queue.push_many(tasks);
         nodes
     } else {
         work_queue.push(SearchTask {
             position: SearchPosition {
                 board: *board,
-                hits: HitCounter::new(),
                 piece_index: 0,
                 previous_placement: usize::MAX,
             },
@@ -609,6 +629,14 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         });
         0
     };
+
+    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+        return SolveResult {
+            solution: None,
+            nodes_visited: frontier_nodes,
+            progress: 0.0,
+        };
+    }
 
     let thread_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
@@ -734,5 +762,62 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
         solution,
         nodes_visited,
         progress: final_progress,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::piece::Piece;
+    use crate::game::Game;
+
+    fn compare_frontiers<const MODULUS: usize>() {
+        let row: &[u8] = &[1; 4];
+        let board = Board::from_grid(&[row; 4], MODULUS as u8);
+        let single_cell = Piece::from_grid(&[&[true]]);
+        let game = Game::new(board, vec![single_cell; 16]);
+        let (board, _, data) = super::super::prepare_search(&game, true);
+        let serial = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let parallel = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        for width in [1, 7, 32] {
+            let (expected, expected_nodes) =
+                serial.install(|| likelihood_frontier::<MODULUS>(&board, &data, width, 4, None));
+            let (actual, actual_nodes) =
+                parallel.install(|| likelihood_frontier::<MODULUS>(&board, &data, width, 4, None));
+            assert!(!expected.is_empty());
+            assert_eq!(expected_nodes, actual_nodes);
+            assert_eq!(expected.len(), actual.len());
+            for (expected, actual) in expected.iter().zip(actual) {
+                assert_eq!(expected.solution_prefix, actual.solution_prefix);
+                assert!(expected.position.board == actual.position.board);
+                let mut replay = board;
+                for (piece_index, &(row, column)) in expected.solution_prefix.iter().enumerate() {
+                    let mask = data.placements[piece_index]
+                        .iter()
+                        .find(|&&(r, c, _)| (r, c) == (row, column))
+                        .unwrap()
+                        .2;
+                    replay.apply_piece(mask);
+                }
+                assert!(replay == expected.position.board);
+                assert_eq!(expected.position.piece_index, actual.position.piece_index);
+                assert_eq!(
+                    expected.position.previous_placement,
+                    actual.position.previous_placement
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_keeps_global_ranking_across_worker_counts() {
+        compare_frontiers::<2>();
+        compare_frontiers::<3>();
     }
 }

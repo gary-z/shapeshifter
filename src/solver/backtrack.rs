@@ -4,7 +4,6 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 
 use super::SolverData;
-use super::pruning::HitCounter;
 use super::pruning::{is_canonical_placement_pair, max_zero_cells_allowed, state_is_feasible};
 
 pub(super) const MAX_PLACEMENTS: usize = 196;
@@ -48,7 +47,6 @@ impl AnchorPlacementData {
 #[derive(Clone, Copy)]
 pub(super) struct SearchPosition {
     pub(super) board: Board,
-    pub(super) hits: HitCounter,
     pub(super) piece_index: usize,
     pub(super) previous_placement: usize,
 }
@@ -332,7 +330,6 @@ pub(super) fn backtrack<const MODULUS: usize>(
 ) -> bool {
     let SearchPosition {
         board,
-        hits,
         piece_index,
         previous_placement,
     } = position;
@@ -395,15 +392,6 @@ pub(super) fn backtrack<const MODULUS: usize>(
         let mut board_after_placement = board;
         board_after_placement.apply_piece(mask);
 
-        let mut hits_after_placement = hits;
-        hits_after_placement.apply_piece(mask);
-        if data
-            .monte_carlo
-            .exceeds_hit_threshold(&hits_after_placement, piece_index + 1)
-        {
-            continue;
-        }
-
         solution.push((placements[placement_index].0, placements[placement_index].1));
 
         let previous_placement = next_previous_placement(data, piece_index, placement_index);
@@ -411,7 +399,6 @@ pub(super) fn backtrack<const MODULUS: usize>(
         if backtrack::<MODULUS>(
             SearchPosition {
                 board: board_after_placement,
-                hits: hits_after_placement,
                 piece_index: piece_index + 1,
                 previous_placement,
             },
