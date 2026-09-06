@@ -2,7 +2,9 @@
 
 A web and command-line solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), the Neopets placement puzzle.
 
-- [Open the browser solver](https://gary-z.github.io/shapeshifter/) (single-threaded WebAssembly)
+- [Open the browser solver](https://gary-z.github.io/shapeshifter/)
+- Browser search uses all reported CPU cores when hosted with cross-origin isolation;
+  GitHub Pages falls back to one worker. See [browser hosting](docs/browser.md).
 - Use the native CLI for parallel search and HTML solution guides
 
 ## Quick start
@@ -66,6 +68,12 @@ at levels 50 and 80. Every case has a 120-second search cap, excluding
 preparation. It includes matched Monte Carlo controls, the accepted regression
 at one level-68 seed, raw timings, and reproduction details.
 
+The [browser benchmark report](docs/benchmarks/2026-09-06-browser/README.md)
+records 45/50 browser solves with 32 workers, matching native's outcome on every
+seed in that sample. Every selected level scored at least 3/5 within the same
+120-second search cap. The report includes browser/native timings and hosting
+requirements; it covers ten selected levels with five seeds each.
+
 ## Game model
 
 - Boards are 3–14 rows by 3–14 columns.
@@ -76,7 +84,7 @@ at one level-68 seed, raw timings, and reproduction details.
 
 ## Solver design
 
-Native parallel, non-exhaustive solves use the same schedule for every board:
+Native parallel and browser solves use the same schedule for every board:
 five seconds of the existing backtracker, 25 seconds of adaptive backtracking,
 and 25 seconds of regional inference, followed by fallback search. Each phase uses all available
 workers on the same game and stops as soon as a solution is found.
@@ -100,13 +108,15 @@ See [the algorithm notes](docs/search-algorithms.md) for the exact filtering
 invariants and the inference model.
 
 Backtracking orders pieces by placement count and shape constraints.
-Native backtracking distributes branches through a shared work queue; the
-WebAssembly build uses the same serial search as the CLI's default mode.
+Parallel backtracking distributes branches through a shared work queue on both
+native and WebAssembly. The browser uses a reusable Web Worker pool with shared
+WASM memory; preparation and search run off the UI thread. Without isolation
+headers, a single worker runs the same search methods and phase budgets.
 
 Monte Carlo trajectory sampling, per-cell hit counters, and percentile retries
 have been removed. Backtracking uses exact bounds throughout.
 
-Native parallel fallback also builds a 200,000-state guided frontier through the
+Parallel fallback also builds a 200,000-state guided frontier through the
 first eight pieces when its 3x3 windows fit a budget of 32,768 states per window
 (`M^9`). This limit applies equally to every board size and piece count.
 Exact suffix distributions on small overlapping regions
@@ -164,4 +174,12 @@ rustup target add wasm32-unknown-unknown
 ./web/build.sh
 ```
 
-The repository pins Rust in `rust-toolchain` and `wasm-pack` in `web/.wasm-pack-version`. `web/build.sh` installs the pinned `wasm-pack` version when needed and writes the generated package to `web/pkg/`. Serve the repository root with a static HTTP server to test `index.html` locally.
+The repository pins Rust in `rust-toolchain` and `wasm-pack` in `web/.wasm-pack-version`.
+`web/build.sh` installs the pinned `wasm-pack` and Rust sources when needed, and
+builds both `web/pkg/` (single worker) and `web/pkg-threaded/` (shared memory).
+Both generated packages are committed and checked by CI.
+
+Run `python3 web/serve.py` and open `http://127.0.0.1:8000/` to test parallel
+browser search locally. A plain static server without isolation headers uses
+the single-worker fallback. See [browser development and hosting](docs/browser.md)
+for Cloudflare Pages setup, browser tests, and performance measurements.

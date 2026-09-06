@@ -5,9 +5,9 @@
 //! ordering; they never remove a placement. Workers vary that ordering and use
 //! growing restart budgets. Returned solutions are checked independently.
 
+use super::runtime::{self, Duration, Instant};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use rand::{RngExt, SeedableRng};
 
@@ -104,25 +104,20 @@ impl AdaptiveSearch {
             solution: Mutex::new(None),
             nodes: AtomicU64::new(0),
         };
-        std::thread::scope(|scope| {
-            for id in 0..workers {
-                let shared = &shared;
-                scope.spawn(move || {
-                    Worker {
-                        data: self,
-                        shared,
-                        rng: rand_mt::Mt64::new(1_234_567 + id as u64 * 99_991),
-                        exploration_rng: rand::rngs::SmallRng::seed_from_u64(
-                            1_234_567 + id as u64 * 99_991,
-                        ),
-                        id,
-                        restart: 0,
-                        nodes: 0,
-                        limit: 0,
-                    }
-                    .run();
-                });
+        runtime::for_each_worker(workers, |id| {
+            Worker {
+                data: self,
+                shared: &shared,
+                rng: rand_mt::Mt64::new(1_234_567 + id as u64 * 99_991),
+                exploration_rng: rand::rngs::SmallRng::seed_from_u64(
+                    1_234_567 + id as u64 * 99_991,
+                ),
+                id,
+                restart: 0,
+                nodes: 0,
+                limit: 0,
             }
+            .run();
         });
         (
             shared.solution.into_inner().unwrap(),
@@ -350,7 +345,9 @@ impl Worker<'_> {
     }
 
     fn interrupted(&self) -> bool {
-        self.shared.stop.load(Ordering::Relaxed) || Instant::now() >= self.shared.deadline
+        runtime::cancelled()
+            || self.shared.stop.load(Ordering::Relaxed)
+            || Instant::now() >= self.shared.deadline
     }
 
     fn search(&mut self, mut domains: Domains) -> bool {

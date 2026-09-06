@@ -1,4 +1,5 @@
 /target
+/dist
 data/ShapeShifter.html
 data/ShapeShifter.mhtml
 data/ShapeShifter_files/
@@ -10,3 +11,6 @@ __pycache__/
 web/pkg/package.json
 web/pkg/README.md
 web/pkg/*.d.ts
+web/pkg-threaded/package.json
+web/pkg-threaded/README.md
+web/pkg-threaded/*.d.ts

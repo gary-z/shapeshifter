@@ -5,10 +5,10 @@
 //! region partition and the choices, so a mistaken decimation is reversible.
 //! This is a heuristic search; only replayed, exact solutions are returned.
 
+use super::runtime::{self, Duration, Instant};
 use std::ops::{Add, Mul};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 
 use rand::{RngExt, SeedableRng};
 
@@ -289,12 +289,7 @@ impl RegionalSearch {
             nodes: AtomicU64::new(0),
             next_attempt: AtomicUsize::new(0),
         };
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                let shared = &shared;
-                scope.spawn(move || self.worker(shared));
-            }
-        });
+        runtime::for_each_worker(workers, |_| self.worker(&shared));
         (
             shared.solution.into_inner().unwrap(),
             shared.nodes.into_inner(),
@@ -429,7 +424,10 @@ impl RegionalSearch {
         let partition_count = self.partitions.iter().map(Vec::len).sum::<usize>();
         let configuration_count = partition_count * 5;
         let mut nodes = 0;
-        while Instant::now() < shared.deadline && !shared.stop.load(Ordering::Relaxed) {
+        while !runtime::cancelled()
+            && Instant::now() < shared.deadline
+            && !shared.stop.load(Ordering::Relaxed)
+        {
             // Cover every partition/damping pair before revisiting one. Fast
             // attempts take more work from this counter, so a slow region
             // partition cannot strand a search family on one worker.
@@ -463,7 +461,10 @@ impl RegionalSearch {
                 .collect::<Vec<_>>();
             let mut fixed = vec![None; self.options.len()];
             for iteration in 0..600usize {
-                if Instant::now() >= shared.deadline || shared.stop.load(Ordering::Relaxed) {
+                if runtime::cancelled()
+                    || Instant::now() >= shared.deadline
+                    || shared.stop.load(Ordering::Relaxed)
+                {
                     break;
                 }
                 nodes += 1;

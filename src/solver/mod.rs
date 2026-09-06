@@ -1,14 +1,13 @@
-#[cfg(not(target_arch = "wasm32"))]
 mod adaptive;
 mod backtrack;
-#[cfg(not(target_arch = "wasm32"))]
 mod likelihood;
-#[cfg(not(target_arch = "wasm32"))]
 mod parallel;
 mod precompute;
 mod pruning;
-#[cfg(not(target_arch = "wasm32"))]
 mod regional;
+pub(crate) mod runtime;
+
+use runtime::{Duration, Instant};
 
 use std::cell::Cell;
 
@@ -16,7 +15,6 @@ use crate::core::bitboard::Bitboard;
 use crate::core::board::Board;
 use crate::game::Game;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn format_count(count: u64) -> String {
     if count >= 1_000_000_000 {
         format!("{:.1}B nodes", count as f64 / 1e9)
@@ -53,13 +51,10 @@ pub struct PreparedSearch {
     parallel: bool,
     exhaustive: bool,
     guided_frontier: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     adaptive: Option<adaptive::AdaptiveSearch>,
-    #[cfg(not(target_arch = "wasm32"))]
     regional: Option<regional::RegionalSearch>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn should_use_guided_frontier(game: &Game, parallel: bool, exhaustive: bool) -> bool {
     parallel && !exhaustive && likelihood::ReverseLikelihood::can_precompute(game.board().m())
 }
@@ -72,14 +67,12 @@ struct SolverData {
     small_component: pruning::SmallComponentBound,
     cell_set_bound: pruning::CellSetBound,
     anchor_placements: Vec<backtrack::AnchorPlacementData>,
-    #[cfg(not(target_arch = "wasm32"))]
     reverse_likelihood: Option<likelihood::ReverseLikelihood>,
     equivalent_pair_skips: Vec<Option<Vec<bool>>>,
     single_cell_suffix_start: usize,
     modulus: u8,
     height: u8,
     width: u8,
-    #[cfg(not(target_arch = "wasm32"))]
     progress_weights: Vec<f64>,
 }
 
@@ -93,15 +86,10 @@ pub fn solve(game: &Game, parallel: bool, exhaustive: bool) -> SolveResult {
 
 /// Build placement tables and bounds without exploring the search tree.
 pub fn prepare(game: &Game, parallel: bool, exhaustive: bool) -> PreparedSearch {
-    #[cfg(not(target_arch = "wasm32"))]
     let guided_frontier = should_use_guided_frontier(game, parallel, exhaustive);
-    #[cfg(target_arch = "wasm32")]
-    let guided_frontier = false;
 
     let (board, piece_order, data) = prepare_search(game, guided_frontier);
-    #[cfg(not(target_arch = "wasm32"))]
     let adaptive = (parallel && !exhaustive).then(|| adaptive::AdaptiveSearch::precompute(game));
-    #[cfg(not(target_arch = "wasm32"))]
     let regional = (parallel && !exhaustive).then(|| regional::RegionalSearch::precompute(game));
     PreparedSearch {
         board,
@@ -110,9 +98,7 @@ pub fn prepare(game: &Game, parallel: bool, exhaustive: bool) -> PreparedSearch 
         parallel,
         exhaustive,
         guided_frontier,
-        #[cfg(not(target_arch = "wasm32"))]
         adaptive,
-        #[cfg(not(target_arch = "wasm32"))]
         regional,
     }
 }
@@ -121,6 +107,22 @@ impl PreparedSearch {
     /// Search using the prepared tables. Guided frontier construction is search
     /// work and is deliberately included here, rather than in preparation.
     pub fn solve(&self) -> SolveResult {
+        self.solve_until(None)
+    }
+
+    #[cfg(feature = "wasm")]
+    pub(crate) fn solve_with_budget(&self, budget: Duration) -> SolveResult {
+        self.solve_until(Some(Instant::now() + budget))
+    }
+
+    fn solve_until(&self, overall_deadline: Option<Instant>) -> SolveResult {
+        let phase_deadline = |seconds| {
+            let limit = Instant::now() + Duration::from_secs(seconds);
+            overall_deadline.map_or(limit, |overall| overall.min(limit))
+        };
+        let stopped = || {
+            runtime::cancelled() || overall_deadline.is_some_and(|limit| Instant::now() >= limit)
+        };
         let Self {
             board,
             piece_order,
@@ -128,18 +130,29 @@ impl PreparedSearch {
             parallel,
             exhaustive,
             guided_frontier,
-            #[cfg(not(target_arch = "wasm32"))]
             adaptive,
-            #[cfg(not(target_arch = "wasm32"))]
             regional,
         } = self;
         let (parallel, exhaustive, guided_frontier) = (*parallel, *exhaustive, *guided_frontier);
 
+        let root_feasible = match data.modulus {
+            2 => pruning::state_is_feasible::<2>(board, data, 0),
+            3 => pruning::state_is_feasible::<3>(board, data, 0),
+            4 => pruning::state_is_feasible::<4>(board, data, 0),
+            5 => pruning::state_is_feasible::<5>(board, data, 0),
+            _ => unreachable!(),
+        };
+        if !root_feasible || stopped() {
+            return SolveResult {
+                solution: None,
+                nodes_visited: 0,
+                progress: if parallel && !root_feasible { 1.0 } else { 0.0 },
+            };
+        }
         let mut total_nodes = 0u64;
-        #[cfg(not(target_arch = "wasm32"))]
         if adaptive.is_some() || regional.is_some() {
             // Preserve quick backtracking wins before exploring different trees.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = phase_deadline(5);
             macro_rules! initial_search {
                 ($m:literal) => {
                     parallel::solve_parallel::<$m>(
@@ -167,11 +180,13 @@ impl PreparedSearch {
                 };
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(adaptive) = adaptive {
-            let workers = std::thread::available_parallelism().map_or(1, usize::from);
+        if let Some(adaptive) = adaptive.as_ref().filter(|_| !stopped()) {
+            let workers = runtime::workers();
             eprintln!("adaptive search: {workers} workers, 25s budget");
-            let (solution, nodes) = adaptive.solve(std::time::Duration::from_secs(25), workers);
+            let (solution, nodes) = adaptive.solve(
+                phase_deadline(25).saturating_duration_since(Instant::now()),
+                workers,
+            );
             total_nodes += nodes;
             if solution.is_some() {
                 return SolveResult {
@@ -181,11 +196,13 @@ impl PreparedSearch {
                 };
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(regional) = regional {
-            let workers = std::thread::available_parallelism().map_or(1, usize::from);
+        if let Some(regional) = regional.as_ref().filter(|_| !stopped()) {
+            let workers = runtime::workers();
             eprintln!("regional search: {workers} workers, 25s budget");
-            let (solution, nodes) = regional.solve(std::time::Duration::from_secs(25), workers);
+            let (solution, nodes) = regional.solve(
+                phase_deadline(25).saturating_duration_since(Instant::now()),
+                workers,
+            );
             total_nodes += nodes;
             if solution.is_some() {
                 return SolveResult {
@@ -199,13 +216,13 @@ impl PreparedSearch {
         let mut first_solution: Option<Solution> = None;
         let attempt_count = 1 + usize::from(guided_frontier);
         for attempt_index in 0..attempt_count {
+            if stopped() {
+                break;
+            }
             let is_guided_attempt = guided_frontier && attempt_index == 0;
-            #[cfg(target_arch = "wasm32")]
-            let _ = is_guided_attempt;
             macro_rules! dispatch {
                 ($m:literal) => {{
                     if parallel {
-                        #[cfg(not(target_arch = "wasm32"))]
                         {
                             parallel::solve_parallel::<$m>(
                                 board,
@@ -215,14 +232,12 @@ impl PreparedSearch {
                                 is_guided_attempt,
                                 // Leave time for root backtracking when the
                                 // ranked prefix does not lead to a solution.
-                                is_guided_attempt.then(|| {
-                                    std::time::Instant::now() + std::time::Duration::from_secs(30)
-                                }),
+                                if is_guided_attempt {
+                                    Some(phase_deadline(30))
+                                } else {
+                                    overall_deadline
+                                },
                             )
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            solve_serial(board, piece_order, data, exhaustive)
                         }
                     } else {
                         solve_serial(board, piece_order, data, exhaustive)
@@ -416,7 +431,6 @@ mod tests {
         assert!(board.is_solved(), "solution did not solve the board");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn parallel_search_respects_deadline() {
         use std::time::{Duration, Instant};

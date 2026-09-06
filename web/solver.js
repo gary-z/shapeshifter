@@ -1,73 +1,83 @@
-import init, { solve_puzzle } from './pkg/shapeshifter.js';
+import { SolverClient } from './search-client.js';
 import { parseShapeshifterHtml } from './parser.js';
 
 const ASSETS_DIR = 'web/assets';
 const DEFAULT_ICONS = ['swo', 'hel'];
+const status = document.getElementById('status');
+const solveButton = document.getElementById('solve-btn');
+const cancelButton = document.getElementById('cancel-btn');
+const input = document.getElementById('puzzle-input');
+const results = document.getElementById('results-content');
+let searchTimer;
 
-let wasmReady = false;
-
-async function initWasm() {
-    try {
-        await init();
-        wasmReady = true;
-        document.getElementById('solve-btn').disabled = false;
-    } catch (e) {
-        document.getElementById('status').textContent = 'Failed to load WASM: ' + e.message;
-        console.error(e);
+const solver = new SolverClient({ onStatus(update) {
+    if (update.type === 'loading') status.textContent = 'Loading solver…';
+    if (update.type === 'ready') status.textContent = update.threaded
+        ? `Ready · ${update.workers} search workers · 2 minute search budget`
+        : 'Ready · 1 search worker · 2 minute search budget (parallel mode unavailable)';
+    if (update.type === 'preparing') status.textContent = 'Preparing puzzle…';
+    if (update.type === 'searching') {
+        const started = performance.now();
+        const tick = () => {
+            const seconds = Math.floor((performance.now() - started) / 1000);
+            status.textContent = `Searching · ${seconds} / 120 seconds · ${update.workers} search worker${update.workers === 1 ? '' : 's'}`;
+        };
+        tick();
+        searchTimer = setInterval(tick, 250);
     }
+} });
+
+function message(text) {
+    results.replaceChildren();
+    const paragraph = document.createElement('p');
+    paragraph.textContent = text;
+    results.append(paragraph);
 }
 
 async function solvePuzzle() {
-    if (!wasmReady) { alert('WASM not loaded yet.'); return; }
-
-    const input = document.getElementById('puzzle-input').value.trim();
-    if (!input) { alert('Paste the Shapeshifter page HTML.'); return; }
-
-    const resultDiv = document.getElementById('results-content');
-
     let puzzle;
     try {
-        puzzle = parseShapeshifterHtml(input);
-    } catch (e) {
-        resultDiv.innerHTML = `<p style="color:#e74c3c">Parse error: ${e.message}</p>`;
+        if (!input.value.trim()) throw new Error('Paste the Shapeshifter page HTML first.');
+        puzzle = parseShapeshifterHtml(input.value.trim());
+    } catch (error) {
+        message(`Parse error: ${error.message}`);
         return;
     }
 
-    const puzzleJson = JSON.stringify(puzzle);
-    resultDiv.innerHTML = '<p style="color:#aaa">Solving...</p>';
-
-    document.getElementById('solve-btn').disabled = true;
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    let solverResult;
+    solveButton.disabled = true;
+    input.disabled = true;
+    cancelButton.hidden = false;
+    cancelButton.disabled = false;
+    message('Solving…');
     try {
-        const resultJson = solve_puzzle(puzzleJson);
-        solverResult = JSON.parse(resultJson);
-    } catch (e) {
-        resultDiv.innerHTML = `<p style="color:#e74c3c">Solver error: ${e.message}</p>`;
-        document.getElementById('solve-btn').disabled = false;
-        return;
+        const result = await solver.solve(puzzle);
+        if (result.cancelled) message('Search cancelled.');
+        else if (result.solved) boardShowSolution(results, puzzle, result.placements, ASSETS_DIR);
+        else if (result.timed_out) message('No solution found within 2 minutes. You can try again.');
+        else message('No solution found.');
+        status.textContent = result.search_ms === undefined ? 'Search cancelled.'
+            : `${(result.search_ms / 1000).toFixed(2)}s search · ${(result.preparation_ms / 1000).toFixed(2)}s preparation`;
+    } catch (error) {
+        message(`Solver error: ${error.message}`);
+        status.textContent = 'Solver stopped. Try again.';
+    } finally {
+        clearInterval(searchTimer);
+        solveButton.disabled = false;
+        input.disabled = false;
+        cancelButton.hidden = true;
     }
-
-    if (solverResult.error) {
-        resultDiv.innerHTML = `<p style="color:#e74c3c">Error: ${solverResult.error}</p>`;
-    } else if (solverResult.solved) {
-        boardShowSolution(resultDiv, puzzle, solverResult.placements, ASSETS_DIR);
-    } else {
-        resultDiv.innerHTML = '<p style="color:#e74c3c">No solution found.</p>';
-    }
-
-    document.getElementById('solve-btn').disabled = false;
 }
 
-function showDefaultBoard() {
-    const board = Array.from({length: 6}, () => Array(6).fill(0));
-    const container = document.getElementById('results-content');
-    boardRender(container, board, 6, 6, DEFAULT_ICONS, ASSETS_DIR, null, null);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('solve-btn').addEventListener('click', solvePuzzle);
-    showDefaultBoard();
-    initWasm();
+solveButton.addEventListener('click', solvePuzzle);
+cancelButton.addEventListener('click', () => {
+    cancelButton.disabled = true;
+    clearInterval(searchTimer);
+    status.textContent = 'Cancelling…';
+    solver.cancel();
+});
+boardRender(results, Array.from({ length: 6 }, () => Array(6).fill(0)),
+    6, 6, DEFAULT_ICONS, ASSETS_DIR, null, null);
+solver.init().then(() => { solveButton.disabled = false; }).catch(error => {
+    status.textContent = `Failed to load solver: ${error.message}`;
+    solveButton.disabled = false;
 });
