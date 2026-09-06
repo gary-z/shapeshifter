@@ -54,7 +54,6 @@ pub(super) fn build_solver_data(
             .collect()
     };
 
-    let monte_carlo = super::pruning::MonteCarloBounds::precompute(board, &placements, modulus);
     #[cfg(not(target_arch = "wasm32"))]
     let reverse_likelihood = guided_frontier.then(|| {
         super::likelihood::ReverseLikelihood::precompute(&placements, height, width, modulus)
@@ -70,7 +69,6 @@ pub(super) fn build_solver_data(
         small_component,
         cell_set_bound,
         anchor_placements,
-        monte_carlo,
         #[cfg(not(target_arch = "wasm32"))]
         reverse_likelihood,
         equivalent_pair_skips,

@@ -230,6 +230,13 @@ pub(super) struct ReverseLikelihood {
 }
 
 impl ReverseLikelihood {
+    /// Bound the exponential state space of each 3x3 window independently of
+    /// the board dimensions or number of pieces.
+    pub(super) fn can_precompute(modulus: u8) -> bool {
+        const MAX_WINDOW_STATES: usize = 1 << 15;
+        usize::from(modulus).pow(9) <= MAX_WINDOW_STATES
+    }
+
     pub(super) fn precompute(
         placements: &[PiecePlacements],
         height: u8,
@@ -317,28 +324,31 @@ mod tests {
 
     #[test]
     fn incremental_placement_scores_match_full_scores() {
-        let board = Board::from_grid(
-            &[&[0, 1, 2, 0], &[1, 2, 0, 1], &[2, 0, 1, 2], &[0, 1, 2, 0]],
-            3,
-        );
-        let placements = vec![
-            Piece::from_grid(&[&[true, true]]).placements(4, 4),
-            Piece::from_grid(&[&[true], &[true]]).placements(4, 4),
-        ];
-        let likelihood = ReverseLikelihood::precompute(&placements, 4, 4, 3);
-        let indices = (0..placements[0].len())
-            .map(|index| index as u8)
-            .collect::<Vec<_>>();
-        let mut scores = [0i32; super::super::backtrack::MAX_PLACEMENTS];
-        likelihood.score_placements(&board, 0, &indices, &mut scores);
+        for modulus in 2..=3 {
+            let grid: Vec<Vec<u8>> = (0..4)
+                .map(|row| (0..4).map(|column| (row + column) % modulus).collect())
+                .collect();
+            let rows = grid.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let board = Board::from_grid(&rows, modulus);
+            let placements = vec![
+                Piece::from_grid(&[&[true, true]]).placements(4, 4),
+                Piece::from_grid(&[&[true], &[true]]).placements(4, 4),
+            ];
+            let likelihood = ReverseLikelihood::precompute(&placements, 4, 4, modulus);
+            let indices = (0..placements[0].len())
+                .map(|index| index as u8)
+                .collect::<Vec<_>>();
+            let mut scores = [0i32; super::super::backtrack::MAX_PLACEMENTS];
+            likelihood.score_placements(&board, 0, &indices, &mut scores);
 
-        for &placement_index in &indices {
-            let mut child = board;
-            child.apply_piece(placements[0][placement_index as usize].2);
-            assert_eq!(
-                scores[placement_index as usize],
-                likelihood.board_score(&child, 1)
-            );
+            for &placement_index in &indices {
+                let mut child = board;
+                child.apply_piece(placements[0][placement_index as usize].2);
+                assert_eq!(
+                    scores[placement_index as usize],
+                    likelihood.board_score(&child, 1)
+                );
+            }
         }
     }
 }

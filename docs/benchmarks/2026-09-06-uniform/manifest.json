@@ -1,0 +1,181 @@
+{
+  "build": "uniform-retired",
+  "base_commit": "da8b4d62a28b02562de18b970c8fdf6c347cae5c",
+  "binary_sha256": {
+    "solve": "2b602ecd4b19c8dbd0374f7dbdd4d80db827adbe84015851b8f5da83a5694d89",
+    "bench": "d6a392867de6283b836d8ae425b45405e8a92bdd660c09342e84f910a2939491",
+    "generate": "c92581d5896db6281b2b801ecf56b4e149943189f5d19bfce71f1377c333fff0"
+  },
+  "source_sha256": {
+    ".cargo/config.toml": "c194b0c8fde1b0af55d9e53b53cb163f55346e8c434cec9d9b5e6dd55398321d",
+    "Cargo.lock": "9193a9b2438615b0eaaeec9e515437519d0a731a7e20b9635e6d07a3d9d54577",
+    "Cargo.toml": "30d9e2d5460dbb5ffddd400273b2b54b13d571de04dafd8f2f3864bef5e5176a",
+    "data/levels.json": "77fdf6affa408d70e665c8493e916aa79ec90b55d067ff908d45f1ba576d8849",
+    "rust-toolchain": "b1245a17fb6c99e5359ff7fc0badcb7a600ef78b22e1e9e0572d4224f4619226",
+    "src/bin/bench.rs": "d06d7890bf501146a47f2a96acb7ad021b08dce5b383e06b7fcdcc57ac1b33ed",
+    "src/bin/generate.rs": "b47d6445808b0275f19035a9638ce334118f62de3581d7247fe8ecc8c226f537",
+    "src/bin/parse.rs": "d9fd8b07407e562cf6a2d152c0ea750b8c9a0256c9b92c159f261846f012368a",
+    "src/bin/solve.rs": "8c25e0aca95b64c17703df1b67a242d59baf50bebd0594c7ef4943f01da18520",
+    "src/core/bitboard.rs": "cd563e1550902097d285d702ce80c83c2d7d6f51a8d8097a91baf78608e0dee0",
+    "src/core/board.rs": "1cbd3ee6f4f668c2c99f23dbce85b9fe5185c0b991b7a657c2186e306286c38e",
+    "src/core/mod.rs": "da03017c328c3ad32ff72164655e5ab6f6bbf0805b0245070595c7fb90cc70a5",
+    "src/core/piece.rs": "be8688ab5ad0bf8ddb860d019a215a72a65086480a07709aad7581704b49a150",
+    "src/game.rs": "f311cfddf064b81f475af0764c916ae6efcb7e0355a8a77f9e096d58e037bcb9",
+    "src/generate.rs": "efedebc9ac40d4b87eeda80712181d045d4cd0a5544c5f7ff8a1636aa6d70c86",
+    "src/level.rs": "c76968b469735bd047b64da31254c64136f2cfb917d68b857713478102c78034",
+    "src/lib.rs": "5db38f0fd67d182657c67ecb44f34467111d82d83af86b606d4912c1610b111f",
+    "src/puzzle.rs": "1f2991c38a07bdd36c0a2ab6d05e09be16b381a613cd938a29b0fe5c80a7f189",
+    "src/solver/adaptive.rs": "38b582c6e3656f14fda37602d3e8c023e70e0808b3de16d1932ee77e14cf7cd0",
+    "src/solver/backtrack.rs": "0009709a787ee04d4e7fa5e523dc7b395dbdddf7acdcf60ed2e1204ad7473a1e",
+    "src/solver/likelihood.rs": "f7d1fb52976852caa9dc3be982e4df4c79b557cf44f8846cb3fb4a481115e5aa",
+    "src/solver/mod.rs": "7fcf841d59c658300516f51628083f5f1d4db212f4892db60f09e457155f67b8",
+    "src/solver/parallel.rs": "f8a4ab7ec161aaf5d20ab10260ebb2a2cca3e637026e115c5e2473acbd188bd1",
+    "src/solver/precompute.rs": "27ed9752e98c3d1ab9932c9b379059018452621802b5cd79e5aef5406b724faa",
+    "src/solver/pruning/cell_set.rs": "5a5bfd8f3b68d3d09da5703f516a370092e073f6d1a781bd2b6bff2dcf9deacb",
+    "src/solver/pruning/jaggedness.rs": "9e9bb646284ceda34e02e01798b09d0437a74157691654addc2b5e77d7c0ef66",
+    "src/solver/pruning/mod.rs": "c2ccd5bc9970d233423781307bfd1be6c933910c02188d63f72266ace56fbe76",
+    "src/solver/pruning/partition.rs": "931dcd73e90b38296bcb8f0beab16e13dd632d3071149e0f445699ab44333806",
+    "src/solver/pruning/small_component.rs": "845217b5f21600e87f98ecf15ad9096a7b9548cde3f42d487619171af7d8a4a5",
+    "src/solver/pruning/total_deficit.rs": "7d6f515800ee40abf04769a6e6270407ef3b47ec38bff31390db3e487aab628d",
+    "src/solver/regional.rs": "a822fe35b8ff4d9c0ca75b10dbb7d6c9b970117caa803e0c82e96a7986eb1fb4",
+    "src/wasm.rs": "7d03d34922fa1350a5ef0608e6159d8c83261b615ec17d85a94c2a6411283cf1",
+    "web/board.js": "fa987332728e94901627d8e79227f45e06271921adb3082c5ac022ef6eb62250"
+  },
+  "cpu_model": "Intel Core i9-13900KF",
+  "logical_cpus": 32,
+  "game_parallelism": 1,
+  "rust_toolchain": "nightly-2026-08-30",
+  "native_rustflags": [
+    "-C",
+    "target-cpu=native"
+  ],
+  "search_cap_seconds": 120,
+  "preparation_excluded": true,
+  "validation_plan": {
+    "paired_levels": [
+      40,
+      50,
+      51,
+      75,
+      80,
+      85,
+      100
+    ],
+    "paired_games": 5,
+    "paired_offset": 100,
+    "holdout_levels": [
+      50,
+      80
+    ],
+    "holdout_games": 10,
+    "holdout_offset": 500,
+    "search_cap_seconds": 120,
+    "game_parallelism": 1,
+    "logical_cpus": 32,
+    "serial_control_levels": [
+      40,
+      51
+    ],
+    "serial_control_games": 5,
+    "serial_control_offset": 100,
+    "serial_cpu": 0,
+    "diagnostic_control_levels": [
+      68
+    ],
+    "diagnostic_reason": "First fixed-sample retirement timeout occurred at level68; run all five cases with MC under identical uniform2 schedule to isolate cause."
+  },
+  "observed_status_counts": {
+    "fixed": {
+      "OK": 494,
+      "TIMEOUT": 6
+    },
+    "holdouts": {
+      "OK": 20
+    },
+    "mc-control": {
+      "OK": 31,
+      "TIMEOUT": 4
+    },
+    "mc-diagnostic": {
+      "OK": 5
+    },
+    "serial-retired": {
+      "OK": 9,
+      "TIMEOUT": 1
+    },
+    "serial-control": {
+      "OK": 9,
+      "TIMEOUT": 1
+    }
+  },
+  "level_success_histogram": {
+    "5": 95,
+    "4": 4,
+    "3": 1
+  },
+  "mc_control": {
+    "build": "uniform2",
+    "base_commit": "da8b4d62a28b02562de18b970c8fdf6c347cae5c",
+    "binary_sha256": {
+      "solve": "287902557c2813eaf3291ab53154ebd5b42498a2ceea04a8c23bc19741d06a6c",
+      "bench": "d6a392867de6283b836d8ae425b45405e8a92bdd660c09342e84f910a2939491",
+      "generate": "c92581d5896db6281b2b801ecf56b4e149943189f5d19bfce71f1377c333fff0"
+    },
+    "source_sha256": {
+      ".cargo/config.toml": "c194b0c8fde1b0af55d9e53b53cb163f55346e8c434cec9d9b5e6dd55398321d",
+      "Cargo.lock": "9193a9b2438615b0eaaeec9e515437519d0a731a7e20b9635e6d07a3d9d54577",
+      "Cargo.toml": "30d9e2d5460dbb5ffddd400273b2b54b13d571de04dafd8f2f3864bef5e5176a",
+      "data/levels.json": "77fdf6affa408d70e665c8493e916aa79ec90b55d067ff908d45f1ba576d8849",
+      "rust-toolchain": "b1245a17fb6c99e5359ff7fc0badcb7a600ef78b22e1e9e0572d4224f4619226",
+      "src/bin/bench.rs": "d06d7890bf501146a47f2a96acb7ad021b08dce5b383e06b7fcdcc57ac1b33ed",
+      "src/bin/generate.rs": "b47d6445808b0275f19035a9638ce334118f62de3581d7247fe8ecc8c226f537",
+      "src/bin/parse.rs": "d9fd8b07407e562cf6a2d152c0ea750b8c9a0256c9b92c159f261846f012368a",
+      "src/bin/solve.rs": "8c25e0aca95b64c17703df1b67a242d59baf50bebd0594c7ef4943f01da18520",
+      "src/core/bitboard.rs": "cd563e1550902097d285d702ce80c83c2d7d6f51a8d8097a91baf78608e0dee0",
+      "src/core/board.rs": "1cbd3ee6f4f668c2c99f23dbce85b9fe5185c0b991b7a657c2186e306286c38e",
+      "src/core/mod.rs": "da03017c328c3ad32ff72164655e5ab6f6bbf0805b0245070595c7fb90cc70a5",
+      "src/core/piece.rs": "be8688ab5ad0bf8ddb860d019a215a72a65086480a07709aad7581704b49a150",
+      "src/game.rs": "f311cfddf064b81f475af0764c916ae6efcb7e0355a8a77f9e096d58e037bcb9",
+      "src/generate.rs": "efedebc9ac40d4b87eeda80712181d045d4cd0a5544c5f7ff8a1636aa6d70c86",
+      "src/level.rs": "c76968b469735bd047b64da31254c64136f2cfb917d68b857713478102c78034",
+      "src/lib.rs": "5db38f0fd67d182657c67ecb44f34467111d82d83af86b606d4912c1610b111f",
+      "src/puzzle.rs": "1f2991c38a07bdd36c0a2ab6d05e09be16b381a613cd938a29b0fe5c80a7f189",
+      "src/solver/adaptive.rs": "38b582c6e3656f14fda37602d3e8c023e70e0808b3de16d1932ee77e14cf7cd0",
+      "src/solver/backtrack.rs": "91cfe7878b9700596ebec52a5761ff7e8e5298d8f11817aeb64b514b11e76ab7",
+      "src/solver/likelihood.rs": "f7d1fb52976852caa9dc3be982e4df4c79b557cf44f8846cb3fb4a481115e5aa",
+      "src/solver/mod.rs": "910c4012a32485d10fb475031c8388be10d0b5fc90f829b62318c4180e6fda25",
+      "src/solver/parallel.rs": "967c8431d8c3d3508fb57afc79d4a7c79a031c9f92ca34689b818b8031579719",
+      "src/solver/precompute.rs": "1406ecea89342789c44d8326214f56fc55a10b14e0fff8e2bdf7f1bc60e3a50d",
+      "src/solver/pruning/cell_set.rs": "5a5bfd8f3b68d3d09da5703f516a370092e073f6d1a781bd2b6bff2dcf9deacb",
+      "src/solver/pruning/jaggedness.rs": "9e9bb646284ceda34e02e01798b09d0437a74157691654addc2b5e77d7c0ef66",
+      "src/solver/pruning/mod.rs": "113bc20f75317c9ef6095a9688e80775dde0efca573fc66cd4439ef15099a712",
+      "src/solver/pruning/monte_carlo.rs": "1439576feb58edd3815255e883744dd44b0a8eaa61c079f858965ee6bc5f2b35",
+      "src/solver/pruning/partition.rs": "931dcd73e90b38296bcb8f0beab16e13dd632d3071149e0f445699ab44333806",
+      "src/solver/pruning/small_component.rs": "845217b5f21600e87f98ecf15ad9096a7b9548cde3f42d487619171af7d8a4a5",
+      "src/solver/pruning/total_deficit.rs": "7d6f515800ee40abf04769a6e6270407ef3b47ec38bff31390db3e487aab628d",
+      "src/solver/regional.rs": "a822fe35b8ff4d9c0ca75b10dbb7d6c9b970117caa803e0c82e96a7986eb1fb4",
+      "src/wasm.rs": "7d03d34922fa1350a5ef0608e6159d8c83261b615ec17d85a94c2a6411283cf1",
+      "web/board.js": "a831e3ba1dddfda79af7c7bdeaadf023c4a06f80f6ce281582eafdd0f61c28cf"
+    },
+    "cpu_model": "Intel Core i9-13900KF",
+    "logical_cpus": 32,
+    "game_parallelism": 1,
+    "rust_toolchain": "nightly-2026-08-30",
+    "native_rustflags": [
+      "-C",
+      "target-cpu=native"
+    ],
+    "search_cap_seconds": 120,
+    "preparation_excluded": true
+  },
+  "compiler": "rustc 1.100.0-nightly (fd7ed57df 2026-08-29)",
+  "wasm_artifact_sha256": {
+    "web/pkg/shapeshifter.js": "ee98cdb74ce1e3fedbc795959ba0205cc53819183530cd8e301171a7ecd5b1d4",
+    "web/pkg/shapeshifter_bg.wasm": "dba5847683a75bacbda3d93e5870519d0be5eea2d37f779a373bf1b129c05d4a"
+  },
+  "embedded_viewer_line_endings": {
+    "retired": "LF",
+    "mc_control": "CRLF",
+    "note": "Identical viewer text after newline normalization; not used by the benchmark worker."
+  }
+}

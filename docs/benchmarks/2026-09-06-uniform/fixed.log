@@ -1,0 +1,1799 @@
+=== level1-120s-offset100.txt ===
+Benchmarking levels 1-1, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+1        100   2      3x3/M2                5      8.000ms    200.000ms OK
+1        101   2      3x3/M2                4      9.000ms    200.000ms OK
+1        102   2      3x3/M2                3      9.000ms    200.000ms OK
+1        103   2      3x3/M2                5      8.000ms    200.000ms OK
+1        104   2      3x3/M2                3      8.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+1         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 1
+Every tested level achieved at least 50% success.
+
+=== level2-120s-offset100.txt ===
+Benchmarking levels 2-2, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+2        100   3      3x3/M2                6      8.000ms    200.000ms OK
+2        101   3      3x3/M2                5      8.000ms    200.000ms OK
+2        102   3      3x3/M2                2      9.000ms    200.000ms OK
+2        103   3      3x3/M2                8      9.000ms    200.000ms OK
+2        104   3      3x3/M2                4      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+2         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 2
+Every tested level achieved at least 50% success.
+
+=== level3-120s-offset100.txt ===
+Benchmarking levels 3-3, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+3        100   4      3x3/M2                5      9.000ms    200.000ms OK
+3        101   4      3x3/M2                9      8.000ms    200.000ms OK
+3        102   4      3x3/M2                6     10.000ms    200.000ms OK
+3        103   4      3x3/M2                7     10.000ms    200.000ms OK
+3        104   4      3x3/M2                7      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+3         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 3
+Every tested level achieved at least 50% success.
+
+=== level4-120s-offset100.txt ===
+Benchmarking levels 4-4, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+4        100   5      3x3/M2                9      8.000ms    200.000ms OK
+4        101   5      3x3/M2                6      9.000ms    200.000ms OK
+4        102   5      3x3/M2                9     11.000ms    200.000ms OK
+4        103   5      3x3/M2               10      9.000ms    200.000ms OK
+4        104   5      3x3/M2               10      8.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+4         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 4
+Every tested level achieved at least 50% success.
+
+=== level5-120s-offset100.txt ===
+Benchmarking levels 5-5, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+5        100   6      3x3/M2               10      9.000ms    200.000ms OK
+5        101   6      3x3/M2               11      9.000ms    200.000ms OK
+5        102   6      3x3/M2                9      9.000ms    200.000ms OK
+5        103   6      3x3/M2               12      8.000ms    200.000ms OK
+5        104   6      3x3/M2                8     10.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+5         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 5
+Every tested level achieved at least 50% success.
+
+=== level6-120s-offset100.txt ===
+Benchmarking levels 6-6, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+6        100   7      3x3/M2                9      9.000ms    200.000ms OK
+6        101   7      3x3/M2               11      9.000ms    200.000ms OK
+6        102   7      3x3/M2               12      9.000ms    200.000ms OK
+6        103   7      3x3/M2               14      8.000ms    200.000ms OK
+6        104   7      3x3/M2                8      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+6         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 6
+Every tested level achieved at least 50% success.
+
+=== level7-120s-offset100.txt ===
+Benchmarking levels 7-7, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+7        100   8      3x3/M2               14      9.000ms    200.000ms OK
+7        101   8      3x3/M2               16      9.000ms    200.000ms OK
+7        102   8      3x3/M2               15      8.000ms    200.000ms OK
+7        103   8      3x3/M2               14      9.000ms    200.000ms OK
+7        104   8      3x3/M2               13      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+7         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 7
+Every tested level achieved at least 50% success.
+
+=== level8-120s-offset100.txt ===
+Benchmarking levels 8-8, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+8        100   9      3x3/M2               16      9.000ms    200.000ms OK
+8        101   9      3x3/M2               13      9.000ms    200.000ms OK
+8        102   9      3x3/M2               13      9.000ms    200.000ms OK
+8        103   9      3x3/M2               16      9.000ms    200.000ms OK
+8        104   9      3x3/M2               15      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+8         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 8
+Every tested level achieved at least 50% success.
+
+=== level9-120s-offset100.txt ===
+Benchmarking levels 9-9, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+9        100   10     3x3/M2               18      8.000ms    200.000ms OK
+9        101   10     3x3/M2               16     11.000ms    200.000ms OK
+9        102   10     3x3/M2               23      9.000ms    200.000ms OK
+9        103   10     3x3/M2               15     10.000ms    200.000ms OK
+9        104   10     3x3/M2               12      8.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+9         5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 9
+Every tested level achieved at least 50% success.
+
+=== level10-120s-offset100.txt ===
+Benchmarking levels 10-10, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+10       100   11     3x3/M2               17      9.000ms    200.000ms OK
+10       101   11     3x3/M2               18     10.000ms    200.000ms OK
+10       102   11     3x3/M2               15      9.000ms    200.000ms OK
+10       103   11     3x3/M2               15     10.000ms    200.000ms OK
+10       104   11     3x3/M2               22      9.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+10        5/5      100%  3x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 10
+Every tested level achieved at least 50% success.
+
+=== level11-120s-offset100.txt ===
+Benchmarking levels 11-11, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+11       100   7      4x3/M2               15     11.000ms    200.000ms OK
+11       101   7      4x3/M2               23     11.000ms    200.000ms OK
+11       102   7      4x3/M2               14     12.000ms    200.000ms OK
+11       103   7      4x3/M2               20     12.000ms    200.000ms OK
+11       104   7      4x3/M2               13     12.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+11        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 11
+Every tested level achieved at least 50% success.
+
+=== level12-120s-offset100.txt ===
+Benchmarking levels 12-12, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+12       100   8      4x3/M2               20     11.000ms    200.000ms OK
+12       101   8      4x3/M2               19     12.000ms    200.000ms OK
+12       102   8      4x3/M2               19     13.000ms    200.000ms OK
+12       103   8      4x3/M2               23     12.000ms    200.000ms OK
+12       104   8      4x3/M2               22     13.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+12        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 12
+Every tested level achieved at least 50% success.
+
+=== level13-120s-offset100.txt ===
+Benchmarking levels 13-13, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+13       100   9      4x3/M2               25     13.000ms    200.000ms OK
+13       101   9      4x3/M2               13     12.000ms    200.000ms OK
+13       102   9      4x3/M2               37     14.000ms    200.000ms OK
+13       103   9      4x3/M2               25     14.000ms    200.000ms OK
+13       104   9      4x3/M2               19     12.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+13        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 13
+Every tested level achieved at least 50% success.
+
+=== level14-120s-offset100.txt ===
+Benchmarking levels 14-14, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+14       100   10     4x3/M2               18     12.000ms    200.000ms OK
+14       101   10     4x3/M2               38     15.000ms    200.000ms OK
+14       102   10     4x3/M2               30     13.000ms    200.000ms OK
+14       103   10     4x3/M2               21     13.000ms    200.000ms OK
+14       104   10     4x3/M2               19     14.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+14        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 14
+Every tested level achieved at least 50% success.
+
+=== level15-120s-offset100.txt ===
+Benchmarking levels 15-15, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+15       100   11     4x3/M2               18     13.000ms    200.000ms OK
+15       101   11     4x3/M2               16     15.000ms    200.000ms OK
+15       102   11     4x3/M2               23     15.000ms    200.000ms OK
+15       103   11     4x3/M2               25     14.000ms    200.000ms OK
+15       104   11     4x3/M2               22     14.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+15        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 15
+Every tested level achieved at least 50% success.
+
+=== level16-120s-offset100.txt ===
+Benchmarking levels 16-16, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+16       100   12     4x3/M2               26     14.000ms    200.000ms OK
+16       101   12     4x3/M2               31     13.000ms    200.000ms OK
+16       102   12     4x3/M2               23     15.000ms    200.000ms OK
+16       103   12     4x3/M2               22     15.000ms    200.000ms OK
+16       104   12     4x3/M2               31     14.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+16        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 16
+Every tested level achieved at least 50% success.
+
+=== level17-120s-offset100.txt ===
+Benchmarking levels 17-17, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+17       100   13     4x3/M2               26     15.000ms    200.000ms OK
+17       101   13     4x3/M2               30     14.000ms    200.000ms OK
+17       102   13     4x3/M2               24     15.000ms    200.000ms OK
+17       103   13     4x3/M2               42     15.000ms    200.000ms OK
+17       104   13     4x3/M2               27     14.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+17        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 17
+Every tested level achieved at least 50% success.
+
+=== level18-120s-offset100.txt ===
+Benchmarking levels 18-18, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+18       100   14     4x3/M2               31     15.000ms    200.000ms OK
+18       101   14     4x3/M2               14     17.000ms    200.000ms OK
+18       102   14     4x3/M2               31     16.000ms    200.000ms OK
+18       103   14     4x3/M2               32     15.000ms    200.000ms OK
+18       104   14     4x3/M2               31     15.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+18        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 18
+Every tested level achieved at least 50% success.
+
+=== level19-120s-offset100.txt ===
+Benchmarking levels 19-19, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+19       100   15     4x3/M2               31     15.000ms    200.000ms OK
+19       101   15     4x3/M2               25     15.000ms    200.000ms OK
+19       102   15     4x3/M2               24     15.000ms    200.000ms OK
+19       103   15     4x3/M2               26     17.000ms    200.000ms OK
+19       104   15     4x3/M2               23     16.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+19        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 19
+Every tested level achieved at least 50% success.
+
+=== level20-120s-offset100.txt ===
+Benchmarking levels 20-20, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+20       100   16     4x3/M2               29     15.000ms    200.000ms OK
+20       101   16     4x3/M2               32     17.000ms    200.000ms OK
+20       102   16     4x3/M2               39     17.000ms    200.000ms OK
+20       103   16     4x3/M2               33     16.000ms    200.000ms OK
+20       104   16     4x3/M2               32     17.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+20        5/5      100%  4x3/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 20
+Every tested level achieved at least 50% success.
+
+=== level21-120s-offset100.txt ===
+Benchmarking levels 21-21, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+21       100   12     4x4/M2               35     99.000ms    200.000ms OK
+21       101   12     4x4/M2               34     93.000ms    200.000ms OK
+21       102   12     4x4/M2               30     75.000ms    200.000ms OK
+21       103   12     4x4/M2               60    116.000ms    200.000ms OK
+21       104   12     4x4/M2               38     90.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+21        5/5      100%  4x4/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 21
+Every tested level achieved at least 50% success.
+
+=== level22-120s-offset100.txt ===
+Benchmarking levels 22-22, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+22       100   13     4x4/M2               39    100.000ms    200.000ms OK
+22       101   13     4x4/M2               37    109.000ms    200.000ms OK
+22       102   13     4x4/M2               36    134.000ms    200.000ms OK
+22       103   13     4x4/M2               42     96.000ms    200.000ms OK
+22       104   13     4x4/M2               39    117.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+22        5/5      100%  4x4/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 22
+Every tested level achieved at least 50% success.
+
+=== level23-120s-offset100.txt ===
+Benchmarking levels 23-23, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+23       100   14     4x4/M2               29    128.000ms    200.000ms OK
+23       101   14     4x4/M2               24    117.000ms    200.000ms OK
+23       102   14     4x4/M2               42    140.000ms    200.000ms OK
+23       103   14     4x4/M2               38    119.000ms    200.000ms OK
+23       104   14     4x4/M2               36    123.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+23        5/5      100%  4x4/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 23
+Every tested level achieved at least 50% success.
+
+=== level24-120s-offset100.txt ===
+Benchmarking levels 24-24, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+24       100   15     4x4/M2               39    128.000ms    200.000ms OK
+24       101   15     4x4/M2               42    148.000ms    200.000ms OK
+24       102   15     4x4/M2               45    132.000ms    200.000ms OK
+24       103   15     4x4/M2               36    138.000ms    200.000ms OK
+24       104   15     4x4/M2               26    120.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+24        5/5      100%  4x4/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 24
+Every tested level achieved at least 50% success.
+
+=== level25-120s-offset100.txt ===
+Benchmarking levels 25-25, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+25       100   16     4x4/M2               26    156.000ms    200.000ms OK
+25       101   16     4x4/M2               38    136.000ms    200.000ms OK
+25       102   16     4x4/M2               29    136.000ms    200.000ms OK
+25       103   16     4x4/M2               41    138.000ms    200.000ms OK
+25       104   16     4x4/M2               29    126.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+25        5/5      100%  4x4/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 25
+Every tested level achieved at least 50% success.
+
+=== level26-120s-offset100.txt ===
+Benchmarking levels 26-26, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+26       100   11     4x4/M3               44    345.000ms    200.000ms OK
+26       101   11     4x4/M3               63    322.000ms    200.000ms OK
+26       102   11     4x4/M3               92    331.000ms    200.000ms OK
+26       103   11     4x4/M3               34    317.000ms    200.000ms OK
+26       104   11     4x4/M3               42    313.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+26        5/5      100%  4x4/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 26
+Every tested level achieved at least 50% success.
+
+=== level27-120s-offset100.txt ===
+Benchmarking levels 27-27, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+27       100   12     4x4/M3               30    318.000ms    200.000ms OK
+27       101   12     4x4/M3               25    299.000ms    200.000ms OK
+27       102   12     4x4/M3              139    332.000ms    200.000ms OK
+27       103   12     4x4/M3              142    350.000ms    200.000ms OK
+27       104   12     4x4/M3              108    336.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+27        5/5      100%  4x4/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 27
+Every tested level achieved at least 50% success.
+
+=== level28-120s-offset100.txt ===
+Benchmarking levels 28-28, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+28       100   13     4x4/M3               56    337.000ms    200.000ms OK
+28       101   13     4x4/M3               52    328.000ms    200.000ms OK
+28       102   13     4x4/M3               40    351.000ms    200.000ms OK
+28       103   13     4x4/M3               71    333.000ms    200.000ms OK
+28       104   13     4x4/M3              109    345.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+28        5/5      100%  4x4/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 28
+Every tested level achieved at least 50% success.
+
+=== level29-120s-offset100.txt ===
+Benchmarking levels 29-29, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+29       100   14     4x4/M3               39    347.000ms    200.000ms OK
+29       101   14     4x4/M3               69    337.000ms    200.000ms OK
+29       102   14     4x4/M3              134    338.000ms    200.000ms OK
+29       103   14     4x4/M3               60    341.000ms    200.000ms OK
+29       104   14     4x4/M3              230    352.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+29        5/5      100%  4x4/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 29
+Every tested level achieved at least 50% success.
+
+=== level30-120s-offset100.txt ===
+Benchmarking levels 30-30, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+30       100   15     4x4/M3              145    362.000ms    200.000ms OK
+30       101   15     4x4/M3               61    358.000ms    200.000ms OK
+30       102   15     4x4/M3              191    372.000ms    200.000ms OK
+30       103   15     4x4/M3               37    366.000ms    200.000ms OK
+30       104   15     4x4/M3              351    360.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+30        5/5      100%  4x4/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 30
+Every tested level achieved at least 50% success.
+
+=== level31-120s-offset100.txt ===
+Benchmarking levels 31-31, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+31       100   12     6x6/M2             3346    814.000ms    200.000ms OK
+31       101   12     6x6/M2            14021    764.000ms    200.000ms OK
+31       102   12     6x6/M2            10385    870.000ms    200.000ms OK
+31       103   12     6x6/M2           195559    750.000ms    200.000ms OK
+31       104   12     6x6/M2            34025    886.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+31        5/5      100%  6x6/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 31
+Every tested level achieved at least 50% success.
+
+=== level32-120s-offset100.txt ===
+Benchmarking levels 32-32, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+32       100   13     6x6/M2            13772    992.000ms    200.000ms OK
+32       101   13     6x6/M2             1416    966.000ms    200.000ms OK
+32       102   13     6x6/M2           104806    870.000ms    200.000ms OK
+32       103   13     6x6/M2            67119    881.000ms    200.000ms OK
+32       104   13     6x6/M2            60028    945.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+32        5/5      100%  6x6/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 32
+Every tested level achieved at least 50% success.
+
+=== level33-120s-offset100.txt ===
+Benchmarking levels 33-33, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+33       100   14     6x6/M2            15972       1.026s    200.000ms OK
+33       101   14     6x6/M2            39299       1.097s    200.000ms OK
+33       102   14     6x6/M2            25905       1.063s    200.000ms OK
+33       103   14     6x6/M2            93724       1.032s    200.000ms OK
+33       104   14     6x6/M2             2658       1.040s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+33        5/5      100%  6x6/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 33
+Every tested level achieved at least 50% success.
+
+=== level34-120s-offset100.txt ===
+Benchmarking levels 34-34, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+34       100   12     6x6/M2            34927    811.000ms    200.000ms OK
+34       101   12     6x6/M2               90    855.000ms    200.000ms OK
+34       102   12     6x6/M2             4984    819.000ms    200.000ms OK
+34       103   12     6x6/M2           171705    807.000ms    200.000ms OK
+34       104   12     6x6/M2            25245    823.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+34        5/5      100%  6x6/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 34
+Every tested level achieved at least 50% success.
+
+=== level35-120s-offset100.txt ===
+Benchmarking levels 35-35, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+35       100   13     6x6/M2            20663    918.000ms    200.000ms OK
+35       101   13     6x6/M2             4596    806.000ms    200.000ms OK
+35       102   13     6x6/M2            82268    896.000ms    200.000ms OK
+35       103   13     6x6/M2             5960    911.000ms    200.000ms OK
+35       104   13     6x6/M2            11048    909.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+35        5/5      100%  6x6/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 35
+Every tested level achieved at least 50% success.
+
+=== level36-120s-offset100.txt ===
+Benchmarking levels 36-36, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+36       100   14     6x6/M3          4648571    464.000ms    200.000ms OK
+36       101   14     6x6/M3           699033    470.000ms    200.000ms OK
+36       102   14     6x6/M3         27535843    456.000ms    200.000ms OK
+36       103   14     6x6/M3          1119062    455.000ms    200.000ms OK
+36       104   14     6x6/M3         16930473    457.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+36        5/5      100%  6x6/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 36
+Every tested level achieved at least 50% success.
+
+=== level37-120s-offset100.txt ===
+Benchmarking levels 37-37, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+37       100   15     6x6/M3          3581901    472.000ms    200.000ms OK
+37       101   15     6x6/M3         28011993    470.000ms    200.000ms OK
+37       102   15     6x6/M3          3500881    479.000ms    200.000ms OK
+37       103   15     6x6/M3           737102    475.000ms    200.000ms OK
+37       104   15     6x6/M3           429674    477.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+37        5/5      100%  6x6/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 37
+Every tested level achieved at least 50% success.
+
+=== level38-120s-offset100.txt ===
+Benchmarking levels 38-38, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+38       100   16     6x6/M3          2354878    503.000ms    200.000ms OK
+38       101   16     6x6/M3          7411345    487.000ms    200.000ms OK
+38       102   16     6x6/M3          5278635    494.000ms    200.000ms OK
+38       103   16     6x6/M3          9480719    495.000ms    200.000ms OK
+38       104   16     6x6/M3          2246211    497.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+38        5/5      100%  6x6/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 38
+Every tested level achieved at least 50% success.
+
+=== level39-120s-offset100.txt ===
+Benchmarking levels 39-39, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+39       100   17     6x6/M3         20615366    513.000ms    200.000ms OK
+39       101   17     6x6/M3         15770366    502.000ms    200.000ms OK
+39       102   17     6x6/M3          1925046    526.000ms    200.000ms OK
+39       103   17     6x6/M3        154045071    501.000ms    803.000ms OK
+39       104   17     6x6/M3          2670170    516.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+39        5/5      100%  6x6/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 39
+Every tested level achieved at least 50% success.
+
+=== level40-120s-offset100.txt ===
+Benchmarking levels 40-40, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+40       100   18     6x6/M3         18721895    525.000ms    200.000ms OK
+40       101   18     6x6/M3          2999692    540.000ms    200.000ms OK
+40       102   18     6x6/M3           829170    518.000ms    200.000ms OK
+40       103   18     6x6/M3          3724116    529.000ms    200.000ms OK
+40       104   18     6x6/M3        157705782    520.000ms       1.001s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+40        5/5      100%  6x6/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 40
+Every tested level achieved at least 50% success.
+
+=== level41-120s-offset100.txt ===
+Benchmarking levels 41-41, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+41       100   15     8x7/M2           232128       1.181s    200.000ms OK
+41       101   15     8x7/M2         52423229       1.253s    200.000ms OK
+41       102   15     8x7/M2         46618965       1.245s    200.000ms OK
+41       103   15     8x7/M2          2426751       1.215s    200.000ms OK
+41       104   15     8x7/M2          3339705       1.225s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+41        5/5      100%  8x7/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 41
+Every tested level achieved at least 50% success.
+
+=== level42-120s-offset100.txt ===
+Benchmarking levels 42-42, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+42       100   16     8x7/M2           209082       1.295s    200.000ms OK
+42       101   16     8x7/M2           100583       1.253s    200.000ms OK
+42       102   16     8x7/M2            46570       1.320s    200.000ms OK
+42       103   16     8x7/M2           264953       1.294s    200.000ms OK
+42       104   16     8x7/M2           975559       1.284s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+42        5/5      100%  8x7/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 42
+Every tested level achieved at least 50% success.
+
+=== level43-120s-offset100.txt ===
+Benchmarking levels 43-43, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+43       100   17     8x7/M2           264995       1.339s    200.000ms OK
+43       101   17     8x7/M2             2475       1.329s    200.000ms OK
+43       102   17     8x7/M2         44435741       1.348s    200.000ms OK
+43       103   17     8x7/M2         84372085       1.360s    403.000ms OK
+43       104   17     8x7/M2           945955       1.375s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+43        5/5      100%  8x7/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 43
+Every tested level achieved at least 50% success.
+
+=== level44-120s-offset100.txt ===
+Benchmarking levels 44-44, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+44       100   18     8x7/M2          3880449       1.429s    200.000ms OK
+44       101   18     8x7/M2         36414376       1.490s    200.000ms OK
+44       102   18     8x7/M2         12137228       1.453s    200.000ms OK
+44       103   18     8x7/M2         24590845       1.415s    200.000ms OK
+44       104   18     8x7/M2          6797806       1.398s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+44        5/5      100%  8x7/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 44
+Every tested level achieved at least 50% success.
+
+=== level45-120s-offset100.txt ===
+Benchmarking levels 45-45, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+45       100   19     8x7/M2           191149       1.543s    200.000ms OK
+45       101   19     8x7/M2          2232803       1.550s    200.000ms OK
+45       102   19     8x7/M2          1013256       1.496s    200.000ms OK
+45       103   19     8x7/M2           132306       1.517s    200.000ms OK
+45       104   19     8x7/M2            23955       1.518s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+45        5/5      100%  8x7/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 45
+Every tested level achieved at least 50% success.
+
+=== level46-120s-offset100.txt ===
+Benchmarking levels 46-46, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+46       100   16     8x7/M3          5061757    595.000ms    200.000ms OK
+46       101   16     8x7/M3         88808708    573.000ms    200.000ms OK
+46       102   16     8x7/M3        261876986    569.000ms    405.000ms OK
+46       103   16     8x7/M3         61396129    576.000ms    200.000ms OK
+46       104   16     8x7/M3         61467158    572.000ms    402.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+46        5/5      100%  8x7/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 46
+Every tested level achieved at least 50% success.
+
+=== level47-120s-offset100.txt ===
+Benchmarking levels 47-47, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+47       100   17     8x7/M3       1382026470    590.000ms       3.005s OK
+47       101   17     8x7/M3       1851959013    580.000ms       3.204s OK
+47       102   17     8x7/M3        295384473    572.000ms    403.000ms OK
+47       103   17     8x7/M3         66093949    582.000ms    200.000ms OK
+47       104   17     8x7/M3       1337431597    605.000ms      13.926s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+47        5/5      100%  8x7/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 47
+Every tested level achieved at least 50% success.
+
+=== level48-120s-offset100.txt ===
+Benchmarking levels 48-48, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+48       100   18     8x7/M3       4674516655    601.000ms      56.395s OK
+48       101   18     8x7/M3       2623253906    646.000ms       5.301s OK
+48       102   18     8x7/M3       1704381190    588.000ms       3.406s OK
+48       103   18     8x7/M3       3637940200    632.000ms      56.482s OK
+48       104   18     8x7/M3       3222096633    630.000ms      30.829s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+48        5/5      100%  8x7/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 48
+Every tested level achieved at least 50% success.
+
+=== level49-120s-offset100.txt ===
+Benchmarking levels 49-49, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+49       100   19     8x7/M3        175227440    629.000ms    405.000ms OK
+49       101   19     8x7/M3       2476854117    642.000ms       9.957s OK
+49       102   19     8x7/M3       1910988590    629.000ms       9.921s OK
+49       103   19     8x7/M3       2000913452    653.000ms      56.636s OK
+49       104   19     8x7/M3       2398029881    654.000ms      56.449s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+49        5/5      100%  8x7/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 49
+Every tested level achieved at least 50% success.
+
+=== level50-120s-offset100.txt ===
+Benchmarking levels 50-50, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+50       100   20     8x7/M3       1827751224    653.000ms      16.227s OK
+50       101   20     8x7/M3       5636318000    667.000ms      62.585s OK
+50       102   20     8x7/M3        279956884    650.000ms    605.000ms OK
+50       103   20     8x7/M3       2310221883    679.000ms      56.724s OK
+50       104   20     8x7/M3       2286287411    688.000ms      25.080s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+50        5/5      100%  8x7/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 50
+Every tested level achieved at least 50% success.
+
+=== level51-120s-offset100.txt ===
+Benchmarking levels 51-51, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+51       100   16     8x8/M2        310553727       1.283s    404.000ms OK
+51       101   16     8x8/M2          3706237       1.332s    200.000ms OK
+51       102   16     8x8/M2          1417500       1.278s    200.000ms OK
+51       103   16     8x8/M2          3370150       1.292s    200.000ms OK
+51       104   16     8x8/M2         88623601       1.337s    404.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+51        5/5      100%  8x8/M2
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 51
+Every tested level achieved at least 50% success.
+
+=== level52-120s-offset100.txt ===
+Benchmarking levels 52-52, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+52       100   16     8x8/M3       1804764405    630.000ms       2.605s OK
+52       101   16     8x8/M3        284681350    647.000ms    402.000ms OK
+52       102   16     8x8/M3        677537330    640.000ms       1.003s OK
+52       103   16     8x8/M3        118530555    652.000ms    200.000ms OK
+52       104   16     8x8/M3         43886635    670.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+52        5/5      100%  8x8/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 52
+Every tested level achieved at least 50% success.
+
+=== level53-120s-offset100.txt ===
+Benchmarking levels 53-53, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+53       100   17     8x8/M3       2987330237    688.000ms      56.592s OK
+53       101   17     8x8/M3       1547572414    692.000ms      56.779s OK
+53       102   17     8x8/M3        419867560    666.000ms    601.000ms OK
+53       103   17     8x8/M3       1871680943    685.000ms      56.757s OK
+53       104   17     8x8/M3        307858703    660.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+53        5/5      100%  8x8/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 53
+Every tested level achieved at least 50% success.
+
+=== level54-120s-offset100.txt ===
+Benchmarking levels 54-54, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+54       100   18     8x8/M3       3686067620    693.000ms      56.775s OK
+54       101   18     8x8/M3       2020405806    700.000ms       2.404s OK
+54       102   18     8x8/M3       2617397282    697.000ms      46.639s OK
+54       103   18     8x8/M3       3482871602    693.000ms      56.757s OK
+54       104   18     8x8/M3       4011711742    696.000ms      57.027s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+54        5/5      100%  8x8/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 54
+Every tested level achieved at least 50% success.
+
+=== level55-120s-offset100.txt ===
+Benchmarking levels 55-55, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+55       100   15     8x8/M4            29825       1.285s    201.000ms OK
+55       101   15     8x8/M4           111705       1.348s    201.000ms OK
+55       102   15     8x8/M4             1371       1.235s    201.000ms OK
+55       103   15     8x8/M4             1859       1.311s    201.000ms OK
+55       104   15     8x8/M4           238354       1.286s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+55        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 55
+Every tested level achieved at least 50% success.
+
+=== level56-120s-offset100.txt ===
+Benchmarking levels 56-56, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+56       100   16     8x8/M4           907054       1.346s    201.000ms OK
+56       101   16     8x8/M4            49737       1.296s    201.000ms OK
+56       102   16     8x8/M4           112672       1.362s    201.000ms OK
+56       103   16     8x8/M4         27219638       1.346s    201.000ms OK
+56       104   16     8x8/M4          1856292       1.450s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+56        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 56
+Every tested level achieved at least 50% success.
+
+=== level57-120s-offset100.txt ===
+Benchmarking levels 57-57, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+57       100   17     8x8/M4           431017       1.451s    201.000ms OK
+57       101   17     8x8/M4        140555513       1.514s    201.000ms OK
+57       102   17     8x8/M4         24266429       1.473s    201.000ms OK
+57       103   17     8x8/M4          7046117       1.541s    201.000ms OK
+57       104   17     8x8/M4          1839509       1.482s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+57        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 57
+Every tested level achieved at least 50% success.
+
+=== level58-120s-offset100.txt ===
+Benchmarking levels 58-58, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+58       100   18     8x8/M4        355577550       1.594s    403.000ms OK
+58       101   18     8x8/M4         72175026       1.578s    201.000ms OK
+58       102   18     8x8/M4         28633746       1.504s    201.000ms OK
+58       103   18     8x8/M4         51202718       1.457s    201.000ms OK
+58       104   18     8x8/M4          3697070       1.565s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+58        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 58
+Every tested level achieved at least 50% success.
+
+=== level59-120s-offset100.txt ===
+Benchmarking levels 59-59, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+59       100   19     8x8/M4       1542947760       1.661s       1.810s OK
+59       101   19     8x8/M4        176158614       1.628s    201.000ms OK
+59       102   19     8x8/M4       1365725882       1.717s       1.005s OK
+59       103   19     8x8/M4        571247376       1.646s    802.000ms OK
+59       104   19     8x8/M4         98797380       1.645s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+59        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 59
+Every tested level achieved at least 50% success.
+
+=== level60-120s-offset100.txt ===
+Benchmarking levels 60-60, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+60       100   20     8x8/M4      33100467339       1.817s      85.029s OK
+60       101   20     8x8/M4        210862404       1.733s    204.000ms OK
+60       102   20     8x8/M4       1656804405       1.723s       2.604s OK
+60       103   20     8x8/M4       3893146800       1.772s      44.785s OK
+60       104   20     8x8/M4        319529176       1.675s    403.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+60        5/5      100%  8x8/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 60
+Every tested level achieved at least 50% success.
+
+=== level61-120s-offset100.txt ===
+Benchmarking levels 61-61, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+61       100   17     10x10/M3      307703133    878.000ms    404.000ms OK
+61       101   17     10x10/M3       13378049    838.000ms    200.000ms OK
+61       102   17     10x10/M3       28842154    852.000ms    200.000ms OK
+61       103   17     10x10/M3      102712052    864.000ms    200.000ms OK
+61       104   17     10x10/M3      200916799    879.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+61        5/5      100%  10x10/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 61
+Every tested level achieved at least 50% success.
+
+=== level62-120s-offset100.txt ===
+Benchmarking levels 62-62, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+62       100   18     10x10/M3     1996481428    893.000ms       2.003s OK
+62       101   18     10x10/M3     4581082482    906.000ms      57.786s OK
+62       102   18     10x10/M3      129847161    866.000ms    200.000ms OK
+62       103   18     10x10/M3         220569    880.000ms    200.000ms OK
+62       104   18     10x10/M3      225522638    885.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+62        5/5      100%  10x10/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 62
+Every tested level achieved at least 50% success.
+
+=== level63-120s-offset100.txt ===
+Benchmarking levels 63-63, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+63       100   19     10x10/M3      124732158    908.000ms    200.000ms OK
+63       101   19     10x10/M3     4266121316    939.000ms       4.402s OK
+63       102   19     10x10/M3     8453588997    990.000ms       4.207s OK
+63       103   19     10x10/M3       70722152    904.000ms    200.000ms OK
+63       104   19     10x10/M3     3774694516    919.000ms      16.690s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+63        5/5      100%  10x10/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 63
+Every tested level achieved at least 50% success.
+
+=== level64-120s-offset100.txt ===
+Benchmarking levels 64-64, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+64       100   20     10x10/M3     5097357533    950.000ms      57.006s OK
+64       101   20     10x10/M3     4113917076    966.000ms      39.855s OK
+64       102   20     10x10/M3     7241041822    929.000ms      44.399s OK
+64       103   20     10x10/M3     3914500551    965.000ms      43.262s OK
+64       104   20     10x10/M3     6189176611    953.000ms      47.052s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+64        5/5      100%  10x10/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 64
+Every tested level achieved at least 50% success.
+
+=== level65-120s-offset100.txt ===
+Benchmarking levels 65-65, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+65       100   18     10x10/M4          33942       1.547s    201.000ms OK
+65       101   18     10x10/M4         145988       1.546s    201.000ms OK
+65       102   18     10x10/M4       18453741       1.606s    202.000ms OK
+65       103   18     10x10/M4          46790       1.572s    201.000ms OK
+65       104   18     10x10/M4        3354674       1.531s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+65        5/5      100%  10x10/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 65
+Every tested level achieved at least 50% success.
+
+=== level66-120s-offset100.txt ===
+Benchmarking levels 66-66, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+66       100   19     10x10/M4         240623       1.603s    201.000ms OK
+66       101   19     10x10/M4         197452       1.636s    201.000ms OK
+66       102   19     10x10/M4          18940       1.680s    201.000ms OK
+66       103   19     10x10/M4       18829973       1.665s    201.000ms OK
+66       104   19     10x10/M4          25859       1.635s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+66        5/5      100%  10x10/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 66
+Every tested level achieved at least 50% success.
+
+=== level67-120s-offset100.txt ===
+Benchmarking levels 67-67, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+67       100   20     10x10/M4       36195603       1.821s    201.000ms OK
+67       101   20     10x10/M4        3209892       1.729s    201.000ms OK
+67       102   20     10x10/M4       36730172       1.819s    201.000ms OK
+67       103   20     10x10/M4         112300       1.705s    201.000ms OK
+67       104   20     10x10/M4       36182430       1.711s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+67        5/5      100%  10x10/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 67
+Every tested level achieved at least 50% success.
+
+=== level68-120s-offset100.txt ===
+Benchmarking levels 68-68, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+68       100   21     10x10/M4     5697906000       1.821s       2.004s OK
+68       101   21     10x10/M4         335591       1.776s    201.000ms OK
+68       102   21     10x10/M4              -       1.838s        >120s TIMEOUT
+68       103   21     10x10/M4       39830347       1.722s    201.000ms OK
+68       104   21     10x10/M4      148319544       1.838s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+68        4/5       80%  10x10/M4
+
+4 ok, 0 fail, 1 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.
+
+=== level69-120s-offset100.txt ===
+Benchmarking levels 69-69, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+69       100   22     10x10/M4         341582       1.837s    202.000ms OK
+69       101   22     10x10/M4       12456372       1.945s    202.000ms OK
+69       102   22     10x10/M4      958830646       1.871s    404.000ms OK
+69       103   22     10x10/M4        3637297       1.890s    202.000ms OK
+69       104   22     10x10/M4        2002409       1.870s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+69        5/5      100%  10x10/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 69
+Every tested level achieved at least 50% success.
+
+=== level70-120s-offset100.txt ===
+Benchmarking levels 70-70, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+70       100   23     10x10/M4     1461731134       2.059s       1.005s OK
+70       101   23     10x10/M4     1150379130       2.003s    607.000ms OK
+70       102   23     10x10/M4    23070010253       2.106s      30.414s OK
+70       103   23     10x10/M4     6596743286       1.963s       3.004s OK
+70       104   23     10x10/M4     2280217893       2.000s       1.405s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+70        5/5      100%  10x10/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 70
+Every tested level achieved at least 50% success.
+
+=== level71-120s-offset100.txt ===
+Benchmarking levels 71-71, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+71       100   18     10x11/M3       39019751    951.000ms    200.000ms OK
+71       101   18     10x11/M3     4947372282    972.000ms      30.248s OK
+71       102   18     10x11/M3      230744396    960.000ms    200.000ms OK
+71       103   18     10x11/M3     5351433257    962.000ms       5.008s OK
+71       104   18     10x11/M3        9892697    959.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+71        5/5      100%  10x11/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 71
+Every tested level achieved at least 50% success.
+
+=== level72-120s-offset100.txt ===
+Benchmarking levels 72-72, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+72       100   19     10x11/M3     2055675575       1.002s       1.805s OK
+72       101   19     10x11/M3      301963001       1.012s    405.000ms OK
+72       102   19     10x11/M3      114553909       1.008s    200.000ms OK
+72       103   19     10x11/M3      120941898       1.009s    200.000ms OK
+72       104   19     10x11/M3     5437033718       1.009s      58.038s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+72        5/5      100%  10x11/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 72
+Every tested level achieved at least 50% success.
+
+=== level73-120s-offset100.txt ===
+Benchmarking levels 73-73, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+73       100   20     10x11/M3     5537738435       1.050s      30.073s OK
+73       101   20     10x11/M3              -       1.042s        >120s TIMEOUT
+73       102   20     10x11/M3     4653010019       1.055s       9.590s OK
+73       103   20     10x11/M3       35687952       1.050s    200.000ms OK
+73       104   20     10x11/M3     7501815067       1.043s      58.923s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+73        4/5       80%  10x11/M3
+
+4 ok, 0 fail, 1 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.
+
+=== level74-120s-offset100.txt ===
+Benchmarking levels 74-74, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+74       100   21     10x11/M3     8613882035       1.097s      57.682s OK
+74       101   21     10x11/M3     4517193005       1.093s      47.639s OK
+74       102   21     10x11/M3    13310963816       1.079s      32.290s OK
+74       103   21     10x11/M3     5612596758       1.107s      30.156s OK
+74       104   21     10x11/M3        1335454       1.092s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+74        5/5      100%  10x11/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 74
+Every tested level achieved at least 50% success.
+
+=== level75-120s-offset100.txt ===
+Benchmarking levels 75-75, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+75       100   22     10x11/M3     3169834222       1.136s      30.248s OK
+75       101   22     10x11/M3              -       1.133s        >120s TIMEOUT
+75       102   22     10x11/M3     4079821872       1.149s      33.158s OK
+75       103   22     10x11/M3     4691359878       1.134s      59.576s OK
+75       104   22     10x11/M3    16184657024       1.148s      66.526s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+75        4/5       80%  10x11/M3
+
+4 ok, 0 fail, 1 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.
+
+=== level76-120s-offset100.txt ===
+Benchmarking levels 76-76, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+76       100   20     10x11/M4        6596591       1.752s    201.000ms OK
+76       101   20     10x11/M4        1168489       1.776s    201.000ms OK
+76       102   20     10x11/M4          63901       1.742s    201.000ms OK
+76       103   20     10x11/M4           5921       1.694s    201.000ms OK
+76       104   20     10x11/M4         502458       1.759s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+76        5/5      100%  10x11/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 76
+Every tested level achieved at least 50% success.
+
+=== level77-120s-offset100.txt ===
+Benchmarking levels 77-77, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+77       100   21     10x11/M4      298736504       1.808s    201.000ms OK
+77       101   21     10x11/M4         806717       1.855s    201.000ms OK
+77       102   21     10x11/M4       68135155       1.768s    201.000ms OK
+77       103   21     10x11/M4          81888       1.816s    201.000ms OK
+77       104   21     10x11/M4        1680045       1.867s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+77        5/5      100%  10x11/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 77
+Every tested level achieved at least 50% success.
+
+=== level78-120s-offset100.txt ===
+Benchmarking levels 78-78, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+78       100   22     10x11/M4      466699864       1.906s    201.000ms OK
+78       101   22     10x11/M4        3270440       1.931s    201.000ms OK
+78       102   22     10x11/M4      579355677       1.957s    201.000ms OK
+78       103   22     10x11/M4       63720961       1.882s    202.000ms OK
+78       104   22     10x11/M4        7786991       1.922s    202.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+78        5/5      100%  10x11/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 78
+Every tested level achieved at least 50% success.
+
+=== level79-120s-offset100.txt ===
+Benchmarking levels 79-79, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+79       100   23     10x11/M4        4135678       2.049s    201.000ms OK
+79       101   23     10x11/M4     2450343282       1.971s    603.000ms OK
+79       102   23     10x11/M4     9398139198       2.001s      30.387s OK
+79       103   23     10x11/M4      449281744       1.992s    201.000ms OK
+79       104   23     10x11/M4      534062749       1.975s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+79        5/5      100%  10x11/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 79
+Every tested level achieved at least 50% success.
+
+=== level80-120s-offset100.txt ===
+Benchmarking levels 80-80, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+80       100   24     10x11/M4      217439236       2.160s    202.000ms OK
+80       101   24     10x11/M4      533194054       2.079s    201.000ms OK
+80       102   24     10x11/M4              -       2.090s        >120s TIMEOUT
+80       103   24     10x11/M4              -       2.118s        >120s TIMEOUT
+80       104   24     10x11/M4    11265460211       2.086s      31.345s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+80        3/5       60%  10x11/M4
+
+3 ok, 0 fail, 2 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.
+
+=== level81-120s-offset100.txt ===
+Benchmarking levels 81-81, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+81       100   20     12x12/M3     1689631377       1.320s    802.000ms OK
+81       101   20     12x12/M3     1075677995       1.304s    805.000ms OK
+81       102   20     12x12/M3         140528       1.300s    200.000ms OK
+81       103   20     12x12/M3        1483454       1.278s    200.000ms OK
+81       104   20     12x12/M3      200794944       1.297s    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+81        5/5      100%  12x12/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 81
+Every tested level achieved at least 50% success.
+
+=== level82-120s-offset100.txt ===
+Benchmarking levels 82-82, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+82       100   21     12x12/M3      354585437       1.345s    401.000ms OK
+82       101   21     12x12/M3     6867106229       1.366s       4.003s OK
+82       102   21     12x12/M3       18296591       1.368s    200.000ms OK
+82       103   21     12x12/M3     1271635539       1.329s    604.000ms OK
+82       104   21     12x12/M3     9651094656       1.352s      30.739s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+82        5/5      100%  12x12/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 82
+Every tested level achieved at least 50% success.
+
+=== level83-120s-offset100.txt ===
+Benchmarking levels 83-83, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+83       100   22     12x12/M3     7889530469       1.415s      30.210s OK
+83       101   22     12x12/M3       65966144       1.395s    200.000ms OK
+83       102   22     12x12/M3      250432388       1.398s    200.000ms OK
+83       103   22     12x12/M3     6237052813       1.433s      30.287s OK
+83       104   22     12x12/M3     5838071475       1.414s      30.473s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+83        5/5      100%  12x12/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 83
+Every tested level achieved at least 50% success.
+
+=== level84-120s-offset100.txt ===
+Benchmarking levels 84-84, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+84       100   23     12x12/M3    12636702742       1.486s      30.114s OK
+84       101   23     12x12/M3        6305347       1.455s    200.000ms OK
+84       102   23     12x12/M3         306229       1.498s    200.000ms OK
+84       103   23     12x12/M3      329554118       1.457s    401.000ms OK
+84       104   23     12x12/M3     6988828556       1.482s      32.520s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+84        5/5      100%  12x12/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 84
+Every tested level achieved at least 50% success.
+
+=== level85-120s-offset100.txt ===
+Benchmarking levels 85-85, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+85       100   24     12x12/M3     9171656766       1.600s      30.763s OK
+85       101   24     12x12/M3     8597766668       1.514s       4.404s OK
+85       102   24     12x12/M3     5581292657       1.512s      60.410s OK
+85       103   24     12x12/M3    13839006800       1.517s      60.096s OK
+85       104   24     12x12/M3     6263113327       1.560s      61.776s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+85        5/5      100%  12x12/M3
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 85
+Every tested level achieved at least 50% success.
+
+=== level86-120s-offset100.txt ===
+Benchmarking levels 86-86, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+86       100   21     12x12/M4       38736938       1.831s    201.000ms OK
+86       101   21     12x12/M4          90498       1.856s    201.000ms OK
+86       102   21     12x12/M4          48034       2.036s    201.000ms OK
+86       103   21     12x12/M4         218355       1.842s    202.000ms OK
+86       104   21     12x12/M4          83749       1.861s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+86        5/5      100%  12x12/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 86
+Every tested level achieved at least 50% success.
+
+=== level87-120s-offset100.txt ===
+Benchmarking levels 87-87, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+87       100   22     12x12/M4        4768396       1.909s    201.000ms OK
+87       101   22     12x12/M4         551072       1.984s    202.000ms OK
+87       102   22     12x12/M4        1248960       1.972s    201.000ms OK
+87       103   22     12x12/M4         959935       1.898s    201.000ms OK
+87       104   22     12x12/M4       98740931       1.972s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+87        5/5      100%  12x12/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 87
+Every tested level achieved at least 50% success.
+
+=== level88-120s-offset100.txt ===
+Benchmarking levels 88-88, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+88       100   23     12x12/M4         540365       2.047s    201.000ms OK
+88       101   23     12x12/M4       13639990       2.033s    202.000ms OK
+88       102   23     12x12/M4        2620954       2.009s    201.000ms OK
+88       103   23     12x12/M4         198378       2.091s    202.000ms OK
+88       104   23     12x12/M4      122689869       2.146s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+88        5/5      100%  12x12/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 88
+Every tested level achieved at least 50% success.
+
+=== level89-120s-offset100.txt ===
+Benchmarking levels 89-89, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+89       100   24     12x12/M4         438973       2.069s    201.000ms OK
+89       101   24     12x12/M4       88398946       2.059s    201.000ms OK
+89       102   24     12x12/M4           3280       2.127s    201.000ms OK
+89       103   24     12x12/M4       19755335       2.120s    201.000ms OK
+89       104   24     12x12/M4        4902544       2.091s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+89        5/5      100%  12x12/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 89
+Every tested level achieved at least 50% success.
+
+=== level90-120s-offset100.txt ===
+Benchmarking levels 90-90, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+90       100   25     12x12/M4       34717905       2.160s    201.000ms OK
+90       101   25     12x12/M4      966643784       2.194s    403.000ms OK
+90       102   25     12x12/M4         214066       2.211s    201.000ms OK
+90       103   25     12x12/M4        1284963       2.143s    201.000ms OK
+90       104   25     12x12/M4       32174787       2.195s    202.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+90        5/5      100%  12x12/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 90
+Every tested level achieved at least 50% success.
+
+=== level91-120s-offset100.txt ===
+Benchmarking levels 91-91, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+91       100   23     14x13/M4           7338       2.009s    201.000ms OK
+91       101   23     14x13/M4           9214       2.054s    202.000ms OK
+91       102   23     14x13/M4          81945       2.086s    201.000ms OK
+91       103   23     14x13/M4          15801       1.948s    201.000ms OK
+91       104   23     14x13/M4           5110       2.035s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+91        5/5      100%  14x13/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 91
+Every tested level achieved at least 50% success.
+
+=== level92-120s-offset100.txt ===
+Benchmarking levels 92-92, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+92       100   24     14x13/M4         119068       2.160s    202.000ms OK
+92       101   24     14x13/M4          49597       2.182s    201.000ms OK
+92       102   24     14x13/M4      254044225       2.192s    201.000ms OK
+92       103   24     14x13/M4           8410       2.154s    201.000ms OK
+92       104   24     14x13/M4         248611       2.119s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+92        5/5      100%  14x13/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 92
+Every tested level achieved at least 50% success.
+
+=== level93-120s-offset100.txt ===
+Benchmarking levels 93-93, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+93       100   25     14x13/M4         858088       2.206s    201.000ms OK
+93       101   25     14x13/M4         490808       2.231s    201.000ms OK
+93       102   25     14x13/M4         537705       2.200s    201.000ms OK
+93       103   25     14x13/M4        6892162       2.218s    202.000ms OK
+93       104   25     14x13/M4          32721       2.254s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+93        5/5      100%  14x13/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 93
+Every tested level achieved at least 50% success.
+
+=== level94-120s-offset100.txt ===
+Benchmarking levels 94-94, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+94       100   26     14x13/M4      698368691       2.277s    201.000ms OK
+94       101   26     14x13/M4     8684297225       2.306s       1.005s OK
+94       102   26     14x13/M4         325978       2.296s    202.000ms OK
+94       103   26     14x13/M4          15781       2.251s    201.000ms OK
+94       104   26     14x13/M4         246339       2.246s    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+94        5/5      100%  14x13/M4
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 94
+Every tested level achieved at least 50% success.
+
+=== level95-120s-offset100.txt ===
+Benchmarking levels 95-95, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+95       100   24     14x13/M5       40312503     54.000ms    201.000ms OK
+95       101   24     14x13/M5           6077     57.000ms    201.000ms OK
+95       102   24     14x13/M5        7035703     51.000ms    201.000ms OK
+95       103   24     14x13/M5          11884     48.000ms    201.000ms OK
+95       104   24     14x13/M5         405981     52.000ms    201.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+95        5/5      100%  14x13/M5
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 95
+Every tested level achieved at least 50% success.
+
+=== level96-120s-offset100.txt ===
+Benchmarking levels 96-96, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+96       100   26     14x13/M5        2130094     52.000ms    201.000ms OK
+96       101   26     14x13/M5         491378     55.000ms    201.000ms OK
+96       102   26     14x13/M5         106635    103.000ms    202.000ms OK
+96       103   26     14x13/M5          18620     54.000ms    202.000ms OK
+96       104   26     14x13/M5         463300     57.000ms    200.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+96        5/5      100%  14x13/M5
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 96
+Every tested level achieved at least 50% success.
+
+=== level97-120s-offset100.txt ===
+Benchmarking levels 97-97, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+97       100   28     14x13/M5        3092336     63.000ms    201.000ms OK
+97       101   28     14x13/M5         335542     60.000ms    201.000ms OK
+97       102   28     14x13/M5          12001     67.000ms    201.000ms OK
+97       103   28     14x13/M5         383777     58.000ms    201.000ms OK
+97       104   28     14x13/M5        9196167     57.000ms    202.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+97        5/5      100%  14x13/M5
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 97
+Every tested level achieved at least 50% success.
+
+=== level98-120s-offset100.txt ===
+Benchmarking levels 98-98, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+98       100   30     14x13/M5        2193369     62.000ms    202.000ms OK
+98       101   30     14x13/M5      646060017     66.000ms    201.000ms OK
+98       102   30     14x13/M5      187125998     65.000ms    201.000ms OK
+98       103   30     14x13/M5       12237751     61.000ms    202.000ms OK
+98       104   30     14x13/M5      213724371     66.000ms    202.000ms OK
+
+Level    OK      Rate    Board
+-----------------------------------
+98        5/5      100%  14x13/M5
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 98
+Every tested level achieved at least 50% success.
+
+=== level99-120s-offset100.txt ===
+Benchmarking levels 99-99, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+99       100   32     14x13/M5      697068963     69.000ms    201.000ms OK
+99       101   32     14x13/M5     2827461336     65.000ms    606.000ms OK
+99       102   32     14x13/M5       50241969     69.000ms    201.000ms OK
+99       103   32     14x13/M5     2522543921     69.000ms    402.000ms OK
+99       104   32     14x13/M5    19612872670     75.000ms       2.408s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+99        5/5      100%  14x13/M5
+
+5 ok, 0 fail, 0 timeout, 0 error
+Consistently 100% through level: 99
+Every tested level achieved at least 50% success.
+
+=== level100-120s-offset100.txt ===
+Benchmarking levels 100-100, 5 games each (120s timeout, 5 tasks, 1 workers)
+Level    Game  Pcs    Board             Nodes         Prep       Search Result
+----------------------------------------------------------------------
+100      100   36     14x14/M5    33970938064     81.000ms      32.200s OK
+100      101   36     14x14/M5    33835457902     98.000ms       3.804s OK
+100      102   36     14x14/M5     1031968858     89.000ms    201.000ms OK
+100      103   36     14x14/M5              -     93.000ms        >120s TIMEOUT
+100      104   36     14x14/M5    16265314810     87.000ms       2.204s OK
+
+Level    OK      Rate    Board
+-----------------------------------
+100       4/5       80%  14x14/M5
+
+4 ok, 0 fail, 1 timeout, 0 error
+Consistently 100% through level: 0
+Every tested level achieved at least 50% success.

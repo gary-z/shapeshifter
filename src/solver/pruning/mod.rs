@@ -1,13 +1,11 @@
 mod cell_set;
 mod jaggedness;
-mod monte_carlo;
 mod partition;
 mod small_component;
 mod total_deficit;
 
 pub(super) use cell_set::CellSetBound;
 pub(super) use jaggedness::JaggednessBound;
-pub(super) use monte_carlo::{HitCounter, MonteCarloBounds};
 pub(super) use partition::PartitionReachability;
 pub(super) use small_component::SmallComponentBound;
 pub(super) use total_deficit::TotalDeficitBound;
@@ -55,9 +53,15 @@ pub(super) fn state_is_feasible<const MODULUS: usize>(
     let remaining_cells = data.total_deficit.remaining_cells(piece_index);
 
     data.total_deficit.allows::<MODULUS>(board, piece_index)
-        && data
-            .monte_carlo
-            .allows_state::<MODULUS>(board, piece_index, &data.jaggedness)
+        && data.jaggedness.allows(
+            &jaggedness::measure::<MODULUS>(
+                board,
+                data.jaggedness.horizontal_mask(),
+                data.jaggedness.vertical_mask(),
+            ),
+            piece_index,
+            MODULUS as u8,
+        )
         && data.small_component.allows::<MODULUS>(
             board,
             piece_index,

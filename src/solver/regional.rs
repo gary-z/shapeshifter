@@ -203,9 +203,10 @@ impl RegionalSearch {
                     .collect()
             })
             .collect();
-        // Keep the joint distributions affordable as the modulus increases.
-        // Four-cell regions have 256 states at M=4; six cells would need 4096.
-        let region_shapes = if modulus == 3 {
+        // Choose region sizes by the cost of their joint distributions, using
+        // the same state budget for every board and modulus.
+        const MAX_REGION_STATES: usize = 1 << 10;
+        let region_shapes = if modulus.pow(6) <= MAX_REGION_STATES {
             [(2, 2), (2, 3), (3, 2)]
         } else {
             [(2, 2), (1, 4), (4, 1)]
