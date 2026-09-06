@@ -19,6 +19,7 @@ wasm-bindgen = { version = "0.2.127", optional = true }
 getrandom = { version = "0.4", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rand_mt = { version = "6.0.3", default-features = false }
 wait-timeout = "0.2.1"
 
 [lib]

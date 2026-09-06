@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -23,6 +23,7 @@ struct TaskResult {
     n_pieces: usize,
     board_desc: String,
     nodes: Option<u64>,
+    preparation_ms: Option<u64>,
     elapsed_ms: Option<u64>,
     status: String,
 }
@@ -69,6 +70,7 @@ fn run_task(
                 n_pieces: task.n_pieces,
                 board_desc: task.board_desc.clone(),
                 nodes: None,
+                preparation_ms: None,
                 elapsed_ms: None,
                 status: "ERROR".to_string(),
             };
@@ -79,71 +81,61 @@ fn run_task(
         let _ = stdin.write_all(task.json.as_bytes());
     }
 
-    let timeout = Duration::from_secs(timeout_secs);
-    let wait_result = child.wait_timeout(timeout);
-    let stdout_pipe = child.stdout.take();
-
-    match wait_result {
-        Ok(Some(status)) if status.success() => {
-            if let Some(mut pipe) = stdout_pipe {
-                use std::io::Read;
-                let mut stdout = String::new();
-                let _ = pipe.read_to_string(&mut stdout);
-                if let Some(line) = stdout.lines().next() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        let nodes = parts[0].parse().ok();
-                        let elapsed_ms = parts[1].parse().ok();
-                        let solved = parts[2] == "true";
-                        return TaskResult {
-                            level: task.level,
-                            game_idx: task.game_idx,
-                            n_pieces: task.n_pieces,
-                            board_desc: task.board_desc.clone(),
-                            nodes,
-                            elapsed_ms,
-                            status: if solved { "OK" } else { "FAIL" }.to_string(),
-                        };
+    // Read readiness before starting the search timeout. A separate generous
+    // watchdog catches a stuck preparation or a broken worker protocol.
+    let (line_tx, line_rx) = mpsc::channel();
+    let stdout = child.stdout.take().expect("worker stdout missing");
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if line_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let ready = line_rx.recv_timeout(Duration::from_secs(300));
+    let preparation_ms = match &ready {
+        Ok(Ok(line)) => line.strip_prefix("READY ").and_then(|ms| ms.parse().ok()),
+        _ => None,
+    };
+    let mut result = TaskResult {
+        level: task.level,
+        game_idx: task.game_idx,
+        n_pieces: task.n_pieces,
+        board_desc: task.board_desc.clone(),
+        nodes: None,
+        preparation_ms,
+        elapsed_ms: None,
+        status: "ERROR".to_string(),
+    };
+    if preparation_ms.is_some() {
+        match child.wait_timeout(Duration::from_secs(timeout_secs)) {
+            Ok(Some(status)) if status.success() => {
+                if let Ok(Ok(line)) = line_rx.recv_timeout(Duration::from_secs(1)) {
+                    let parts: Vec<_> = line.split_whitespace().collect();
+                    if parts.len() == 3 {
+                        result.nodes = parts[0].parse().ok();
+                        result.elapsed_ms = parts[1].parse().ok();
+                        if result.nodes.is_some() && result.elapsed_ms.is_some() {
+                            result.status = match parts[2] {
+                                "true" => "OK",
+                                "false" => "FAIL",
+                                _ => "ERROR",
+                            }
+                            .to_string();
+                        }
                     }
                 }
             }
-            TaskResult {
-                level: task.level,
-                game_idx: task.game_idx,
-                n_pieces: task.n_pieces,
-                board_desc: task.board_desc.clone(),
-                nodes: None,
-                elapsed_ms: None,
-                status: "ERROR".to_string(),
-            }
+            Ok(None) => result.status = "TIMEOUT".to_string(),
+            _ => {}
         }
-        Ok(None) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            TaskResult {
-                level: task.level,
-                game_idx: task.game_idx,
-                n_pieces: task.n_pieces,
-                board_desc: task.board_desc.clone(),
-                nodes: None,
-                elapsed_ms: None,
-                status: "TIMEOUT".to_string(),
-            }
-        }
-        _ => {
-            let _ = child.kill();
-            let _ = child.wait();
-            TaskResult {
-                level: task.level,
-                game_idx: task.game_idx,
-                n_pieces: task.n_pieces,
-                board_desc: task.board_desc.clone(),
-                nodes: None,
-                elapsed_ms: None,
-                status: "ERROR".to_string(),
-            }
-        }
+    } else if matches!(ready, Err(mpsc::RecvTimeoutError::Timeout)) {
+        result.status = "PREP_TIMEOUT".to_string();
     }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = reader.join();
+    result
 }
 
 fn game_to_json(
@@ -168,7 +160,12 @@ fn game_to_json(
     puz_json.to_string()
 }
 
-fn build_simulated_tasks(start_level: u32, end_level: u32, games_per: u32) -> Vec<Task> {
+fn build_simulated_tasks(
+    start_level: u32,
+    end_level: u32,
+    games_per: u32,
+    seed_offset: u32,
+) -> Vec<Task> {
     let mut tasks = Vec::new();
     for level in start_level..=end_level {
         let spec = match get_level(level) {
@@ -176,7 +173,8 @@ fn build_simulated_tasks(start_level: u32, end_level: u32, games_per: u32) -> Ve
             None => continue,
         };
         for g in 0..games_per {
-            let seed = level as u64 * 1000 + g as u64;
+            let game_idx = seed_offset.checked_add(g).expect("seed offset overflow");
+            let seed = level as u64 * 1000 + u64::from(game_idx);
             let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
             let game = generate_for_level(level, &mut rng).unwrap();
             let n_pieces = game.pieces().len();
@@ -184,7 +182,7 @@ fn build_simulated_tasks(start_level: u32, end_level: u32, games_per: u32) -> Ve
             let json = game_to_json(&game, level, &spec);
             tasks.push(Task {
                 level,
-                game_idx: g,
+                game_idx,
                 n_pieces,
                 board_desc,
                 json,
@@ -258,14 +256,14 @@ fn run_bench(
 
         if show_nodes_per_sec {
             println!(
-                "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
-                "Level", "Game", "Pcs", "Board", "Nodes", "Time", "Nodes/sec", "Status"
+                "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>10} {:>12} {:<8}",
+                "Level", "Game", "Pcs", "Board", "Nodes", "Prep", "Search", "Nodes/sec", "Status"
             );
             println!("{}", "-".repeat(80));
         } else {
             println!(
-                "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:<8}",
-                "Level", "Game", "Pcs", "Board", "Nodes", "Time", "Result"
+                "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:>12} {:<8}",
+                "Level", "Game", "Pcs", "Board", "Nodes", "Prep", "Search", "Result"
             );
             println!("{}", "-".repeat(70));
         }
@@ -274,20 +272,31 @@ fn run_bench(
         let mut ok = 0u32;
         let mut fail = 0u32;
         let mut timeout = 0u32;
+        let mut errors = 0u32;
 
         for r in result_rx {
             match r.status.as_str() {
                 "OK" | "DONE" => ok += 1,
                 "FAIL" => fail += 1,
                 "TIMEOUT" => timeout += 1,
-                _ => {}
+                _ => errors += 1,
             }
 
             let nodes_str = r.nodes.map(|n| n.to_string()).unwrap_or("-".to_string());
+            let preparation_str = r
+                .preparation_ms
+                .map(|ms| format!("{:.3?}", Duration::from_millis(ms)))
+                .unwrap_or_else(|| "-".to_string());
             let time_str = r
                 .elapsed_ms
                 .map(|ms| format!("{:.3?}", Duration::from_millis(ms)))
-                .unwrap_or(format!(">{}s", timeout_secs));
+                .unwrap_or_else(|| {
+                    if r.status == "TIMEOUT" {
+                        format!(">{}s", timeout_secs)
+                    } else {
+                        "-".to_string()
+                    }
+                });
 
             if show_nodes_per_sec {
                 let nps_str = match (r.nodes, r.elapsed_ms) {
@@ -295,24 +304,31 @@ fn run_bench(
                     _ => "-".to_string(),
                 };
                 println!(
-                    "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>12} {:<8}",
+                    "{:<6} {:<4} {:<6} {:<10} {:>14} {:>10} {:>10} {:>12} {:<8}",
                     r.level,
                     r.game_idx,
                     r.n_pieces,
                     r.board_desc,
                     nodes_str,
+                    preparation_str,
                     time_str,
                     nps_str,
                     r.status,
                 );
             } else {
                 println!(
-                    "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:<8}",
-                    r.level, r.game_idx, r.n_pieces, r.board_desc, nodes_str, time_str, r.status,
+                    "{:<8} {:<5} {:<6} {:<10} {:>12} {:>12} {:>12} {:<8}",
+                    r.level,
+                    r.game_idx,
+                    r.n_pieces,
+                    r.board_desc,
+                    nodes_str,
+                    preparation_str,
+                    time_str,
+                    r.status,
                 );
             }
 
-            use std::io::Write;
             let _ = std::io::stdout().flush();
             results.push(r);
         }
@@ -324,6 +340,7 @@ fn run_bench(
 
         let mut all_consistent = true;
         let mut last_consistent = 0u32;
+        let mut below_half = Vec::new();
         let mut i = 0;
         while i < results.len() {
             let level = results[i].level;
@@ -338,6 +355,9 @@ fn run_bench(
                 i += 1;
             }
             let rate = level_ok as f64 / level_total as f64 * 100.0;
+            if level_ok * 2 < level_total {
+                below_half.push(level);
+            }
             if rate == 100.0 && all_consistent {
                 last_consistent = level;
             } else if rate < 100.0 {
@@ -349,8 +369,16 @@ fn run_bench(
             );
         }
 
-        println!("\n{} ok, {} fail, {} timeout", ok, fail, timeout);
+        println!(
+            "\n{} ok, {} fail, {} timeout, {} error",
+            ok, fail, timeout, errors
+        );
         println!("Consistently 100% through level: {}", last_consistent);
+        if below_half.is_empty() {
+            println!("Every tested level achieved at least 50% success.");
+        } else {
+            println!("Levels below 50% success: {:?}", below_half);
+        }
     });
 }
 
@@ -363,8 +391,9 @@ fn print_usage() {
          Options:\n  \
            --parallel       Use parallel solver (each game gets all cores)\n  \
            --exhaustive     Continue through bounded tree (no early termination)\n  \
-           --timeout SECS   Timeout per game (default: 5 for simulated, 60 for historical)\n  \
+           --timeout SECS   Search timeout per game, excluding preparation (default: 5 for simulated, 60 for historical)\n  \
            --games-per N    Games per level for simulated mode (default: 5)\n  \
+           --seed-offset N  Start at game index N for fresh generated samples\n  \
            -h, --help       Show this help"
     );
 }
@@ -383,6 +412,7 @@ fn main() {
     let mut exhaustive = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
+    let mut seed_offset = 0u32;
 
     let mut i = 1;
     while i < args.len() {
@@ -396,6 +426,10 @@ fn main() {
             "--games-per" => {
                 i += 1;
                 games_per = Some(args[i].parse().expect("invalid games-per"));
+            }
+            "--seed-offset" => {
+                i += 1;
+                seed_offset = args[i].parse().expect("invalid seed offset");
             }
             "-h" | "--help" => {
                 print_usage();
@@ -441,7 +475,7 @@ fn main() {
                     .unwrap_or(4)
             };
 
-            let tasks = build_simulated_tasks(start_level, end_level, games_per);
+            let tasks = build_simulated_tasks(start_level, end_level, games_per, seed_offset);
             eprintln!(
                 "Benchmarking levels {}-{}, {} games each ({}s timeout, {} tasks, {} workers)",
                 start_level,

@@ -1,0 +1,101 @@
+{
+  "base_commit": "c01a22da6d3ea4bd5078083f63b35b2256fa27e4",
+  "branch": "improve/spatial-search",
+  "build": "candidate4",
+  "binary_sha256": {
+    "solve": "e2dc9281477b0b4fa860219a39830e1670738a7db64fd87f8988a4a7bee717d9",
+    "bench": "d6a392867de6283b836d8ae425b45405e8a92bdd660c09342e84f910a2939491",
+    "generate": "c92581d5896db6281b2b801ecf56b4e149943189f5d19bfce71f1377c333fff0"
+  },
+  "source_sha256": {
+    ".cargo/config.toml": "c194b0c8fde1b0af55d9e53b53cb163f55346e8c434cec9d9b5e6dd55398321d",
+    "Cargo.lock": "9193a9b2438615b0eaaeec9e515437519d0a731a7e20b9635e6d07a3d9d54577",
+    "Cargo.toml": "30d9e2d5460dbb5ffddd400273b2b54b13d571de04dafd8f2f3864bef5e5176a",
+    "rust-toolchain": "b1245a17fb6c99e5359ff7fc0badcb7a600ef78b22e1e9e0572d4224f4619226",
+    "src/bin/bench.rs": "d06d7890bf501146a47f2a96acb7ad021b08dce5b383e06b7fcdcc57ac1b33ed",
+    "src/bin/generate.rs": "b47d6445808b0275f19035a9638ce334118f62de3581d7247fe8ecc8c226f537",
+    "src/bin/parse.rs": "d9fd8b07407e562cf6a2d152c0ea750b8c9a0256c9b92c159f261846f012368a",
+    "src/bin/solve.rs": "8c25e0aca95b64c17703df1b67a242d59baf50bebd0594c7ef4943f01da18520",
+    "src/core/bitboard.rs": "cd563e1550902097d285d702ce80c83c2d7d6f51a8d8097a91baf78608e0dee0",
+    "src/core/board.rs": "1cbd3ee6f4f668c2c99f23dbce85b9fe5185c0b991b7a657c2186e306286c38e",
+    "src/core/mod.rs": "da03017c328c3ad32ff72164655e5ab6f6bbf0805b0245070595c7fb90cc70a5",
+    "src/core/piece.rs": "be8688ab5ad0bf8ddb860d019a215a72a65086480a07709aad7581704b49a150",
+    "src/game.rs": "f311cfddf064b81f475af0764c916ae6efcb7e0355a8a77f9e096d58e037bcb9",
+    "src/generate.rs": "efedebc9ac40d4b87eeda80712181d045d4cd0a5544c5f7ff8a1636aa6d70c86",
+    "src/level.rs": "c76968b469735bd047b64da31254c64136f2cfb917d68b857713478102c78034",
+    "src/lib.rs": "5db38f0fd67d182657c67ecb44f34467111d82d83af86b606d4912c1610b111f",
+    "src/puzzle.rs": "1f2991c38a07bdd36c0a2ab6d05e09be16b381a613cd938a29b0fe5c80a7f189",
+    "src/solver/adaptive.rs": "38b582c6e3656f14fda37602d3e8c023e70e0808b3de16d1932ee77e14cf7cd0",
+    "src/solver/backtrack.rs": "91cfe7878b9700596ebec52a5761ff7e8e5298d8f11817aeb64b514b11e76ab7",
+    "src/solver/likelihood.rs": "e01386c1dfa59b2c1339d0f605cd92ff5a3fe50f46545313526b78b750c3942c",
+    "src/solver/mod.rs": "a322a06ff500f45066340e625d20a44f7b21756dd0b6c40a58c70e3af2409e2f",
+    "src/solver/parallel.rs": "575d2592434cd34b0eed417047ebd117d23fff71fc9750c0451e72c67877facd",
+    "src/solver/precompute.rs": "1406ecea89342789c44d8326214f56fc55a10b14e0fff8e2bdf7f1bc60e3a50d",
+    "src/solver/pruning/cell_set.rs": "5a5bfd8f3b68d3d09da5703f516a370092e073f6d1a781bd2b6bff2dcf9deacb",
+    "src/solver/pruning/jaggedness.rs": "9e9bb646284ceda34e02e01798b09d0437a74157691654addc2b5e77d7c0ef66",
+    "src/solver/pruning/mod.rs": "113bc20f75317c9ef6095a9688e80775dde0efca573fc66cd4439ef15099a712",
+    "src/solver/pruning/monte_carlo.rs": "1439576feb58edd3815255e883744dd44b0a8eaa61c079f858965ee6bc5f2b35",
+    "src/solver/pruning/partition.rs": "931dcd73e90b38296bcb8f0beab16e13dd632d3071149e0f445699ab44333806",
+    "src/solver/pruning/small_component.rs": "845217b5f21600e87f98ecf15ad9096a7b9548cde3f42d487619171af7d8a4a5",
+    "src/solver/pruning/total_deficit.rs": "7d6f515800ee40abf04769a6e6270407ef3b47ec38bff31390db3e487aab628d",
+    "src/solver/regional.rs": "362c977de45879e468f2e8074318a7e13da1ef7f9f5c8804b5a559d613721824",
+    "src/wasm.rs": "7d03d34922fa1350a5ef0608e6159d8c83261b615ec17d85a94c2a6411283cf1",
+    "data/levels.json": "77fdf6affa408d70e665c8493e916aa79ec90b55d067ff908d45f1ba576d8849",
+    "web/board.js": "a831e3ba1dddfda79af7c7bdeaadf023c4a06f80f6ce281582eafdd0f61c28cf"
+  },
+  "cpu_model": "Intel Core i9-13900KF",
+  "logical_cpus": 32,
+  "compiler": "rustc 1.100.0-nightly (fd7ed57df 2026-08-29)",
+  "rust_toolchain": "nightly-2026-08-30",
+  "native_rustflags": [
+    "-C",
+    "target-cpu=native"
+  ],
+  "release_profile": {
+    "lto": true,
+    "codegen-units": 1,
+    "panic": "abort",
+    "strip": true
+  },
+  "game_parallelism": 1,
+  "fixed_sample": {
+    "levels": [
+      1,
+      100
+    ],
+    "games_per_level": 5,
+    "seed_offset": 100
+  },
+  "fresh_holdouts": {
+    "levels": [
+      50,
+      80
+    ],
+    "games_per_level": 10,
+    "seed_offset": 200
+  },
+  "seed_formula": "level * 1000 + game_index",
+  "search_budget_policy": "40 or 60 second screen; rerun the entire level at 120 seconds if fewer than half solve. Known slow levels 48, 75, 85 used 120 seconds directly. The 120 second level replaces its short screen, without best-of selection per puzzle.",
+  "preparation_watchdog_seconds": 300,
+  "success_criterion": "Every level at least 3/5 in the fixed sample; each fresh holdout at least 5/10; every accepted solution has measured search <= 120 seconds.",
+  "wasm_artifact_sha256": {
+    "web/pkg/shapeshifter.js": "ee98cdb74ce1e3fedbc795959ba0205cc53819183530cd8e301171a7ecd5b1d4",
+    "web/pkg/shapeshifter_bg.wasm": "48cd3f62f4b1d4815c4fad3a9a4d161a32b7a44db9a7e182dc2ccd417db50155"
+  },
+  "observed_status_counts": {
+    "fixed": {
+      "OK": 478,
+      "TIMEOUT": 22
+    },
+    "holdouts": {
+      "OK": 15,
+      "TIMEOUT": 5
+    }
+  },
+  "observed_fixed_level_success_counts": {
+    "5": 86,
+    "4": 6,
+    "3": 8
+  },
+  "validation_date_utc": "2026-09-06"
+}

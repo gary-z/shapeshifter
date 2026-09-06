@@ -46,6 +46,24 @@ For example, this generates five level-10 puzzles as JSON Lines:
 cargo run --release --bin generate -- 10 --count 5
 ```
 
+To measure the two-minute search target across all levels:
+
+```bash
+cargo build --release --bin bench --bin solve
+target/release/bench simulated 1 100 --parallel \
+  --games-per 10 --seed-offset 100 --timeout 120
+```
+
+Parallel benchmarks run one game at a time, giving that game all available CPU
+cores. The timeout starts after preparation; the table reports preparation and
+search separately, and the summary lists levels with less than 50% success in
+the sample. Generated puzzle seeds are `level * 1000 + Game`, where the `Game`
+column starts at `--seed-offset`. Use a new offset for a fresh sample.
+
+The [September 6 benchmark report](docs/benchmarks/2026-09-06/README.md) records
+478/500 solves, with at least 3/5 at every level, plus fresh samples at levels 50
+and 80. It includes raw timings, timeout caps, and reproduction details.
+
 ## Game model
 
 - Boards are 3–14 rows by 3–14 columns.
@@ -56,7 +74,30 @@ cargo run --release --bin generate -- 10 --count 5
 
 ## Solver design
 
-The solver reorders pieces by placement count and shape constraints, then runs depth-first backtracking. Native parallel solves distribute branches through a shared work queue; the WebAssembly build uses the same serial search as the CLI’s default mode.
+Native parallel solves use two additional searches for M=3 and M=4 boards. Before
+either search, the existing backtracker gets five seconds for quick solves.
+Boards with 56 cells and M=3 then try adaptive backtracking: placement domains shrink as pieces
+are fixed, and exact modular coverage bounds force or forbid cells in each
+remaining piece. Single-cell probability distributions guide piece and placement
+ordering. Workers vary those choices and restart with growing node budgets.
+
+M=3 boards with at least 100 cells and M=4 boards with at least 64 cells then try
+regional inference. M=3 uses disjoint 2x2, 2x3, and 3x2 regions; M=4 uses 2x2,
+1x4, and 4x1 regions to keep the larger modulus affordable. Regions retain the joint
+effect of each piece's placement on neighboring cells. Fourier convolution computes
+messages between regions and pieces; those messages guide successive placement choices.
+Workers cover different region partitions and damping levels, then try randomized
+restarts. Impossible partial assignments are rejected by the exact remaining-area
+bound. Both searches check every reported solution against all board cells and
+return placements in the original piece order.
+
+See [the algorithm notes](docs/search-algorithms.md) for the exact filtering
+invariants and the inference model.
+
+The selected phase has a 30-second search budget. If it misses, the solver reorders
+pieces by placement count and shape constraints and runs the existing depth-first search.
+Native backtracking distributes branches through a shared work queue; the
+WebAssembly build uses the same serial search as the CLI's default mode.
 
 Before search, 100,000 random placement trajectories are sampled in each direction. The solver first tries bounds derived from the 50th, 75th, 90th, and 95th percentile sample sets, skipping duplicate levels, and finishes with its widest sampled fallback. These levels bound:
 
@@ -80,7 +121,17 @@ The sampled bounds are combined with deterministic checks:
 - a zero-cell budget discards placements that would exceed the remaining deficit capacity;
 - a suffix of single-cell pieces is solved directly.
 
-`--exhaustive` continues after finding a solution and traverses the entire bounded search tree. It does not disable pruning or the sampled bounds.
+`--exhaustive` skips the two additional searches, continues after finding a solution, and
+traverses the entire bounded search tree. It does not disable pruning or the
+sampled bounds. Probability models and restarts guide the additional searches;
+their work counts as search time, including failed attempts and guided frontier
+construction. Adaptive domain filtering uses exact bounds; probabilities only
+change branch ordering.
+
+Library callers can separate timing with `solver::prepare(game, parallel,
+exhaustive)` followed by `PreparedSearch::solve()`. The benchmark worker protocol
+prints `READY preparation_ms` before search, then `nodes search_ms solved` when
+search finishes.
 
 ## Repository layout
 
