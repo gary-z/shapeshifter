@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -30,7 +30,17 @@ fn solve_one(
     }
 
     let start = Instant::now();
-    let result = solver::solve(&game, parallel, exhaustive);
+    let prepared = solver::prepare(&game, parallel, exhaustive);
+    let preparation = start.elapsed();
+    if worker {
+        println!("READY {}", preparation.as_millis());
+        std::io::stdout()
+            .flush()
+            .expect("failed to flush worker readiness");
+    }
+    let search_start = Instant::now();
+    let result = prepared.solve();
+    let search_elapsed = search_start.elapsed();
     let elapsed = start.elapsed();
 
     if worker {
@@ -38,7 +48,7 @@ fn solve_one(
         println!(
             "{} {} {}",
             result.nodes_visited,
-            elapsed.as_millis(),
+            search_elapsed.as_millis(),
             solved
         );
         return solved;
@@ -55,7 +65,10 @@ fn solve_one(
 
     match result.solution {
         Some(solution) => {
-            println!("Solved in {:.3?} ({} nodes)", elapsed, result.nodes_visited);
+            println!(
+                "Solved in {:.3?} ({:.3?} preparation, {:.3?} search, {} nodes)",
+                elapsed, preparation, search_elapsed, result.nodes_visited
+            );
 
             let default_output = json_path
                 .map(|p| {
@@ -114,7 +127,7 @@ fn main() {
                      Options:\n  \
                        --parallel        Use parallel solver (all cores)\n  \
                        --exhaustive      Continue through the bounded search tree\n  \
-                       --worker          Compact output for benchmarks (nodes elapsed_ms solved)\n  \
+                       --worker          Benchmark protocol: READY preparation_ms, then nodes search_ms solved\n  \
                        --assets-dir URL  Base URL for piece images in HTML output\n  \
                        -o, --output PATH Write solution HTML to PATH\n  \
                        -h, --help        Show this help"

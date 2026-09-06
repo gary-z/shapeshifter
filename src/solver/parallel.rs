@@ -588,6 +588,7 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
     data: &SolverData,
     exhaustive: bool,
     guided_frontier: bool,
+    deadline: Option<std::time::Instant>,
 ) -> SolveResult {
     let piece_count = data.placements.len();
 
@@ -643,6 +644,10 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
             let bar_width = 30;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(200));
+                if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+                    abort.store(true, Ordering::Relaxed);
+                    work_queue.condvar.notify_all();
+                }
                 if abort.load(Ordering::Relaxed) || workers_alive.load(Ordering::Relaxed) == 0 {
                     break;
                 }
