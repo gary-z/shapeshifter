@@ -12,6 +12,9 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
+# Preparation is outside the search budget. Firefox on slower CI machines can
+# exceed Playwright's default 30-second wait before search starts.
+PREPARATION_TIMEOUT_MS = 180_000
 
 
 @contextmanager
@@ -114,6 +117,9 @@ async def test_mode(browser, isolated):
         result = await page.evaluate('p => client.solve(p, 100)', hard)
         assert result['timed_out'] and not result['solved'], result
         assert 90 <= result['search_ms'] < 2000, result
+        print(f'Deadline check ({"shared-memory" if isolated else "single-worker"}): '
+              f'{result["preparation_ms"]:.0f}ms preparation, '
+              f'{result["search_ms"]:.0f}ms search', flush=True)
         # Cancellation must be possible while Rust occupies its worker(s).
         await page.evaluate('''p => {
             window.ticks = 0;
@@ -121,7 +127,8 @@ async def test_mode(browser, isolated):
             window.events = [];
             window.job = client.solve(p);
         }''', hard)
-        await page.wait_for_function("events.some(e => e.type === 'searching')")
+        await page.wait_for_function("events.some(e => e.type === 'searching')",
+                                     timeout=PREPARATION_TIMEOUT_MS)
         await page.wait_for_timeout(200)
         assert await page.evaluate('ticks') >= 5, 'Main thread froze during search'
         busy = await page.evaluate('p => client.solve(p).then(() => null, e => e.message)', easy)
@@ -160,7 +167,8 @@ async def test_mode(browser, isolated):
         assert 'search' in await page.locator('#status').inner_text()
         await page.locator('#puzzle-input').fill(puzzle_html(hard))
         await page.locator('#solve-btn').click()
-        await page.wait_for_function("document.getElementById('status').textContent.startsWith('Searching')")
+        await page.wait_for_function("document.getElementById('status').textContent.startsWith('Searching')",
+                                     timeout=PREPARATION_TIMEOUT_MS)
         await page.locator('#cancel-btn').click()
         await page.wait_for_function("!document.getElementById('solve-btn').disabled")
         assert 'cancelled' in await page.locator('#results-content').inner_text()
