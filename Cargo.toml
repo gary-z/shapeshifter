@@ -21,6 +21,7 @@ getrandom = { version = "0.4", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wait-timeout = "0.2.1"
+sha2 = "0.10"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "1.1.0"

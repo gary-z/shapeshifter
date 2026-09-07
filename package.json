@@ -1,0 +1,13 @@
+{
+  "name": "shapeshifter-tools",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.2.0" },
+  "scripts": {
+    "serve": "node web/serve.mjs",
+    "test": "node --test web/tests/tooling.test.mjs",
+    "test:browser": "node web/test-browser.mjs",
+    "bench:browser": "node web/bench-browser.mjs"
+  },
+  "devDependencies": { "playwright": "1.63.0" }
+}

@@ -53,11 +53,6 @@ rm -f web/pkg/.gitignore web/pkg-threaded/.gitignore
 
 # Copied dependency helpers can contain CRLF. Match .gitattributes so a checkout
 # and a fresh build have identical bytes for CI's generated-package check.
-python3 - <<'PY'
-from pathlib import Path
-for package in ('web/pkg', 'web/pkg-threaded'):
-    for path in Path(package).rglob('*.js'):
-        path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n'))
-PY
+node web/normalize-packages.mjs
 
 echo "Build complete. Serve index.html from project root."

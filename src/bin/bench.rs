@@ -9,6 +9,9 @@ use shapeshifter::generate::generate_for_level;
 use shapeshifter::level::get_level;
 use shapeshifter::puzzle::PuzzleJson;
 
+#[path = "bench/measurement.rs"]
+mod measurement;
+
 struct Task {
     level: u32,
     game_idx: u32,
@@ -387,8 +390,11 @@ fn print_usage() {
         "Usage: bench <MODE> [OPTIONS]\n\n\
          Modes:\n  \
            simulated [START] [END]  Benchmark randomly generated puzzles (default: 1-50)\n  \
-           historical [PATH]       Benchmark historical puzzles from JSONL file\n\n\
-         Options:\n  \
+           historical [PATH]       Benchmark historical puzzles from JSONL file\n  \
+           run                     Measure JSONL puzzles with a total deadline\n  \
+           compare                 Compare two native measurement binaries\n  \
+           summarize PATH          Summarize measurement results\n\n\
+         Options for simulated/historical (use bench run --help or bench compare --help for measurements):\n  \
            --parallel       Use parallel solver (each game gets all cores)\n  \
            --exhaustive     Continue through bounded tree (no early termination)\n  \
            --timeout SECS   Search timeout per game, excluding preparation (default: 5 for simulated, 60 for historical)\n  \
@@ -400,6 +406,17 @@ fn print_usage() {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    if args
+        .get(1)
+        .is_some_and(|mode| matches!(mode.as_str(), "run" | "compare" | "summarize"))
+    {
+        if let Err(error) = measurement::main(&args[1..]) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     if args.len() < 2 {
         print_usage();
