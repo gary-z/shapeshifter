@@ -15,7 +15,18 @@ jobs:
     - uses: actions/setup-python@v6
       with:
         python-version: '3.12'
+    - uses: actions/setup-node@v7
+      with:
+        node-version: '24'
     - run: pip install -r web/requirements.txt
-    - run: playwright install --with-deps chromium firefox
+    - run: playwright install --with-deps chromium
+    # Python Playwright 1.62 bundles Firefox with WASM optimization disabled by
+    # its debugger. Use the fixed official browser until Python 1.63 is released.
+    - name: Install Firefox with optimized WASM support
+      run: |
+        export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/firefox-browsers"
+        npm install --prefix "$RUNNER_TEMP/firefox-playwright" --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
+        node "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core/cli.js" install --with-deps firefox
+        node -e "console.log('FIREFOX_EXECUTABLE_PATH=' + require(process.argv[1]).firefox.executablePath())" "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core" >> "$GITHUB_ENV"
     - run: python web/test_browser.py
-    - run: python web/test_browser.py --browser firefox
+    - run: python web/test_browser.py --browser firefox --executable-path "$FIREFOX_EXECUTABLE_PATH"
