@@ -1,13 +1,14 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
 
 use rand::SeedableRng;
 use shapeshifter::generate::generate_for_level;
 use shapeshifter::level::get_level;
 use shapeshifter::puzzle::PuzzleJson;
+use shapeshifter::solver;
 
 #[path = "bench/measurement.rs"]
 mod measurement;
@@ -31,27 +32,38 @@ struct TaskResult {
     status: String,
 }
 
-fn find_solver() -> std::path::PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let solve = exe.parent().unwrap().join("solve");
-    if !solve.exists() {
-        eprintln!(
-            "Error: {} not found. Run: cargo build --release --bin solve",
-            solve.display()
-        );
-        std::process::exit(1);
-    }
-    solve
+// Internal subprocess protocol for the search-only batch benchmarks.
+fn run_worker(parallel: bool, exhaustive: bool) {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .expect("failed to read puzzle");
+    let puzzle: PuzzleJson = serde_json::from_str(&input).expect("invalid puzzle JSON");
+    let game = puzzle.to_game();
+    let start = Instant::now();
+    let prepared = solver::prepare(&game, parallel, exhaustive);
+    println!("READY {}", start.elapsed().as_millis());
+    std::io::stdout()
+        .flush()
+        .expect("failed to flush readiness");
+    let search_start = Instant::now();
+    let result = prepared.solve();
+    println!(
+        "{} {} {}",
+        result.nodes_visited,
+        search_start.elapsed().as_millis(),
+        result.solution.is_some()
+    );
 }
 
 fn run_task(
     task: &Task,
-    solver_path: &std::path::Path,
+    worker_path: &std::path::Path,
     timeout_secs: u64,
     parallel: bool,
     exhaustive: bool,
 ) -> TaskResult {
-    let mut cmd = Command::new(solver_path);
+    let mut cmd = Command::new(worker_path);
     cmd.arg("--worker");
     if parallel {
         cmd.arg("--parallel");
@@ -221,7 +233,7 @@ fn build_historical_tasks(path: &str) -> Vec<Task> {
 
 fn run_bench(
     tasks: Vec<Task>,
-    solver_path: &std::path::Path,
+    worker_path: &std::path::Path,
     timeout_secs: u64,
     max_parallel: usize,
     parallel: bool,
@@ -237,7 +249,7 @@ fn run_bench(
         for _ in 0..max_parallel {
             let task_iter = &task_iter;
             let result_tx = result_tx.clone();
-            let solver_path = &solver_path;
+            let worker_path = &worker_path;
 
             scope.spawn(move || {
                 loop {
@@ -250,7 +262,7 @@ fn run_bench(
                         None => break,
                     };
 
-                    let r = run_task(&task, solver_path, timeout_secs, parallel, exhaustive);
+                    let r = run_task(&task, worker_path, timeout_secs, parallel, exhaustive);
                     let _ = result_tx.send(r);
                 }
             });
@@ -427,6 +439,7 @@ fn main() {
     let mut positional = Vec::new();
     let mut parallel = false;
     let mut exhaustive = false;
+    let mut worker = false;
     let mut timeout_secs: Option<u64> = None;
     let mut games_per: Option<u32> = None;
     let mut seed_offset = 0u32;
@@ -434,6 +447,7 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--worker" => worker = true,
             "--parallel" => parallel = true,
             "--exhaustive" => exhaustive = true,
             "--timeout" => {
@@ -468,12 +482,17 @@ fn main() {
         i += 1;
     }
 
+    if worker {
+        run_worker(parallel, exhaustive);
+        return;
+    }
+
     let mode = mode.unwrap_or_else(|| {
         print_usage();
         std::process::exit(1);
     });
 
-    let solver_path = find_solver();
+    let worker_path = std::env::current_exe().expect("failed to locate benchmark executable");
 
     match mode.as_str() {
         "simulated" => {
@@ -505,7 +524,7 @@ fn main() {
 
             run_bench(
                 tasks,
-                &solver_path,
+                &worker_path,
                 timeout,
                 max_parallel,
                 parallel,
@@ -538,7 +557,7 @@ fn main() {
 
             run_bench(
                 tasks,
-                &solver_path,
+                &worker_path,
                 timeout,
                 max_parallel,
                 parallel,

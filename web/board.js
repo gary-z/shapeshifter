@@ -1,5 +1,4 @@
-// Shared board rendering and step-through component.
-// Used by both the WASM web app (solver.js) and standalone solution.html files.
+// Board rendering and step-through solutions for the browser app.
 
 function boardIconSrc(assetsDir, icons, val, highlight) {
     const suffix = highlight ? '_1' : '_0';
