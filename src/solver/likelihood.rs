@@ -15,6 +15,31 @@ use crate::core::board::Board;
 
 const SCORE_SCALE: f64 = 256.0;
 
+fn subtraction_table(modulus: usize, cell_count: usize) -> Vec<Vec<usize>> {
+    let effect_count = 1 << cell_count;
+    let mut table = vec![vec![0; effect_count]; modulus.pow(cell_count as u32)];
+    for (state, effects) in table.iter_mut().enumerate() {
+        effects[0] = state;
+        let mut encoded = state;
+        let mut multiplier = 1;
+        for cell in 0..cell_count {
+            let digit = encoded % modulus;
+            encoded /= modulus;
+            let previous = (digit + modulus - 1) % modulus;
+            let delta = (previous as isize - digit as isize) * multiplier as isize;
+            // Extend every effect on the preceding cells with this cell's
+            // independent modular decrement. Decode each state only once.
+            let half = 1 << cell;
+            let (without, with) = effects[..2 * half].split_at_mut(half);
+            for (previous_state, &state) in with.iter_mut().zip(without.iter()) {
+                *previous_state = (state as isize + delta) as usize;
+            }
+            multiplier *= modulus;
+        }
+    }
+    table
+}
+
 struct WindowLikelihood {
     cells: Vec<Vec<usize>>,
     costs: Vec<Vec<Vec<u16>>>,
@@ -53,24 +78,7 @@ impl WindowLikelihood {
             window[0] = 1.0;
         }
 
-        let mut subtract = vec![vec![0usize; effect_count]; state_count];
-        for (state, effects) in subtract.iter_mut().enumerate() {
-            for (effect, previous_state) in effects.iter_mut().enumerate() {
-                let mut encoded = state;
-                let mut multiplier = 1;
-                for cell_index in 0..window_cell_count {
-                    let digit = encoded % modulus;
-                    encoded /= modulus;
-                    let previous = if effect & (1 << cell_index) == 0 {
-                        digit
-                    } else {
-                        (digit + modulus - 1) % modulus
-                    };
-                    *previous_state += previous * multiplier;
-                    multiplier *= modulus;
-                }
-            }
-        }
+        let subtract = subtraction_table(modulus, window_cell_count);
 
         for piece_index in (0..placements.len()).rev() {
             let (through_current, after_current) = probabilities.split_at_mut(piece_index + 1);
@@ -92,14 +100,17 @@ impl WindowLikelihood {
                         effect_counts[effect] += 1;
                     }
                     let placement_count = placements[piece_index].len() as f64;
+                    let effects = effect_counts
+                        .into_iter()
+                        .enumerate()
+                        .filter(|&(_, count)| count != 0)
+                        .map(|(effect, count)| (effect, count as f64 / placement_count))
+                        .collect::<Vec<_>>();
                     for state in 0..state_count {
-                        current_window[state] = effect_counts
+                        current_window[state] = effects
                             .iter()
-                            .enumerate()
-                            .filter(|(_, count)| **count != 0)
-                            .map(|(effect, &count)| {
-                                count as f64 / placement_count
-                                    * next_window[subtract[state][effect]]
+                            .map(|&(effect, probability)| {
+                                probability * next_window[subtract[state][effect]]
                             })
                             .sum();
                     }
@@ -321,6 +332,76 @@ impl ReverseLikelihood {
 mod tests {
     use super::*;
     use crate::core::piece::Piece;
+
+    #[test]
+    fn subtraction_table_matches_digitwise_modular_subtraction() {
+        for modulus in 2usize..=3 {
+            for cell_count in 0..=9 {
+                let table = subtraction_table(modulus, cell_count);
+                for (state, effects) in table.iter().enumerate() {
+                    for (effect, &actual) in effects.iter().enumerate() {
+                        let mut encoded = state;
+                        let mut expected = 0;
+                        let mut multiplier = 1;
+                        for cell in 0..cell_count {
+                            let digit = encoded % modulus;
+                            encoded /= modulus;
+                            let hit = (effect >> cell) & 1;
+                            expected += (digit + modulus - hit) % modulus * multiplier;
+                            multiplier *= modulus;
+                        }
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn window_costs_match_enumerated_suffix_placements() {
+        let placements = vec![
+            Piece::from_grid(&[&[true, true]]).placements(3, 3),
+            Piece::from_grid(&[&[true], &[true]]).placements(3, 3),
+        ];
+        for modulus in 2usize..=3 {
+            let window = WindowLikelihood::precompute(&placements, modulus, 3, 3, 0..=0, 0..=0);
+            for depth in 0..=placements.len() {
+                let mut assignments = vec![[0usize; 9]];
+                for piece in &placements[depth..] {
+                    assignments = assignments
+                        .into_iter()
+                        .flat_map(|cells| {
+                            piece.iter().map(move |&(_, _, mask)| {
+                                std::array::from_fn(|cell| {
+                                    (cells[cell]
+                                        + usize::from(
+                                            mask.get_bit((cell / 3 * STRIDE + cell % 3) as u32),
+                                        ))
+                                        % modulus
+                                })
+                            })
+                        })
+                        .collect();
+                }
+                let total = assignments.len() as f64;
+                let mut counts = vec![0; modulus.pow(9)];
+                for cells in assignments {
+                    let state = cells
+                        .iter()
+                        .rev()
+                        .fold(0, |state, &digit| state * modulus + digit);
+                    counts[state] += 1;
+                }
+                for (state, count) in counts.into_iter().enumerate() {
+                    let probability = (count as f64 / total).max(1e-100);
+                    let expected = (-probability.ln() * SCORE_SCALE)
+                        .round()
+                        .min(f64::from(u16::MAX)) as u16;
+                    assert_eq!(window.costs[depth][0][state], expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn incremental_placement_scores_match_full_scores() {

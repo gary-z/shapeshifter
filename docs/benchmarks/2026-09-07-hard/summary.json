@@ -1,0 +1,41 @@
+{
+  "all": {
+    "baseline": {
+      "n": 32,
+      "solved": 32,
+      "capped_mean_s": 27.803913037249004,
+      "median_s": 32.18695938000019,
+      "preparation_mean_s": 1.15833031453125,
+      "max_s": 61.711933687001874
+    },
+    "candidate": {
+      "n": 32,
+      "solved": 32,
+      "capped_mean_s": 12.009070888811948,
+      "median_s": 5.851949570496799,
+      "preparation_mean_s": 0.5256945243125,
+      "max_s": 62.482606906
+    },
+    "time_reduction_percent": 56.80798284499253
+  },
+  "historical_timeout_levels": {
+    "baseline": {
+      "n": 10,
+      "solved": 10,
+      "capped_mean_s": 30.019197763299598,
+      "median_s": 34.50921010250022,
+      "preparation_mean_s": 1.2754327135999999,
+      "max_s": 61.711933687001874
+    },
+    "candidate": {
+      "n": 10,
+      "solved": 10,
+      "capped_mean_s": 24.16758922629888,
+      "median_s": 19.794806071498897,
+      "preparation_mean_s": 0.47884449490000003,
+      "max_s": 62.482606906
+    },
+    "time_reduction_percent": 19.492887795138504
+  },
+  "largest_regression_s": 1.036242537004
+}

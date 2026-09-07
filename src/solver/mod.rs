@@ -115,6 +115,32 @@ impl PreparedSearch {
         self.solve_until(Some(Instant::now() + budget))
     }
 
+    fn backtrack(&self, frontier_width: Option<usize>, deadline: Option<Instant>) -> SolveResult {
+        macro_rules! dispatch {
+            ($m:literal) => {
+                if self.parallel {
+                    parallel::solve_parallel::<$m>(
+                        &self.board,
+                        &self.piece_order,
+                        &self.data,
+                        self.exhaustive,
+                        frontier_width,
+                        deadline,
+                    )
+                } else {
+                    solve_serial(&self.board, &self.piece_order, &self.data, self.exhaustive)
+                }
+            };
+        }
+        match self.data.modulus {
+            2 => dispatch!(2),
+            3 => dispatch!(3),
+            4 => dispatch!(4),
+            5 => dispatch!(5),
+            _ => unreachable!(),
+        }
+    }
+
     fn solve_until(&self, overall_deadline: Option<Instant>) -> SolveResult {
         let phase_deadline = |seconds| {
             let limit = Instant::now() + Duration::from_secs(seconds);
@@ -125,13 +151,13 @@ impl PreparedSearch {
         };
         let Self {
             board,
-            piece_order,
             data,
             parallel,
             exhaustive,
             guided_frontier,
             adaptive,
             regional,
+            ..
         } = self;
         let (parallel, exhaustive, guided_frontier) = (*parallel, *exhaustive, *guided_frontier);
 
@@ -152,26 +178,19 @@ impl PreparedSearch {
         let mut total_nodes = 0u64;
         if adaptive.is_some() || regional.is_some() {
             // Preserve quick backtracking wins before exploring different trees.
-            let deadline = phase_deadline(5);
-            macro_rules! initial_search {
-                ($m:literal) => {
-                    parallel::solve_parallel::<$m>(
-                        board,
-                        piece_order,
-                        data,
-                        false,
-                        false,
-                        Some(deadline),
-                    )
+            let result = self.backtrack(None, Some(phase_deadline(5)));
+            total_nodes += result.nodes_visited;
+            if result.solution.is_some() {
+                return SolveResult {
+                    nodes_visited: total_nodes,
+                    ..result
                 };
             }
-            let result = match data.modulus {
-                2 => initial_search!(2),
-                3 => initial_search!(3),
-                4 => initial_search!(4),
-                5 => initial_search!(5),
-                _ => unreachable!(),
-            };
+        }
+        if guided_frontier && !stopped() {
+            // Build a narrow ranked frontier early so larger trees can reach
+            // backtracking within this short attempt. Keep the full beam in fallback.
+            let result = self.backtrack(Some(20_000), Some(phase_deadline(2)));
             total_nodes += result.nodes_visited;
             if result.solution.is_some() {
                 return SolveResult {
@@ -220,37 +239,16 @@ impl PreparedSearch {
                 break;
             }
             let is_guided_attempt = guided_frontier && attempt_index == 0;
-            macro_rules! dispatch {
-                ($m:literal) => {{
-                    if parallel {
-                        {
-                            parallel::solve_parallel::<$m>(
-                                board,
-                                piece_order,
-                                data,
-                                exhaustive,
-                                is_guided_attempt,
-                                // Leave time for root backtracking when the
-                                // ranked prefix does not lead to a solution.
-                                if is_guided_attempt {
-                                    Some(phase_deadline(30))
-                                } else {
-                                    overall_deadline
-                                },
-                            )
-                        }
-                    } else {
-                        solve_serial(board, piece_order, data, exhaustive)
-                    }
-                }};
-            }
-            let result = match data.modulus {
-                2 => dispatch!(2),
-                3 => dispatch!(3),
-                4 => dispatch!(4),
-                5 => dispatch!(5),
-                _ => unreachable!(),
-            };
+            let result = self.backtrack(
+                is_guided_attempt.then_some(parallel::GUIDED_FRONTIER_WIDTH),
+                // Leave time for root backtracking when the ranked prefix
+                // does not lead to a solution.
+                if is_guided_attempt {
+                    Some(phase_deadline(30))
+                } else {
+                    overall_deadline
+                },
+            );
             total_nodes += result.nodes_visited;
             last_progress = result.progress;
             if result.solution.is_some() {
@@ -445,7 +443,7 @@ mod tests {
                 &piece_order,
                 &data,
                 false,
-                guided,
+                guided.then_some(parallel::GUIDED_FRONTIER_WIDTH),
                 Some(start + Duration::from_millis(10)),
             );
             assert!(start.elapsed() < Duration::from_secs(5));
