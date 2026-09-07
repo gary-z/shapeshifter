@@ -4,12 +4,15 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from run_sample import main as run_sample
+from run import main as run_sample
 
 
 def main(args):
-    puzzles = args.puzzles.read_text().splitlines()
+    puzzles = [line for line in args.puzzles.read_text().splitlines() if line.strip()]
+    if not puzzles:
+        raise ValueError('No puzzles in input')
     args.output.mkdir(parents=True, exist_ok=True)
+    records = []
     for index, puzzle in enumerate(puzzles):
         input_path = args.output / f'{index:03d}-puzzle.jsonl'
         input_path.write_text(puzzle + '\n')
@@ -23,14 +26,12 @@ def main(args):
                 assert record['binary_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
                 expected = hashlib.sha256(json.dumps(json.loads(puzzle), sort_keys=True).encode()).hexdigest()
                 assert record['puzzle_sha256'] == expected
-                continue
-            run_sample(SimpleNamespace(puzzles=input_path, binary=binary,
-                output=output_path, variant=variant, timeout=args.timeout))
-    records = []
-    for path in sorted(args.output.glob('*-baseline.jsonl')) + sorted(args.output.glob('*-candidate.jsonl')):
-        for line in path.read_text().splitlines():
-            record = json.loads(line)
-            record['index'] = int(path.name.split('-')[0])
+                assert record['budget_ms'] == args.timeout * 1000
+            else:
+                run_sample(SimpleNamespace(puzzles=input_path, binary=binary,
+                    output=output_path, variant=variant, timeout=args.timeout))
+                record = json.loads(output_path.read_text())
+            record['index'] = index
             records.append(record)
     (args.output / 'results.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records))
 

@@ -9,8 +9,11 @@ fn main() {
     let start = Instant::now();
     let prepared = shapeshifter::solver::prepare(&game, true, false);
     let preparation_ms = start.elapsed().as_secs_f64() * 1000.0;
-    println!("{}", serde_json::json!({"ready": true, "preparation_ms": preparation_ms,
-        "workers": std::thread::available_parallelism().unwrap().get()}));
+    println!(
+        "{}",
+        serde_json::json!({"ready": true, "preparation_ms": preparation_ms,
+        "workers": std::thread::available_parallelism().unwrap().get()})
+    );
     std::io::stdout().flush().unwrap();
     let search_start = Instant::now();
     let result = prepared.solve();
@@ -25,8 +28,11 @@ fn main() {
         }
         assert!(replay.is_solved());
     }
-    println!("{}", serde_json::json!({"solved": result.solution.is_some(),
+    println!(
+        "{}",
+        serde_json::json!({"solved": result.solution.is_some(),
         "preparation_ms": preparation_ms, "search_ms": search_ms,
         "solve_ms": start.elapsed().as_secs_f64() * 1000.0,
-        "nodes": result.nodes_visited, "placements": result.solution}));
+        "nodes": result.nodes_visited, "placements": result.solution})
+    );
 }

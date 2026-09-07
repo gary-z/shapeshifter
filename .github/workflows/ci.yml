@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'benchmarks/*.jsonl'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'benchmarks/*.jsonl'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check compiler and Clippy warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # Tests compile the library, CLIs, and examples; no separate build job.
+      - name: Run native tests
+        run: cargo test --release --locked --all-targets --all-features
+      - name: Check benchmark scripts
+        run: python3 -m compileall -q benchmarks
+
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install WebAssembly target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Checksum committed packages
+        run: find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-before.sha
+      - name: Rebuild packages
+        run: ./web/build.sh
+      - name: Verify committed packages match rebuild
+        run: |
+          find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-after.sha
+          if ! diff -q /tmp/wasm-before.sha /tmp/wasm-after.sha > /dev/null 2>&1; then
+            echo "::error::Committed WASM files are out of sync with Rust source. Run './web/build.sh' and commit the result."
+            diff /tmp/wasm-before.sha /tmp/wasm-after.sha || true
+            exit 1
+          fi
+      - name: Upload mismatched rebuild
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rebuilt-wasm
+          path: |
+            web/pkg/
+            web/pkg-threaded/
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: pip install -r web/requirements.txt
+      - run: playwright install --with-deps chromium
+      # Use the browser with optimizing WASM support under automation.
+      - name: Install Firefox
+        run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/firefox-browsers"
+          npm install --prefix "$RUNNER_TEMP/firefox-playwright" --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
+          node "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core/cli.js" install --with-deps firefox
+          node -e "console.log('FIREFOX_EXECUTABLE_PATH=' + require(process.argv[1]).firefox.executablePath())" "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core" >> "$GITHUB_ENV"
+      - name: Test Chromium
+        run: python web/test_browser.py
+      - name: Test Firefox
+        run: python web/test_browser.py --browser firefox --executable-path "$FIREFOX_EXECUTABLE_PATH"

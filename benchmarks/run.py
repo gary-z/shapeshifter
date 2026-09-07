@@ -24,7 +24,9 @@ def verify(puzzle, placements):
 
 
 def main(args):
-    puzzles = [json.loads(line) for line in args.puzzles.read_text().splitlines()]
+    puzzles = [json.loads(line) for line in args.puzzles.read_text().splitlines() if line.strip()]
+    if not puzzles:
+        raise ValueError('No puzzles in input')
     binary_hash = hashlib.sha256(args.binary.read_bytes()).hexdigest()
     output = args.output.open('w')
     successes = 0
@@ -44,7 +46,7 @@ def main(args):
         wall_ms = (time.monotonic() - start) * 1000
         messages = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         record = {'variant': args.variant, 'index': index, 'level': puzzle['level'],
-            'seed': puzzle['seed'], 'binary_sha256': binary_hash,
+            'seed': puzzle.get('seed'), 'binary_sha256': binary_hash,
             'puzzle_sha256': hashlib.sha256(json.dumps(puzzle, sort_keys=True).encode()).hexdigest(),
             'wall_ms': wall_ms, 'budget_ms': args.timeout * 1000, 'timed_out': timed_out,
             'returncode': process.returncode, 'phase_log': stderr.splitlines()}
