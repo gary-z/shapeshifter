@@ -14,7 +14,7 @@ async def main(args):
     puzzles = [json.loads(line) for line in args.puzzles.read_text().splitlines() if line.strip()]
     with serve() as url, args.output.open('w') as output:
         async with async_playwright() as playwright:
-            browser = await getattr(playwright, args.browser).launch()
+            browser = await getattr(playwright, args.browser).launch(executable_path=args.executable_path)
             page, info = await open_client(browser, url, args.threads)
             for index, puzzle in enumerate(puzzles):
                 start = time.monotonic()
@@ -47,4 +47,5 @@ if __name__ == '__main__':
     parser.add_argument('--threads', type=int, help='Default: all browser-reported CPUs')
     parser.add_argument('--budget', type=int, default=120)
     parser.add_argument('--browser', choices=['chromium', 'firefox', 'webkit'], default='chromium')
+    parser.add_argument('--executable-path', type=Path, help='Override the bundled browser executable')
     asyncio.run(main(parser.parse_args()))

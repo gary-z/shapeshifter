@@ -75,10 +75,34 @@ Install browser test dependencies in a virtual environment:
 ```bash
 python3 -m venv /tmp/shapeshifter-browser
 /tmp/shapeshifter-browser/bin/pip install -r web/requirements.txt
-/tmp/shapeshifter-browser/bin/playwright install --with-deps chromium firefox
+/tmp/shapeshifter-browser/bin/playwright install --with-deps chromium
 /tmp/shapeshifter-browser/bin/python web/test_browser.py
-/tmp/shapeshifter-browser/bin/python web/test_browser.py --browser firefox
 ```
+
+For Firefox, use the official browser from Playwright 1.63.0. The Python package
+is currently pinned to 1.62.0, whose bundled Firefox debugger disables the
+optimizing WASM compiler. Ordinary Firefox JIT preferences do not override this.
+Playwright 1.63.0 sets `allowUnobservedWasm` on its debuggers in
+[`Runtime.js`](https://github.com/microsoft/playwright/blob/v1.63.0/browser_patches/firefox/juggler/content/Runtime.js)
+and [`WorkerMain.js`](https://github.com/microsoft/playwright/blob/v1.63.0/browser_patches/firefox/juggler/content/WorkerMain.js).
+
+With Node.js 24 and npm installed, install that browser into a separate cache:
+
+```bash
+npm install --prefix /tmp/shapeshifter-firefox --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
+PLAYWRIGHT_BROWSERS_PATH=/tmp/shapeshifter-firefox/browsers \
+  node /tmp/shapeshifter-firefox/node_modules/playwright-core/cli.js install --with-deps firefox
+FIREFOX_EXECUTABLE_PATH=$(PLAYWRIGHT_BROWSERS_PATH=/tmp/shapeshifter-firefox/browsers \
+  node -e "console.log(require('/tmp/shapeshifter-firefox/node_modules/playwright-core').firefox.executablePath())")
+/tmp/shapeshifter-browser/bin/python web/test_browser.py --browser firefox \
+  --executable-path "$FIREFOX_EXECUTABLE_PATH"
+```
+
+CI uses this same executable override. It keeps the Python 1.62 test client and
+validates it against the official Firefox 155.0 build from Playwright 1.63;
+the browser files and JIT preferences are unchanged. Once Python Playwright
+1.63 is available, update the Python pin and remove the separate Node installer.
+The scripts log the actual browser version so results identify the browser used.
 
 Tests start local servers with and without isolation headers. They replay
 solutions in original piece order, check invalid-input recovery, enforce a short
@@ -95,7 +119,9 @@ target/release/generate 50 --seed 50100 --count 5 > /tmp/puzzles.jsonl
 
 The JSONL records preparation and search independently and validates every
 reported solution. `--threads 1` measures the same shared-memory build with one
-worker. Use a foreground browser on an otherwise idle machine when assessing
+worker. To benchmark the fixed Firefox build, pass `--browser firefox` and
+`--executable-path "$FIREFOX_EXECUTABLE_PATH"` using the path obtained above.
+Use a foreground browser on an otherwise idle machine when assessing
 performance. Browser CPU reporting, scheduling, memory limits, and WASM code
 generation can differ from native; worker support alone does not guarantee the
 same solve rate within two minutes. The shared WASM build permits up to 2 GiB of

@@ -197,9 +197,10 @@ async def test_startup_fallback(browser):
     print('PASS failed parallel startup falls back and reuses the worker', flush=True)
 
 
-async def main(browser_name):
+async def main(browser_name, executable_path=None):
     async with async_playwright() as playwright:
-        browser = await getattr(playwright, browser_name).launch()
+        browser = await getattr(playwright, browser_name).launch(executable_path=executable_path)
+        print(f'Testing {browser_name} {browser.version}', flush=True)
         try:
             await test_mode(browser, True)
             await test_mode(browser, False)
@@ -211,4 +212,6 @@ async def main(browser_name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser', choices=['chromium', 'firefox', 'webkit'], default='chromium')
-    asyncio.run(main(parser.parse_args().browser))
+    parser.add_argument('--executable-path', type=Path, help='Override the bundled browser executable')
+    args = parser.parse_args()
+    asyncio.run(main(args.browser, args.executable_path))
