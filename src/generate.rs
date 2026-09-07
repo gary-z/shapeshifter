@@ -401,13 +401,6 @@ fn piece_from_catalog(height: u8, width: u8, flat: &[bool]) -> Piece {
     Piece::from_grid(&refs)
 }
 
-/// Returns true if the given piece matches one of the 75 known game shapes.
-pub fn is_known_shape(piece: &Piece) -> bool {
-    SHAPE_CATALOG
-        .iter()
-        .any(|&(h, w, flat)| *piece == piece_from_catalog(h, w, flat))
-}
-
 fn random_piece(rng: &mut impl Rng, max_h: u8, max_w: u8) -> Piece {
     let candidates: Vec<usize> = SHAPE_CATALOG
         .iter()

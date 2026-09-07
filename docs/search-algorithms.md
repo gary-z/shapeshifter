@@ -23,8 +23,8 @@ as soon as a solution is found. Each phase gets all available workers on one gam
 
 Browser phases are clipped to the remaining search budget. Native
 `PreparedSearch::solve()` has no overall deadline; benchmark runners enforce
-one externally. Native serial and exhaustive searches use the exact backtracker;
-`--exhaustive` continues after finding a solution.
+one externally. Native serial and exhaustive searches use the exact backtracker.
+The `bench` option `--exhaustive` continues after finding a solution.
 
 Eligibility depends on table size: regional factors allow at most 1,024 joint
 states, and guided 3×3 windows at most 32,768 states (`M^9`). Board area and piece

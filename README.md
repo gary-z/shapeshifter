@@ -1,28 +1,10 @@
 # Shapeshifter Solver
 
-A web and command-line solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), the Neopets placement puzzle.
+A browser solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), the Neopets placement puzzle.
 
 [Open the browser solver](https://shapeshifter.pages.dev/) to paste a saved game
 page and view a step-by-step solution. Search uses all browser-reported CPU cores
 when the host enables cross-origin isolation.
-
-## Native quick start
-
-The repository selects its Rust toolchain through [`rust-toolchain`](rust-toolchain).
-
-1. Save an unfinished Shapeshifter page as `data/ShapeShifter.html` using “HTML only.”
-2. Run `./solve.sh`.
-3. Open `data/solution.html` for the placement guide.
-
-The script builds the parser and solver in release mode and records new complete
-puzzles in `data/puzzle_history.jsonl`. To run the stages separately:
-
-```bash
-cargo build --release --locked --bin parse --bin solve
-target/release/parse data/ShapeShifter.html -o data/puzzle.json
-target/release/solve data/puzzle.json --parallel \
-  --assets-dir ../web/assets --output data/solution.html
-```
 
 ## Tools and documentation
 
@@ -30,8 +12,6 @@ Each CLI accepts `--help`.
 
 | Tool | Purpose |
 | --- | --- |
-| `parse` | Convert saved Neopets HTML into puzzle JSON. |
-| `solve` | Solve JSON or JSON Lines and generate an HTML guide. |
 | `generate` | Generate reproducible puzzles from the 100 level specifications. |
 | `bench` | Measure batches, compare native builds, and summarize results. |
 | `examples/measure.rs` | Native driver for `bench run` and `bench compare`. |
@@ -42,7 +22,8 @@ Each CLI accepts `--help`.
 
 ## Development
 
-Native development needs Rust. Browser development also uses Node 24 (see
+Native development uses the Rust toolchain pinned in [`rust-toolchain`](rust-toolchain).
+Browser development also uses Node 24 (see
 [`.nvmrc`](.nvmrc)); npm dependencies are pinned in `package-lock.json`.
 
 Run the native checks locally:
@@ -72,7 +53,7 @@ correctness and browser behavior without asserting machine-dependent timings.
 | --- | --- |
 | `src/core/` | SIMD bitboard, board, and piece representations. |
 | `src/solver/` | Search algorithms, preparation, and pruning bounds. |
-| `src/bin/` | Parser, solver, generator, and batch benchmark CLIs. |
+| `src/bin/` | Puzzle generator and native benchmark CLI. |
 | `examples/measure.rs` | Native measurement driver with solution replay. |
 | `benchmarks/` | Hard-puzzle corpus and reference results. |
 | `web/` | Browser app, WASM packages, assets, and browser tooling. |

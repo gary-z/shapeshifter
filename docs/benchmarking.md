@@ -72,14 +72,14 @@ captured puzzle history. Their timeout starts **after preparation**, using a dif
 total-time measurement above:
 
 ```bash
-cargo build --release --locked --bin bench --bin solve
+cargo build --release --locked --bin bench
 target/release/bench simulated 1 100 --parallel \
   --games-per 10 --seed-offset 100 --timeout 120
 ```
 
 With `--parallel`, each game uses all cores and games run sequentially. Seeds are
 `level * 1000 + Game`, where `Game` starts at `--seed-offset`. Preparation and
-search are reported separately.
+search are reported separately. Batch workers run in the `bench` executable.
 
 After [installing browser dependencies](browser.md#browser-tests), measure the
 same JSONL puzzles in the browser:
