@@ -1,7 +1,0 @@
-{
-  "web/pkg/shapeshifter_bg.wasm": "56780213ace8b0f69007dff840e6a44ef95867cc29b50b1acbdb5733a28aafc5",
-  "web/pkg-threaded/shapeshifter_bg.wasm": "cbabb20eb8b7732087f812441339d486ebd44f2990a9d0bdb8e723ab5faace3b",
-  "target/release/solve": "0929708795710ae981f8512d43840c367a6aa232e045fd293890a3ac12f13ee2",
-  "target/release/generate": "7a875db9484abba1038b8ccc7877f0725a24f3c1bf8b25715dbefc527739b09c",
-  "pilot-threaded.wasm": "3e481a50ccb22419b95e7ed95f9d302f7def68fd5b9e0402c6b1ce2d9786b3dc"
-}

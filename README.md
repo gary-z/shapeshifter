@@ -2,184 +2,76 @@
 
 A web and command-line solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), the Neopets placement puzzle.
 
-- [Open the browser solver](https://gary-z.github.io/shapeshifter/)
-- Browser search uses all reported CPU cores when hosted with cross-origin isolation;
-  GitHub Pages falls back to one worker. See [browser hosting](docs/browser.md).
-- Use the native CLI for parallel search and HTML solution guides
+[Open the browser solver](https://shapeshifter.pages.dev/) to paste a saved game
+page and view a step-by-step solution. Search uses all browser-reported CPU cores
+when the host enables cross-origin isolation.
 
-## Quick start
+## Native quick start
 
-The repository selects the Rust nightly toolchain through [`rust-toolchain`](rust-toolchain). To solve a live puzzle from the command line:
+The repository selects its Rust toolchain through [`rust-toolchain`](rust-toolchain).
 
-1. Save the Shapeshifter page as `data/ShapeShifter.html` using “HTML only.” Save it before completing the puzzle.
-2. Run:
+1. Save an unfinished Shapeshifter page as `data/ShapeShifter.html` using “HTML only.”
+2. Run `./solve.sh`.
+3. Open `data/solution.html` for the placement guide.
 
-   ```bash
-   ./solve.sh
-   ```
-
-The script builds the parser and solver in release mode, records new complete puzzles in `data/puzzle_history.jsonl`, and writes a step-by-step guide to `data/solution.html`.
-
-To run the two stages separately:
+The script builds the parser and solver in release mode and records new complete
+puzzles in `data/puzzle_history.jsonl`. To run the stages separately:
 
 ```bash
-cargo build --release --bin parse --bin solve
+cargo build --release --locked --bin parse --bin solve
 target/release/parse data/ShapeShifter.html -o data/puzzle.json
-target/release/solve data/puzzle.json \
-  --parallel \
-  --assets-dir ../web/assets \
-  --output data/solution.html
+target/release/solve data/puzzle.json --parallel \
+  --assets-dir ../web/assets --output data/solution.html
 ```
 
-Both binaries accept `--help`. The solver reads one JSON object from a file or standard input, and it also accepts JSON Lines on standard input.
+## Tools and documentation
 
-## Included tools
+Each CLI accepts `--help`.
 
-| Binary | Purpose |
+| Tool | Purpose |
 | --- | --- |
-| `parse` | Convert saved Neopets HTML into the solver’s JSON format. |
-| `solve` | Solve JSON input and generate an HTML guide. |
-| `generate` | Generate reproducible puzzles from the 100 embedded level specifications. |
-| `bench` | Run generated or historical puzzle batches through the release solver. |
+| `parse` | Convert saved Neopets HTML into puzzle JSON. |
+| `solve` | Solve JSON or JSON Lines and generate an HTML guide. |
+| `generate` | Generate reproducible puzzles from the 100 level specifications. |
+| `bench` | Measure generated or historical puzzle batches with a search timeout. |
+| `examples/measure.rs` + `benchmarks/` | Measure all-core native solves with a total wall-clock deadline. |
 
-For example, this generates five level-10 puzzles as JSON Lines:
+- [Solver design](docs/search-algorithms.md): game rules, search schedule, and pruning invariants.
+- [Browser development and hosting](docs/browser.md): WASM builds, Cloudflare Pages, and browser tests.
+- [Benchmarking](docs/benchmarking.md): the two-minute target, hard-puzzle corpus, and comparisons.
+
+## Development
+
+Run the native checks locally:
 
 ```bash
-cargo run --release --bin generate -- 10 --count 5
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --release --locked --all-targets --all-features
 ```
 
-To measure the two-minute search target across all levels:
+[CI](.github/workflows/ci.yml) has three independent jobs:
 
-```bash
-cargo build --release --bin bench --bin solve
-target/release/bench simulated 1 100 --parallel \
-  --games-per 10 --seed-offset 100 --timeout 120
-```
+| Job | Coverage |
+| --- | --- |
+| Native | Formatting, strict Clippy, and release tests for all targets and features, including the measurement example. Tests compile the code, so there is no separate build job. |
+| WebAssembly | Rebuild both committed WASM packages and compare their checksums. |
+| Browser | Chromium and Firefox integration tests, including parallel search, single-worker fallback, cancellation, and solution replay. |
 
-Parallel benchmarks run one game at a time, giving that game all available CPU
-cores. The timeout starts after preparation; the table reports preparation and
-search separately, and the summary lists levels with less than 50% success in
-the sample. Generated puzzle seeds are `level * 1000 + Game`, where the `Game`
-column starts at `--seed-offset`. Use a new offset for a fresh sample.
-
-The [uniform search benchmark report](docs/benchmarks/2026-09-06-uniform/README.md)
-records 494/500 solves, with at least 3/5 at every level, plus 20/20 fresh puzzles
-at levels 50 and 80. Every case has a 120-second search cap, excluding
-preparation. It includes matched Monte Carlo controls, the accepted regression
-at one level-68 seed, raw timings, and reproduction details.
-
-The [browser benchmark report](docs/benchmarks/2026-09-06-browser/README.md)
-records 45/50 browser solves with 32 workers, matching native's outcome on every
-seed in that sample. Every selected level scored at least 3/5 within the same
-120-second search cap. The report includes browser/native timings and hosting
-requirements; it covers ten selected levels with five seeds each.
-
-## Game model
-
-- Boards are 3–14 rows by 3–14 columns.
-- Each cell stores a value from `0` through `M - 1`, where `M` is 2–5. Zero is the solved value.
-- A puzzle has 2–36 fixed-orientation pieces, each at most 5×5 cells.
-- Placing a piece decrements every covered cell modulo `M`; pieces may overlap.
-- Every piece must be placed exactly once, and the final board must contain only zeroes.
-
-## Solver design
-
-Native parallel and browser solves use the same schedule for every board:
-five seconds of the existing backtracker, 25 seconds of adaptive backtracking,
-and 25 seconds of regional inference, followed by fallback search. Each phase uses all available
-workers on the same game and stops as soon as a solution is found.
-
-Adaptive placement domains shrink as pieces are fixed, and exact modular
-coverage bounds force or forbid cells in each remaining piece. Single-cell
-probability distributions guide piece and placement
-ordering. Workers vary those choices and restart with growing node budgets.
-
-Regional inference chooses tile shapes under a budget of 1,024 joint states per
-region. It uses disjoint 2x2, 2x3, and 3x2 regions when six cells fit that budget;
-otherwise it uses 2x2, 1x4, and 4x1 regions. Regions retain the joint
-effect of each piece's placement on neighboring cells. Fourier convolution computes
-messages between regions and pieces; those messages guide successive placement choices.
-Workers cover different region partitions and damping levels, then try randomized
-restarts. Impossible partial assignments are rejected by the exact remaining-area
-bound. Both searches check every reported solution against all board cells and
-return placements in the original piece order.
-
-See [the algorithm notes](docs/search-algorithms.md) for the exact filtering
-invariants and the inference model.
-
-Backtracking orders pieces by placement count and shape constraints.
-Parallel backtracking distributes branches through a shared work queue on both
-native and WebAssembly. The browser uses a reusable Web Worker pool with shared
-WASM memory; preparation and search run off the UI thread. Without isolation
-headers, a single worker runs the same search methods and phase budgets.
-
-Monte Carlo trajectory sampling, per-cell hit counters, and percentile retries
-have been removed. Backtracking uses exact bounds throughout.
-
-Parallel fallback also builds a 200,000-state guided frontier through the
-first eight pieces when its 3x3 windows fit a budget of 32,768 states per window
-(`M^9`). This limit applies equally to every board size and piece count.
-Exact suffix distributions on small overlapping regions
-rank spatially coherent partial boards. Workers expand each layer in parallel
-and merge their candidates into the same global frontier. The guided phase,
-including frontier construction and DFS, has a 30-second budget. If it misses,
-backtracking restarts from the root with the exact bounds.
-
-The backtracker applies these deterministic checks:
-
-- remaining piece cells must cover the total deficit;
-- checkerboard, row, column, and diagonal partition totals must remain reachable;
-- remaining piece perimeter must be able to smooth adjacent-cell differences;
-- cell-set reachability and small-component bounds reject impossible residual boards;
-- equivalent effects from consecutive placement pairs are searched once;
-- a zero-cell budget discards placements that would exceed the remaining deficit capacity;
-- a suffix of single-cell pieces is solved directly.
-
-`--exhaustive` uses backtracking with exact pruning and continues after finding a
-solution. Probability models and restarts guide the bounded search phases;
-their work counts as search time, including failed attempts and guided frontier
-construction. Adaptive domain filtering uses exact bounds; probabilities only
-change branch ordering.
-
-Library callers can separate timing with `solver::prepare(game, parallel,
-exhaustive)` followed by `PreparedSearch::solve()`. The benchmark worker protocol
-prints `READY preparation_ms` before search, then `nodes search_ms solved` when
-search finishes.
+CI runs on pull requests and pushes to `main`, skipping changes limited to
+Markdown, `docs/`, or benchmark JSONL data. New commits cancel superseded runs.
+The full performance corpus is run manually on the target machine; CI checks
+correctness and browser behavior without asserting machine-dependent timings.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
 | `src/core/` | SIMD bitboard, board, and piece representations. |
-| `src/solver/` | Serial and parallel search, preparation, and pruning bounds. |
-| `src/bin/` | Parser, solver, generator, and benchmark CLIs. |
-| `web/` | Browser parser, shared board renderer, and WebAssembly integration. |
-| `data/levels.json` | The 100 level specifications used by the generator. |
-| `data/puzzle_history.jsonl` | Captured puzzles used for regression and benchmark input. |
-
-## Development
-
-Run the CI checks locally:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --release --all-targets
-```
-
-To rebuild the browser package, install the WebAssembly target and run:
-
-```bash
-rustup target add wasm32-unknown-unknown
-./web/build.sh
-```
-
-The repository pins Rust in `rust-toolchain` and `wasm-pack` in `web/.wasm-pack-version`.
-`web/build.sh` installs the pinned `wasm-pack` and Rust sources when needed, and
-builds both `web/pkg/` (single worker) and `web/pkg-threaded/` (shared memory).
-Both generated packages are committed and checked by CI.
-
-Run `python3 web/serve.py` and open `http://127.0.0.1:8000/` to test parallel
-browser search locally. A plain static server without isolation headers uses
-the single-worker fallback. See [browser development and hosting](docs/browser.md)
-for Cloudflare Pages setup, browser tests, and performance measurements.
+| `src/solver/` | Search algorithms, preparation, and pruning bounds. |
+| `src/bin/` | Parser, solver, generator, and batch benchmark CLIs. |
+| `examples/measure.rs` | Native measurement driver with solution replay. |
+| `benchmarks/` | Benchmark runners, hard-puzzle corpus, and reference results. |
+| `web/` | Browser app, WASM packages, assets, and browser tooling. |
+| `data/` | Level specifications and captured puzzle history. |
+| `docs/` | Current solver, browser, and benchmarking guides. |
