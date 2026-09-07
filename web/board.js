@@ -121,11 +121,18 @@ function boardShowSolution(container, puzzle, placements, assetsDir) {
     prevBtn.textContent = '\u25C0 Prev';
     const nextBtn = document.createElement('button');
     nextBtn.textContent = 'Next \u25B6';
+    const placementLink = document.createElement('a');
+    placementLink.className = 'place-piece-link';
+    placementLink.textContent = 'Place piece \u2197';
+    placementLink.target = '_blank';
+    placementLink.rel = 'noopener';
+    placementLink.title = 'Place this piece on Neopets (opens in a new tab)';
     const label = document.createElement('div');
     label.className = 'step-label';
     nav.appendChild(prevBtn);
     nav.appendChild(label);
     nav.appendChild(nextBtn);
+    nav.appendChild(placementLink);
     container.appendChild(nav);
 
     const boardDiv = document.createElement('div');
@@ -142,6 +149,13 @@ function boardShowSolution(container, puzzle, placements, assetsDir) {
         label.textContent = step.label;
         prevBtn.disabled = currentStep === 0;
         nextBtn.disabled = currentStep === steps.length - 1;
+        placementLink.hidden = !step.clickPos;
+        if (step.clickPos) {
+            const [row, col] = step.clickPos;
+            placementLink.href = `https://www.neopets.com/medieval/process_shapeshifter.phtml?type=action&posx=${col}&posy=${row}`;
+        } else {
+            placementLink.removeAttribute('href');
+        }
 
         boardRender(boardDiv, step.board, h, w, icons, assetsDir, step.pieceMask, step.clickPos);
 

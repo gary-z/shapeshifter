@@ -42,10 +42,11 @@ const BOARD_JS: &str = include_str!("../web/board.js");
 
 const SOLUTION_CSS: &str = r#"
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; max-width: 800px; margin: 0 auto; padding: 20px; }
-.step-nav { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 15px; }
+.step-nav { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; }
 .step-nav button { background: #2a2a4a; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 8px 20px; font-size: 1em; cursor: pointer; }
 .step-nav button:hover:not(:disabled) { background: #3a3a5a; }
 .step-nav button:disabled { color: #555; cursor: not-allowed; }
+.place-piece-link { color: #e94560; white-space: nowrap; }
 .step-label { font-size: 1em; color: #ccc; min-width: 180px; text-align: center; }
 .board { display: inline-grid; gap: 0; padding: 0; margin: 0 auto; display: grid; justify-content: center; }
 .cell { width: 50px; height: 50px; position: relative; line-height: 0; }

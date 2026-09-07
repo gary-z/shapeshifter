@@ -60,6 +60,7 @@
     /* Step navigation */
     .step-nav {
         display: flex; align-items: center; justify-content: center;
+        flex-wrap: wrap;
         gap: 15px; margin-bottom: 15px;
     }
     .step-nav button {
@@ -69,6 +70,7 @@
     }
     .step-nav button:hover:not(:disabled) { background: #3a3a5a; }
     .step-nav button:disabled { color: #555; cursor: not-allowed; }
+    .place-piece-link { color: #e94560; white-space: nowrap; }
     .step-label {
         font-size: 1em; color: #ccc; min-width: 180px; text-align: center;
     }
