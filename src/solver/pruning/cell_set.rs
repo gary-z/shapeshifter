@@ -348,6 +348,21 @@ fn corner_cell_sets(
 }
 
 fn apply_effect(config: usize, effect: u16, cell_count: usize, modulus: usize) -> usize {
+    // Base-two digits are bits, so a modular decrement simply flips each hit.
+    if modulus == 2 {
+        return config ^ usize::from(effect);
+    }
+    if modulus == 4 {
+        // Spread hit bits into the low bit of each two-bit base-four digit.
+        let mut hits = usize::from(effect);
+        hits = (hits | hits << 8) & 0x00ff_00ff;
+        hits = (hits | hits << 4) & 0x0f0f_0f0f;
+        hits = (hits | hits << 2) & 0x3333_3333;
+        hits = (hits | hits << 1) & 0x5555_5555;
+        // Decrement flips the low bit and borrows into the high bit only
+        // when the original low bit was zero, independently in every digit.
+        return config ^ hits ^ ((hits & !config) << 1);
+    }
     let mut result = config;
     let mut multiplier = 1usize;
     for cell_index in 0..cell_count {
@@ -377,6 +392,43 @@ fn configuration_deficit(mut config: usize, cell_count: usize, modulus: usize) -
 mod tests {
     use super::*;
     use crate::core::piece::Piece;
+
+    #[test]
+    fn binary_effects_match_digitwise_modular_subtraction() {
+        for (modulus, cell_count) in [(2usize, 4usize), (2, 16), (4, 4), (4, 9)] {
+            let effect_mask = (1 << cell_count) - 1;
+            let effects = if cell_count == 4 {
+                (0..=effect_mask).collect::<Vec<_>>()
+            } else {
+                vec![
+                    0,
+                    1,
+                    1 << (cell_count - 1),
+                    0x5555 & effect_mask,
+                    0xaaaa & effect_mask,
+                    effect_mask,
+                ]
+            };
+            for config in 0..modulus.pow(cell_count as u32) {
+                for &effect in &effects {
+                    let mut encoded = config;
+                    let mut expected = 0;
+                    let mut multiplier = 1;
+                    for cell in 0..cell_count {
+                        let digit = encoded % modulus;
+                        encoded /= modulus;
+                        let hit = (effect >> cell) & 1;
+                        expected += (digit + modulus - hit) % modulus * multiplier;
+                        multiplier *= modulus;
+                    }
+                    assert_eq!(
+                        apply_effect(config, effect as u16, cell_count, modulus),
+                        expected
+                    );
+                }
+            }
+        }
+    }
 
     fn placements(pieces: &[Piece], height: u8, width: u8) -> Vec<PiecePlacements> {
         pieces

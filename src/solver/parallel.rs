@@ -68,7 +68,7 @@ impl Ord for FrontierCandidate {
     }
 }
 
-const GUIDED_FRONTIER_WIDTH: usize = 200_000;
+pub(super) const GUIDED_FRONTIER_WIDTH: usize = 200_000;
 const GUIDED_FRONTIER_DEPTH: usize = 8;
 
 fn expand_frontier<const MODULUS: usize>(
@@ -623,20 +623,15 @@ pub(super) fn solve_parallel<const MODULUS: usize>(
     piece_order: &[usize],
     data: &SolverData,
     exhaustive: bool,
-    guided_frontier: bool,
+    frontier_width: Option<usize>,
     deadline: Option<Instant>,
 ) -> SolveResult {
     let piece_count = data.placements.len();
 
     let work_queue = WorkQueue::new();
-    let frontier_nodes = if guided_frontier {
-        let (tasks, nodes) = likelihood_frontier::<MODULUS>(
-            board,
-            data,
-            GUIDED_FRONTIER_WIDTH,
-            GUIDED_FRONTIER_DEPTH,
-            deadline,
-        );
+    let frontier_nodes = if let Some(width) = frontier_width {
+        let (tasks, nodes) =
+            likelihood_frontier::<MODULUS>(board, data, width, GUIDED_FRONTIER_DEPTH, deadline);
         work_queue.push_many(tasks);
         nodes
     } else {

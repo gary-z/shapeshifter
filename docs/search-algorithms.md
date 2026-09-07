@@ -1,14 +1,22 @@
 # Native parallel search
 
-Every native parallel, non-exhaustive solve uses the same schedule: five seconds of the
-existing backtracker, 25 seconds of adaptive domain search, then 25 seconds of
-regional inference before fallback. Each phase gets all available workers on
-the same game, and every phase counts toward search time. Serial, WebAssembly,
-and exhaustive searches keep the existing backtracker.
+Every parallel, non-exhaustive solve uses the same schedule, stopping as soon as
+a solution is found:
+
+1. Five seconds of exact backtracking from the root.
+2. A two-second guided attempt with a 20,000-state frontier, when its tables fit.
+3. Twenty-five seconds of adaptive domain search.
+4. Twenty-five seconds of regional inference.
+5. A thirty-second guided attempt with the full 200,000-state frontier, when eligible.
+6. Exact backtracking from the root.
+
+Each phase gets all available workers on the same game. Both browser packages use
+the same schedule, clipped to their remaining search budget, with the runtime's
+available workers. Native serial and exhaustive searches use the exact backtracker.
 
 Algorithm eligibility follows a state-space budget. Regional factors use at
-most 1,024 joint states. The guided frontier is available in fallback
-when each 3x3 window needs at most 32,768 states (`M^9`); its exponential tables
+most 1,024 joint states. Both guided attempts are available
+when each 3x3 window needs at most 32,768 states (`M^9`); their exponential tables
 are omitted otherwise. Neither decision uses board area or piece count.
 
 Adaptive and regional searches return legal placements in the puzzle's original piece order. They
@@ -86,8 +94,11 @@ to cover each board cell exactly once.
 `solver::prepare` builds legal placements, effect tables, and pruning bounds.
 `PreparedSearch::solve` does all domain propagation, message passing, branching,
 decimation, restarts, and guided frontier construction. Failed attempts count
-as search time. The benchmark starts its timeout after the worker reports
-`READY preparation_ms`, and runs one game at a time with `--parallel`.
+as search time. The existing `bench` command starts its timeout after the worker reports
+`READY preparation_ms`, and runs one game at a time with `--parallel`. The
+[hard-level optimization study](benchmarks/2026-09-07-hard/README.md) instead
+measures a 120-second total process deadline, including preparation, search,
+and independent solution replay.
 
 The additional phases are bounded searches, so a miss falls back to backtracking
 with exact pruning bounds. The benchmark's overall search timeout also
@@ -96,23 +107,27 @@ puzzle sample, rather than a completeness guarantee.
 
 The initial backtracking phase protects quick solutions. Puzzles that previously
 needed more than five seconds can take longer when the additional searches
-miss, because fallback backtracking starts again afterward. The common schedule
-accepts this latency tradeoff while targeting at least half of each level's
-puzzles within two minutes of search.
+miss, because fallback backtracking starts again afterward. An early guided
+miss can add about two seconds to a later solve; a hit avoids waiting through
+the two inference phases. Measurements include both outcomes.
 
-## Guided fallback
+## Guided search
 
 The guided frontier ranks prefixes using exact suffix distributions on overlapping
-windows. It retains the best 200,000 states at each of the first eight depths.
-Workers expand disjoint groups of parent states, keeping up to 200,000 candidate
-placements each. Any globally retained candidate must appear in its worker's
+windows. The early attempt retains the best 20,000 states at each of the first
+eight depths; fallback retains 200,000. The smaller early beam allows larger
+trees to reach backtracking within the two-second attempt, while the full beam
+remains available when the narrow beam misses.
+Workers expand disjoint groups of parent states, keeping up to the selected
+frontier width in candidate placements each. Any globally retained candidate must appear in its worker's
 local list. The lists are merged before truncation, so a worker's assigned
 parents do not receive a fixed share of the frontier. Stable parent/placement
 ranks break ties independently of thread scheduling.
 
-Only the retained placements become full board states. The complete guided
-attempt, including frontier construction and subsequent backtracking, has a
-30-second deadline. If it expires, ordinary backtracking restarts from the root.
+Only the retained placements become full board states. Frontier construction
+and subsequent backtracking both count against each attempt's deadline. An
+early miss proceeds to adaptive and regional search; if the longer guided
+fallback also expires, ordinary backtracking restarts from the root.
 This gives fallback search time without a board-size exception. Tests compare
 the retained prefixes, their order, and visited counts with one and four workers,
 and check cancellation during both frontier construction and DFS.
@@ -125,7 +140,7 @@ bounds on total deficit, jaggedness, small components, partitions, and cell sets
 The exact jaggedness check previously lived inside the Monte Carlo wrapper and
 is preserved in the common feasibility function. Search positions no longer
 carry hit-count histories, and root search runs without sampled-bound retries.
-Serial and WebAssembly builds use this same exact backtracker.
+Serial and exhaustive searches use this same exact backtracker.
 
 The [uniform search validation](benchmarks/2026-09-06-uniform/README.md)
 compares the same policy with and without Monte Carlo. It records the per-level
@@ -139,3 +154,17 @@ and [Montanari, Ricci-Tersenghi, and Semerjian, *Solving Constraint Satisfaction
 The modular region factors, filtering bounds, and search schedule described above
 are specific to this solver; the papers do not establish success rates for
 Shapeshifter puzzles.
+
+## Table construction
+
+The window likelihood tables preserve the exact suffix placement distributions.
+Each encoded state is decoded once; its subtraction table is built by extending
+all effects on preceding cells with the next cell's independent decrement.
+Nonzero effect probabilities are collected once per piece and window, before
+iterating over states. Their order and the floating-point sum order are preserved.
+
+Cell-set bounds use XOR for base-two modular decrements. For base four, hit bits
+are spread into two-bit digits, then the low bit is flipped and a borrow flips
+the high bit when required. Other moduli retain digitwise subtraction. Tests
+compare both shortcuts with independent digitwise arithmetic, and compare window
+costs with exhaustive placement distributions on small puzzles.

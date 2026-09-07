@@ -1,0 +1,260 @@
+{
+  "baseline_commit": "715ff4f23dffb3370fffe7e3c0dd852bb06da475",
+  "candidate_source_sha256": {
+    "src/bin/bench.rs": "d06d7890bf501146a47f2a96acb7ad021b08dce5b383e06b7fcdcc57ac1b33ed",
+    "src/bin/generate.rs": "b47d6445808b0275f19035a9638ce334118f62de3581d7247fe8ecc8c226f537",
+    "src/bin/parse.rs": "d9fd8b07407e562cf6a2d152c0ea750b8c9a0256c9b92c159f261846f012368a",
+    "src/bin/solve.rs": "8c25e0aca95b64c17703df1b67a242d59baf50bebd0594c7ef4943f01da18520",
+    "src/core/bitboard.rs": "cd563e1550902097d285d702ce80c83c2d7d6f51a8d8097a91baf78608e0dee0",
+    "src/core/board.rs": "1cbd3ee6f4f668c2c99f23dbce85b9fe5185c0b991b7a657c2186e306286c38e",
+    "src/core/mod.rs": "da03017c328c3ad32ff72164655e5ab6f6bbf0805b0245070595c7fb90cc70a5",
+    "src/core/piece.rs": "be8688ab5ad0bf8ddb860d019a215a72a65086480a07709aad7581704b49a150",
+    "src/game.rs": "f311cfddf064b81f475af0764c916ae6efcb7e0355a8a77f9e096d58e037bcb9",
+    "src/generate.rs": "efedebc9ac40d4b87eeda80712181d045d4cd0a5544c5f7ff8a1636aa6d70c86",
+    "src/level.rs": "c76968b469735bd047b64da31254c64136f2cfb917d68b857713478102c78034",
+    "src/lib.rs": "5db38f0fd67d182657c67ecb44f34467111d82d83af86b606d4912c1610b111f",
+    "src/puzzle.rs": "1f2991c38a07bdd36c0a2ab6d05e09be16b381a613cd938a29b0fe5c80a7f189",
+    "src/solver/adaptive.rs": "074638ccc03ed111634f75c2450ed0407a1a1074a216a893cc6e059c4a3fab37",
+    "src/solver/backtrack.rs": "0009709a787ee04d4e7fa5e523dc7b395dbdddf7acdcf60ed2e1204ad7473a1e",
+    "src/solver/likelihood.rs": "cd11a57e819e97f432d394461f18daceac618116e38b7da2abcee433dec14274",
+    "src/solver/mod.rs": "3d570e09ab7caad52a0f170dc9ae4e54ebcd2f7f5c73ab3ddfe2d35d87b7fac8",
+    "src/solver/parallel.rs": "9234aa6b601e2daccd8bd9a336bdfdb160a24d8addc1d0dd0014ea9fdc50e3fa",
+    "src/solver/precompute.rs": "d0c77c5f994b6339d2fc05803acebc2d27cc6c51098966e1c883fb09c29adc4a",
+    "src/solver/pruning/cell_set.rs": "f998259c83acca0eb989d9b234b0ed263cfaaf106d0807e13e27acd336c2282f",
+    "src/solver/pruning/jaggedness.rs": "9e9bb646284ceda34e02e01798b09d0437a74157691654addc2b5e77d7c0ef66",
+    "src/solver/pruning/mod.rs": "c2ccd5bc9970d233423781307bfd1be6c933910c02188d63f72266ace56fbe76",
+    "src/solver/pruning/partition.rs": "931dcd73e90b38296bcb8f0beab16e13dd632d3071149e0f445699ab44333806",
+    "src/solver/pruning/small_component.rs": "845217b5f21600e87f98ecf15ad9096a7b9548cde3f42d487619171af7d8a4a5",
+    "src/solver/pruning/total_deficit.rs": "7d6f515800ee40abf04769a6e6270407ef3b47ec38bff31390db3e487aab628d",
+    "src/solver/regional.rs": "96ed80949382f11d6069089754896822b822b6c4e5df341e0fccfee796a4bcd2",
+    "src/solver/runtime.rs": "c671e2e5d4f745461407b827805afa91b2ccab72fad10e4c7b051b834a7f284e",
+    "src/wasm.rs": "a96d55e418b5d0ea6160a12a7efaa5da95f2bd53c1930e766cc189c370624923"
+  },
+  "cargo_lock_sha256": "b62374452d16426c90ea3664248e3fb5861b4d9763d2634569f41cb083d5c371",
+  "binary_sha256": {
+    "generate-baseline": "7a875db9484abba1038b8ccc7877f0725a24f3c1bf8b25715dbefc527739b09c",
+    "native-measure-baseline": "a13fb61ae8e0898ac2b3fcbb1a08466630eaeb400f053f756891953d8016e75b",
+    "native-measure-candidate": "408592045ca629d6e0698843f34020393354bf0070efae9a6e178e6eaa714067",
+    "native-measure-guided-early": "5b7dbd28729929206b8ed2a285b53676d4c4ea68effadd15eba1c46b501f0669",
+    "native-measure-narrow-early": "e0a311007133e71c5677cb8f4a71e1206a0e163fac0f8280c71abada0850c185",
+    "native-measure-reproduced": "e66b307662804debe5158c02cd4c249aa04908f9a1d6128f1843bd100f10430b"
+  },
+  "machine": {
+    "cpu_count": 32,
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "lscpu": {
+      "lscpu": [
+        {
+          "field": "Architecture:",
+          "data": "x86_64"
+        },
+        {
+          "field": "CPU op-mode(s):",
+          "data": "32-bit, 64-bit"
+        },
+        {
+          "field": "Address sizes:",
+          "data": "39 bits physical, 48 bits virtual"
+        },
+        {
+          "field": "Byte Order:",
+          "data": "Little Endian"
+        },
+        {
+          "field": "CPU(s):",
+          "data": "32"
+        },
+        {
+          "field": "On-line CPU(s) list:",
+          "data": "0-31"
+        },
+        {
+          "field": "Vendor ID:",
+          "data": "GenuineIntel"
+        },
+        {
+          "field": "Model name:",
+          "data": "13th Gen Intel(R) Core(TM) i9-13900KF"
+        },
+        {
+          "field": "CPU family:",
+          "data": "6"
+        },
+        {
+          "field": "Model:",
+          "data": "183"
+        },
+        {
+          "field": "Thread(s) per core:",
+          "data": "2"
+        },
+        {
+          "field": "Core(s) per socket:",
+          "data": "16"
+        },
+        {
+          "field": "Socket(s):",
+          "data": "1"
+        },
+        {
+          "field": "Stepping:",
+          "data": "1"
+        },
+        {
+          "field": "BogoMIPS:",
+          "data": "5990.39"
+        },
+        {
+          "field": "Flags:",
+          "data": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves avx_vnni vnmi umip waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize flush_l1d arch_capabilities"
+        },
+        {
+          "field": "Virtualization:",
+          "data": "VT-x"
+        },
+        {
+          "field": "Hypervisor vendor:",
+          "data": "Microsoft"
+        },
+        {
+          "field": "Virtualization type:",
+          "data": "full"
+        },
+        {
+          "field": "L1d cache:",
+          "data": "768 KiB (16 instances)"
+        },
+        {
+          "field": "L1i cache:",
+          "data": "512 KiB (16 instances)"
+        },
+        {
+          "field": "L2 cache:",
+          "data": "32 MiB (16 instances)"
+        },
+        {
+          "field": "L3 cache:",
+          "data": "36 MiB (1 instance)"
+        },
+        {
+          "field": "NUMA node(s):",
+          "data": "1"
+        },
+        {
+          "field": "NUMA node0 CPU(s):",
+          "data": "0-31"
+        },
+        {
+          "field": "Vulnerability Gather data sampling:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Itlb multihit:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability L1tf:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Mds:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Meltdown:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Mmio stale data:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Reg file data sampling:",
+          "data": "Mitigation; Clear Register File"
+        },
+        {
+          "field": "Vulnerability Retbleed:",
+          "data": "Mitigation; Enhanced IBRS"
+        },
+        {
+          "field": "Vulnerability Spec rstack overflow:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Spec store bypass:",
+          "data": "Mitigation; Speculative Store Bypass disabled via prctl"
+        },
+        {
+          "field": "Vulnerability Spectre v1:",
+          "data": "Mitigation; usercopy/swapgs barriers and __user pointer sanitization"
+        },
+        {
+          "field": "Vulnerability Spectre v2:",
+          "data": "Mitigation; Enhanced / Automatic IBRS; IBPB conditional; RSB filling; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S"
+        },
+        {
+          "field": "Vulnerability Srbds:",
+          "data": "Not affected"
+        },
+        {
+          "field": "Vulnerability Tsx async abort:",
+          "data": "Not affected"
+        }
+      ]
+    }
+  },
+  "compiler": "rustc 1.100.0-nightly (fd7ed57df 2026-08-29), LLVM 23.1.0",
+  "native_flags": "target-cpu=native, release LTO, codegen-units=1, panic=abort, strip=true",
+  "files_sha256": {
+    "build_measure.py": "724d1b9639108195b38f202e0919ec16f4ed5ff4f2194366ad6baec3a4d75162",
+    "development-wide.jsonl": "e00e77e74372446dc160b55bbf14c56e5d43ab7a248fe5f27fe6c2b438803264",
+    "diagnostic.jsonl": "8ddb81a2b8002d87605074976d7293acbe4328563ab0724aeb7b860198b0dc57",
+    "hard-development-puzzles.jsonl": "57e9523b62ab7f66a42e6591034d2d2209126e0d9c629433c336d4bbafc3e45f",
+    "hard-holdout-puzzles.jsonl": "000031ed8f82ec61151c457cf8421caaa78f7e19a3e483be1fb00af44a1e6d75",
+    "measure.rs": "178f981a66b08c04f2f047366cfb43fb1356a53d979bfd6b684f6ee50a72cf5d",
+    "narrow-diagnostic-puzzles.jsonl": "cd0f49409001468174d3e5b041ef8e4ba400ab916f0d8afb9197fcf83c9017f2",
+    "paired_sample.py": "8789da02379689f2cba106e1982b79925130d867e2289a16d890f1878ef2380d",
+    "run_sample.py": "f4718240f62f15cac0ee62d61f993f5e3a78b85325a836abc46c8a81a629d63c",
+    "summarize.py": "fb898c3c19183ca355dd2fe528cd89cfcb233f7732a2c1755574d0db5ded6c18",
+    "validation.csv": "835d30b4558ed0314b0ea8be275f4d86a3d375547bc07a669cfb1728b42087ef",
+    "validation.jsonl": "f9bdf68021d8c47c2a0a5fc0748f8b5850f8282144b3844cd0d1943805155cb3",
+    "clean-build-check.jsonl": "bb74debb1477be34af8d7c6b7e9e4e01fa94cdf239ed1921e2f2e9aac8eafd7f"
+  },
+  "wasm_sha256": {
+    "web/pkg/shapeshifter_bg.wasm": "0d3e8e4c150b898a1862c4327934080338901c16eb74a80edb6bab5955595002",
+    "web/pkg-threaded/shapeshifter_bg.wasm": "55412756f9e1f6d127693cd6ffc590bf1a53ebd7e76fb41e2d4f4840ae11ce3c"
+  }
+}
