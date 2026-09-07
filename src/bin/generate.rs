@@ -31,7 +31,7 @@ fn main() {
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: generate [LEVEL] [OPTIONS]\n\n\
-                     Generates puzzles in the same JSON format as puzzle_history.jsonl.\n\
+                     Generates puzzles in the same JSON format as benchmarks/history.jsonl.\n\
                      Output is JSONL (one puzzle per line) to stdout.\n\n\
                      Arguments:\n  \
                        LEVEL             Level number (1-100)\n\n\

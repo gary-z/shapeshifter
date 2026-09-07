@@ -4,7 +4,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-export const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const SITE_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 const TYPES = {
     '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
     '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css',
@@ -12,7 +12,7 @@ const TYPES = {
 };
 
 // Shared by local development, browser tests, and browser benchmarks.
-export async function serve({ root = ROOT, port = 0, isolated = true, failThreaded = false } = {}) {
+export async function serve({ root = SITE_ROOT, port = 0, isolated = true, failThreaded = false } = {}) {
     root = await realpath(root);
     const server = createServer(async (request, response) => {
         if (isolated) {

@@ -34,7 +34,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check compiler and Clippy warnings
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      # Tests compile the library, CLIs, and examples; no separate build job.
+      # Tests compile the library and native tools; no separate build job.
       - name: Run native tests
         run: cargo test --release --locked --all-targets --all-features
 
@@ -51,12 +51,12 @@ jobs:
       - name: Checksum committed packages
         run: find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-before.sha
       - name: Rebuild packages
-        run: ./web/build.sh
+        run: npm run build:wasm
       - name: Verify committed packages match rebuild
         run: |
           find web/pkg web/pkg-threaded -type f \( -name '*.js' -o -name '*.wasm' \) -print0 | sort -z | xargs -0 sha256sum | tee /tmp/wasm-after.sha
           if ! diff -q /tmp/wasm-before.sha /tmp/wasm-after.sha > /dev/null 2>&1; then
-            echo "::error::Committed WASM files are out of sync with Rust source. Run './web/build.sh' and commit the result."
+            echo "::error::Committed WASM files are out of sync with Rust source. Run 'npm run build:wasm' and commit the result."
             diff /tmp/wasm-before.sha /tmp/wasm-after.sha || true
             exit 1
           fi

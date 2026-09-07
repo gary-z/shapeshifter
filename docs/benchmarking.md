@@ -11,8 +11,8 @@ machine. Improvements qualify at roughly 10% faster solves or 10% fewer failures
 Build the driver with the repository's pinned toolchain and release profile:
 
 ```bash
-cargo build --release --locked --bin bench --example measure
-target/release/bench run --binary target/release/examples/measure \
+cargo build --release --locked --bin bench --bin measure
+target/release/bench run --binary target/release/measure \
   --puzzles benchmarks/puzzles.jsonl --output /tmp/native-results.jsonl \
   --variant current
 target/release/bench summarize /tmp/native-results.jsonl
@@ -68,8 +68,9 @@ release settings, and timeout the same between builds.
 ## Batch and browser tools
 
 The `bench simulated` and `bench historical` modes survey generated levels or
-captured puzzle history. Their timeout starts **after preparation**, using a different deadline from the
-total-time measurement above:
+captured puzzle history. Historical mode defaults to
+[`benchmarks/history.jsonl`](../benchmarks/history.jsonl). Their timeout starts
+**after preparation**, using a different deadline from the total-time measurement above:
 
 ```bash
 cargo build --release --locked --bin bench

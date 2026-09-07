@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
-wasm_pack_version="$(tr -d '[:space:]' < "$repo_dir/web/.wasm-pack-version")"
+wasm_pack_version="$(tr -d '[:space:]' < "$repo_dir/scripts/.wasm-pack-version")"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 wasm_rustflags="--remap-path-prefix=$cargo_home=/cargo"
 
@@ -53,6 +53,6 @@ rm -f web/pkg/.gitignore web/pkg-threaded/.gitignore
 
 # Copied dependency helpers can contain CRLF. Match .gitattributes so a checkout
 # and a fresh build have identical bytes for CI's generated-package check.
-node web/normalize-packages.mjs
+node scripts/normalize-packages.mjs
 
-echo "Build complete. Serve index.html from project root."
+echo "Build complete. Run 'npm run serve' to serve web/."
