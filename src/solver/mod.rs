@@ -1,4 +1,3 @@
-mod adaptive;
 mod backtrack;
 mod likelihood;
 mod parallel;
@@ -51,7 +50,6 @@ pub struct PreparedSearch {
     parallel: bool,
     exhaustive: bool,
     guided_frontier: bool,
-    adaptive: Option<adaptive::AdaptiveSearch>,
     regional: Option<regional::RegionalSearch>,
 }
 
@@ -89,7 +87,6 @@ pub fn prepare(game: &Game, parallel: bool, exhaustive: bool) -> PreparedSearch 
     let guided_frontier = should_use_guided_frontier(game, parallel, exhaustive);
 
     let (board, piece_order, data) = prepare_search(game, guided_frontier);
-    let adaptive = (parallel && !exhaustive).then(|| adaptive::AdaptiveSearch::precompute(game));
     let regional = (parallel && !exhaustive).then(|| regional::RegionalSearch::precompute(game));
     PreparedSearch {
         board,
@@ -98,7 +95,6 @@ pub fn prepare(game: &Game, parallel: bool, exhaustive: bool) -> PreparedSearch 
         parallel,
         exhaustive,
         guided_frontier,
-        adaptive,
         regional,
     }
 }
@@ -155,7 +151,6 @@ impl PreparedSearch {
             parallel,
             exhaustive,
             guided_frontier,
-            adaptive,
             regional,
             ..
         } = self;
@@ -176,7 +171,7 @@ impl PreparedSearch {
             };
         }
         let mut total_nodes = 0u64;
-        if adaptive.is_some() || regional.is_some() {
+        if regional.is_some() {
             // Preserve quick backtracking wins before exploring different trees.
             let result = self.backtrack(None, Some(phase_deadline(5)));
             total_nodes += result.nodes_visited;
@@ -196,22 +191,6 @@ impl PreparedSearch {
                 return SolveResult {
                     nodes_visited: total_nodes,
                     ..result
-                };
-            }
-        }
-        if let Some(adaptive) = adaptive.as_ref().filter(|_| !stopped()) {
-            let workers = runtime::workers();
-            eprintln!("adaptive search: {workers} workers, 25s budget");
-            let (solution, nodes) = adaptive.solve(
-                phase_deadline(25).saturating_duration_since(Instant::now()),
-                workers,
-            );
-            total_nodes += nodes;
-            if solution.is_some() {
-                return SolveResult {
-                    solution,
-                    nodes_visited: total_nodes,
-                    progress: 0.0,
                 };
             }
         }

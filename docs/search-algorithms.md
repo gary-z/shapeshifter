@@ -16,7 +16,6 @@ as soon as a solution is found. Each phase gets all available workers on one gam
 | --- | --- | --- |
 | Root backtracking | 5 seconds | Exact pruning bounds. |
 | Early guided search | 2 seconds | 20,000-state frontier, eight depths; `M = 2–3`. |
-| Adaptive domain search | 25 seconds | Propagation, probability ordering, and restarts. |
 | Regional inference | 25 seconds | Joint distributions over neighboring cells. |
 | Guided fallback | 30 seconds | 200,000-state frontier, eight depths; `M = 2–3`. |
 | Root backtracking | Remaining time | Exact pruning bounds. |
@@ -45,12 +44,6 @@ share a branch queue. Feasibility checks reject states using:
 Cell-set arithmetic uses XOR for base two and packed two-bit subtraction for
 base four; other moduli use digitwise subtraction.
 
-## Adaptive placement domains
-
-Each piece starts with all legal placements. Fixing a piece shrinks other
-pieces' domains, and new singleton domains become fixed placements. Bounds are
-recomputed until no domain changes.
-
 For residual cell deficits `d[c]`, remaining piece area `A`, and modulus `M`, a
 completion must satisfy:
 
@@ -60,20 +53,9 @@ Q = sum(wraps[c]) = (A - sum(d[c])) / M
 ```
 
 A negative or nonintegral `Q` is impossible. A placement covering `z` currently
-zero cells consumes exactly `z` wraps, so placements with `z > Q` are removed.
-
-The intersection and union of a piece's placement masks give the cells it must
-and can cover. Summing these indicators across pieces gives each cell's coverage
-interval. If the interval cannot attain residue `d[c]`, the state is impossible.
-Removing one piece's contribution tests whether that piece must cover or avoid
-the cell; placements violating that constraint are removed. These necessary
-conditions preserve every valid completion.
-
-A separate probability model ranks branches. Modular convolution of per-piece
-coverage probabilities estimates the other pieces' effects on each cell. Prefix
-and suffix convolutions omit each piece in turn to score its placements. Workers
-vary piece selection, ties, and restarts with growing node budgets. Probabilities
-change ordering only; they never prune domains.
+zero cells consumes exactly `z` wraps, so placements with `z > Q` are skipped.
+The isolated-cell and small-component bounds also use this budget to reject
+states that require too many disturbances of currently solved cells.
 
 ## Regional inference
 
@@ -103,13 +85,13 @@ parent/placement ranks break ties independently of thread scheduling. Only
 retained candidates become full board states.
 
 Frontier construction and subsequent backtracking share the phase deadline.
-An early miss proceeds to adaptive search; a guided fallback miss restarts
+An early miss proceeds to regional inference; a guided fallback miss restarts
 backtracking from the root. Bounded phases can miss valid solutions.
 
 ## Preparation and timing
 
 `solver::prepare(game, parallel, exhaustive)` builds legal placements, effect
 tables, and pruning bounds. `PreparedSearch::solve()` performs branching,
-propagation, inference, restarts, and guided frontier construction. Failed
+inference, restarts, and guided frontier construction. Failed
 attempts count as search time. See [benchmarking](benchmarking.md) for the
 difference between a search timeout and the native total wall-clock target.
