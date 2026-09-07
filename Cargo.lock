@@ -330,12 +330,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c8d0fd677905edcbeedbf2edb6494d676f0e98d54d5cf9bda0b061cb8fb8aba"
 
 [[package]]
-name = "rand_mt"
-version = "6.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4f926523c30345680eb6641f4256a151f0826c5605e190177541f9e40a32390"
-
-[[package]]
 name = "rayon"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -429,7 +423,6 @@ version = "0.1.0"
 dependencies = [
  "getrandom",
  "rand",
- "rand_mt",
  "rayon",
  "serde",
  "serde_json",
