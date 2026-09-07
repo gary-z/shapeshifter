@@ -4,10 +4,12 @@
   "type": "module",
   "engines": { "node": ">=24.2.0" },
   "scripts": {
-    "serve": "node web/serve.mjs",
-    "test": "node --test web/tests/tooling.test.mjs",
-    "test:browser": "node web/test-browser.mjs",
-    "bench:browser": "node web/bench-browser.mjs"
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:site": "bash scripts/package-site.sh",
+    "serve": "node scripts/serve.mjs",
+    "test": "node --test tests/browser/tooling.test.mjs",
+    "test:browser": "node tests/browser/integration.mjs",
+    "bench:browser": "node scripts/bench-browser.mjs"
   },
   "devDependencies": { "playwright": "1.63.0" }
 }

@@ -1,4 +1,4 @@
-//! Native total-deadline measurements and comparisons of the Cargo example driver.
+//! Native total-deadline measurements and comparisons of the measure binary.
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File};

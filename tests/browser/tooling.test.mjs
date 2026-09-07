@@ -3,9 +3,9 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { serve } from '../serve.mjs';
-import { normalizePackages } from '../normalize-packages.mjs';
-import { readPuzzles, stringify, verifySolution } from '../browser-tools.mjs';
+import { serve } from '../../scripts/serve.mjs';
+import { normalizePackages } from '../../scripts/normalize-packages.mjs';
+import { readPuzzles, stringify, verifySolution } from '../../scripts/browser-tools.mjs';
 
 async function temporary(t) {
     const path = await mkdtemp(join(tmpdir(), 'shapeshifter-tools-'));
@@ -29,7 +29,7 @@ test('server supplies WASM MIME and isolation headers, with fallback and failure
             const head = await fetch(server.url + '/', { method: 'HEAD' });
             assert.equal(head.status, 200);
             assert.equal(await head.text(), '');
-            assert.equal((await fetch(server.url + '/web/pkg-threaded/module.js')).status, 503);
+            assert.equal((await fetch(server.url + '/pkg-threaded/module.js')).status, 503);
             assert.equal((await fetch(server.url + '/missing')).status, 404);
             assert.equal((await fetch(server.url + '/%ff')).status, 400);
             assert.equal((await fetch(server.url + '/', { method: 'POST' })).status, 405);

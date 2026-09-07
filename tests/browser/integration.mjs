@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as playwright from 'playwright';
-import { ROOT, serve } from './serve.mjs';
-import { openClient, puzzleHtml, verifySolution } from './browser-tools.mjs';
+import { serve } from '../../scripts/serve.mjs';
+import { openClient, puzzleHtml, verifySolution } from '../../scripts/browser-tools.mjs';
 
 const PREPARATION_TIMEOUT_MS = 180_000;
-const easy = JSON.parse(readFileSync(join(ROOT, 'web/tests/easy.json'), 'utf8'));
-const hard = JSON.parse(readFileSync(join(ROOT, 'web/tests/hard.json'), 'utf8'));
+const easy = JSON.parse(readFileSync(new URL('./fixtures/easy.json', import.meta.url), 'utf8'));
+const hard = JSON.parse(readFileSync(new URL('./fixtures/hard.json', import.meta.url), 'utf8'));
 
 export async function testMode(browser, isolated, deployedUrl) {
     const server = deployedUrl ? { url: deployedUrl, close: async () => {} } : await serve({ isolated });
@@ -65,6 +64,8 @@ export async function testMode(browser, isolated, deployedUrl) {
         await page.locator('#solve-btn').click();
         await page.waitForFunction(() => !document.getElementById('solve-btn').disabled);
         assert.equal(await page.locator('.step-nav').count(), 1, await page.locator('#results-content').innerText());
+        await page.waitForFunction(() => [...document.querySelectorAll('.cell img')]
+            .every(image => image.complete && image.naturalWidth > 0));
         assert((await page.locator('#status').innerText()).includes('search'));
         await page.locator('#puzzle-input').fill(puzzleHtml(hard));
         await page.locator('#solve-btn').click();
@@ -85,20 +86,16 @@ export async function testMode(browser, isolated, deployedUrl) {
 async function testStartupFallback(browser) {
     const server = await serve({ failThreaded: true });
     try {
-        const page = await browser.newPage();
-        await page.goto(server.url + '/web/tests/easy.json');
+        const { page, info } = await openClient(browser, server.url, 4);
+        assert.deepEqual(info, { workers: 1, threaded: false });
         const result = await page.evaluate(async () => {
-            const { SolverClient } = await import('/web/search-client.js');
-            const client = new SolverClient({ threads: 4 });
-            const first = await client.init();
             const sameWorker = client.worker;
             const second = await client.init();
             const reused = sameWorker === client.worker;
             client.dispose();
-            return { first, second, reused };
+            return { second, reused };
         });
-        assert.deepEqual(result, { first: { workers: 1, threaded: false },
-            second: { workers: 1, threaded: false }, reused: true });
+        assert.deepEqual(result, { second: { workers: 1, threaded: false }, reused: true });
         await page.close();
     } finally {
         await server.close();

@@ -19,8 +19,11 @@ Cloudflare Pages serves the app as a static site:
 | Build command | `bash web/package-site.sh` |
 | Output directory | `dist` |
 
-The packaging script copies the committed WASM packages, JavaScript, local
-assets, and [`_headers`](../_headers). Cloudflare does not need Rust to deploy.
+The saved Cloudflare build command forwards to
+[`scripts/package-site.sh`](../scripts/package-site.sh), also available as
+`npm run build:site`. It packages the static site from `web/` into a clean `dist/`,
+including the committed WASM packages, JavaScript, images, favicon, and
+[`_headers`](../web/_headers). Cloudflare does not need Rust to deploy.
 The headers enable shared memory on HTTPS or localhost:
 
 ```text
@@ -37,15 +40,15 @@ fails, the app uses one worker with the same search policy.
 
 ```bash
 rustup target add wasm32-unknown-unknown
-./web/build.sh
+npm run build:wasm
 npm run serve
 ```
 
-Open `http://127.0.0.1:8000/`. The local server supplies the isolation headers.
-A plain static server exercises the single-worker fallback.
+Open `http://127.0.0.1:8000/`. The local server serves `web/` and supplies the
+isolation headers. A plain static server exercises the single-worker fallback.
 
-`web/build.sh` uses the pinned Rust toolchain and
-[`wasm-pack` version](../web/.wasm-pack-version), installing wasm-pack and Rust
+[`scripts/build-wasm.sh`](../scripts/build-wasm.sh) uses the pinned Rust toolchain and
+[`wasm-pack` version](../scripts/.wasm-pack-version), installing wasm-pack and Rust
 sources when needed. Node 24 normalizes generated JavaScript line endings;
 this build step uses only Node built-ins.
 Commit both `web/pkg/` and `web/pkg-threaded/` after changes to Rust source;
@@ -82,9 +85,11 @@ npm run test:browser -- --url https://your-preview.shapeshifter.pages.dev
 Deployment checks exercise the shared-memory client and public UI. Local checks
 also test the single-worker mode and injected startup failure.
 
-Tests serve the app with and without isolation headers. They replay solutions,
-check invalid-input recovery, enforce a short search budget, cancel and reuse
-the solver, check UI responsiveness, and force parallel startup failure.
+Tests and fixtures live in `tests/browser/`; fixtures are read locally and are
+not deployed. Tests serve the app with and without isolation headers. They
+replay solutions, check invalid-input recovery, enforce a short search budget,
+cancel and reuse the solver, check UI responsiveness and image loading, and
+force parallel startup failure.
 Tests and benchmarks log the actual browser version.
 
 For performance measurements, see [benchmarking](benchmarking.md).

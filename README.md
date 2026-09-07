@@ -8,13 +8,13 @@ when the host enables cross-origin isolation.
 
 ## Tools and documentation
 
-Each CLI accepts `--help`.
+Use `generate --help` or `bench --help` for command-line options.
 
 | Tool | Purpose |
 | --- | --- |
 | `generate` | Generate reproducible puzzles from the 100 level specifications. |
 | `bench` | Measure batches, compare native builds, and summarize results. |
-| `examples/measure.rs` | Native driver for `bench run` and `bench compare`. |
+| `measure` | Native worker for `bench run` and `bench compare`, reading puzzle JSON from stdin. |
 
 - [Solver design](docs/search-algorithms.md): game rules, search schedule, and pruning invariants.
 - [Browser development and hosting](docs/browser.md): WASM builds, Cloudflare Pages, and browser tests.
@@ -38,7 +38,7 @@ cargo test --release --locked --all-targets --all-features
 
 | Job | Coverage |
 | --- | --- |
-| Native | Formatting, strict Clippy, and release tests for all targets and features, including the measurement example. Tests compile the code, so there is no separate build job. |
+| Native | Formatting, strict Clippy, and release tests for all targets and features, including the native tools. Tests compile the code, so there is no separate build job. |
 | WebAssembly | Rebuild both committed WASM packages and compare their checksums. |
 | Browser | Chromium and Firefox integration tests, including parallel search, single-worker fallback, cancellation, and solution replay. |
 
@@ -53,9 +53,10 @@ correctness and browser behavior without asserting machine-dependent timings.
 | --- | --- |
 | `src/core/` | SIMD bitboard, board, and piece representations. |
 | `src/solver/` | Search algorithms, preparation, and pruning bounds. |
-| `src/bin/` | Puzzle generator and native benchmark CLI. |
-| `examples/measure.rs` | Native measurement driver with solution replay. |
-| `benchmarks/` | Hard-puzzle corpus and reference results. |
-| `web/` | Browser app, WASM packages, assets, and browser tooling. |
-| `data/` | Level specifications and captured puzzle history. |
+| `src/bin/` | Puzzle generator, benchmark CLI, and native measurement driver. |
+| `web/` | Static site: HTML, JavaScript, WASM packages, images, and hosting headers. |
+| `scripts/` | Build, packaging, serving, and browser benchmark tools. |
+| `tests/` | Rust integration tests and browser tests with local fixtures. |
+| `benchmarks/` | Hard-puzzle corpus, captured puzzle history, and reference results. |
+| `data/` | Level specifications used by the generator. |
 | `docs/` | Current solver, browser, and benchmarking guides. |

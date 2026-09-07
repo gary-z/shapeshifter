@@ -536,7 +536,7 @@ fn main() {
             let path = positional
                 .first()
                 .map(|s| s.as_str())
-                .unwrap_or("data/puzzle_history.jsonl");
+                .unwrap_or("benchmarks/history.jsonl");
             let timeout = timeout_secs.unwrap_or(60);
 
             let max_parallel = if parallel {

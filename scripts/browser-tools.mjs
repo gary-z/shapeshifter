@@ -52,10 +52,12 @@ export function puzzleHtml(puzzle) {
 
 export async function openClient(browser, url, threads = null) {
     const page = await browser.newPage();
-    // A document without the product UI's worker pool.
-    await page.goto(url + '/web/tests/easy.json');
+    // Use the hosted page and its isolation headers without starting the UI's worker pool.
+    await page.route('**/solver.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
+    const response = await page.goto(url);
+    assert(response.ok(), `Page returned ${response.status()}: ${url}`);
     const info = await page.evaluate(async threads => {
-        const { SolverClient } = await import('/web/search-client.js');
+        const { SolverClient } = await import('./search-client.js');
         window.events = [];
         window.client = new SolverClient({
             ...(threads === null ? {} : { threads }),

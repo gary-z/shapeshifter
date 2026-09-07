@@ -1,7 +1,7 @@
 import { SolverClient } from './search-client.js';
 import { parseShapeshifterHtml } from './parser.js';
 
-const ASSETS_DIR = 'web/assets';
+const ASSETS_DIR = 'assets';
 const DEFAULT_ICONS = ['swo', 'hel'];
 const status = document.getElementById('status');
 const solveButton = document.getElementById('solve-btn');
