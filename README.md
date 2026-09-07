@@ -33,14 +33,17 @@ Each CLI accepts `--help`.
 | `parse` | Convert saved Neopets HTML into puzzle JSON. |
 | `solve` | Solve JSON or JSON Lines and generate an HTML guide. |
 | `generate` | Generate reproducible puzzles from the 100 level specifications. |
-| `bench` | Measure generated or historical puzzle batches with a search timeout. |
-| `examples/measure.rs` + `benchmarks/` | Measure all-core native solves with a total wall-clock deadline. |
+| `bench` | Measure batches, compare native builds, and summarize results. |
+| `examples/measure.rs` | Native driver for `bench run` and `bench compare`. |
 
 - [Solver design](docs/search-algorithms.md): game rules, search schedule, and pruning invariants.
 - [Browser development and hosting](docs/browser.md): WASM builds, Cloudflare Pages, and browser tests.
 - [Benchmarking](docs/benchmarking.md): the two-minute target, hard-puzzle corpus, and comparisons.
 
 ## Development
+
+Native development needs Rust. Browser development also uses Node 24 (see
+[`.nvmrc`](.nvmrc)); npm dependencies are pinned in `package-lock.json`.
 
 Run the native checks locally:
 
@@ -59,7 +62,7 @@ cargo test --release --locked --all-targets --all-features
 | Browser | Chromium and Firefox integration tests, including parallel search, single-worker fallback, cancellation, and solution replay. |
 
 CI runs on pull requests and pushes to `main`, skipping changes limited to
-Markdown, `docs/`, or benchmark JSONL data. New commits cancel superseded runs.
+Markdown or `docs/`. New commits cancel superseded runs.
 The full performance corpus is run manually on the target machine; CI checks
 correctness and browser behavior without asserting machine-dependent timings.
 
@@ -71,7 +74,7 @@ correctness and browser behavior without asserting machine-dependent timings.
 | `src/solver/` | Search algorithms, preparation, and pruning bounds. |
 | `src/bin/` | Parser, solver, generator, and batch benchmark CLIs. |
 | `examples/measure.rs` | Native measurement driver with solution replay. |
-| `benchmarks/` | Benchmark runners, hard-puzzle corpus, and reference results. |
+| `benchmarks/` | Hard-puzzle corpus and reference results. |
 | `web/` | Browser app, WASM packages, assets, and browser tooling. |
 | `data/` | Level specifications and captured puzzle history. |
 | `docs/` | Current solver, browser, and benchmarking guides. |

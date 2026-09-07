@@ -38,7 +38,7 @@ fails, the app uses one worker with the same search policy.
 ```bash
 rustup target add wasm32-unknown-unknown
 ./web/build.sh
-python3 web/serve.py
+npm run serve
 ```
 
 Open `http://127.0.0.1:8000/`. The local server supplies the isolation headers.
@@ -46,7 +46,8 @@ A plain static server exercises the single-worker fallback.
 
 `web/build.sh` uses the pinned Rust toolchain and
 [`wasm-pack` version](../web/.wasm-pack-version), installing wasm-pack and Rust
-sources when needed. Python 3 normalizes generated JavaScript line endings.
+sources when needed. Node 24 normalizes generated JavaScript line endings;
+this build step uses only Node built-ins.
 Commit both `web/pkg/` and `web/pkg-threaded/` after changes to Rust source;
 CI rebuilds them and verifies matching checksums.
 
@@ -58,32 +59,32 @@ recreating its worker. Shared WASM memory is limited to 2 GiB.
 
 ## Browser tests
 
-Install the Python test client and Chromium:
+Use Node 24 (or run `nvm use`), then install the pinned JavaScript Playwright
+client and its matching browsers:
 
 ```bash
-python3 -m venv /tmp/shapeshifter-browser
-/tmp/shapeshifter-browser/bin/pip install -r web/requirements.txt
-/tmp/shapeshifter-browser/bin/playwright install --with-deps chromium
-/tmp/shapeshifter-browser/bin/python web/test_browser.py
+npm ci
+npx playwright install --with-deps chromium firefox
+npm test
+npm run test:browser
 ```
 
-Firefox tests use the official Playwright 1.63 browser with the pinned Python
-1.62 client, because that browser keeps optimizing WASM compilation enabled
-under automation. With Node.js 24 and npm installed:
+`npm test` checks the local server, solution replay, seed handling, and generated
+file normalization. Browser tests run Chromium and Firefox sequentially; select
+one with `npm run test:browser -- --browser firefox`.
+
+To check an isolated deployment, pass `--url`:
 
 ```bash
-npm install --prefix /tmp/shapeshifter-firefox --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
-PLAYWRIGHT_BROWSERS_PATH=/tmp/shapeshifter-firefox/browsers \
-  node /tmp/shapeshifter-firefox/node_modules/playwright-core/cli.js install --with-deps firefox
-FIREFOX_EXECUTABLE_PATH=$(PLAYWRIGHT_BROWSERS_PATH=/tmp/shapeshifter-firefox/browsers \
-  node -e "console.log(require('/tmp/shapeshifter-firefox/node_modules/playwright-core').firefox.executablePath())")
-/tmp/shapeshifter-browser/bin/python web/test_browser.py --browser firefox \
-  --executable-path "$FIREFOX_EXECUTABLE_PATH"
+npm run test:browser -- --url https://your-preview.shapeshifter.pages.dev
 ```
+
+Deployment checks exercise the shared-memory client and public UI. Local checks
+also test the single-worker mode and injected startup failure.
 
 Tests serve the app with and without isolation headers. They replay solutions,
 check invalid-input recovery, enforce a short search budget, cancel and reuse
-the solver, check UI responsiveness, and force parallel startup failure. Both
-scripts log the actual browser version.
+the solver, check UI responsiveness, and force parallel startup failure.
+Tests and benchmarks log the actual browser version.
 
 For performance measurements, see [benchmarking](benchmarking.md).

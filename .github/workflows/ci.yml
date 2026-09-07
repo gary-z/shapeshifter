@@ -6,13 +6,11 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
-      - 'benchmarks/*.jsonl'
   pull_request:
     branches: [main]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
-      - 'benchmarks/*.jsonl'
 
 permissions:
   contents: read
@@ -39,14 +37,15 @@ jobs:
       # Tests compile the library, CLIs, and examples; no separate build job.
       - name: Run native tests
         run: cargo test --release --locked --all-targets --all-features
-      - name: Check benchmark scripts
-        run: python3 -m compileall -q benchmarks
 
   wasm:
     name: WebAssembly
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
       - name: Install WebAssembly target
         run: rustup target add wasm32-unknown-unknown
       - name: Checksum committed packages
@@ -76,22 +75,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
-      - run: pip install -r web/requirements.txt
-      - run: playwright install --with-deps chromium
-      # Use the browser with optimizing WASM support under automation.
-      - name: Install Firefox
-        run: |
-          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/firefox-browsers"
-          npm install --prefix "$RUNNER_TEMP/firefox-playwright" --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
-          node "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core/cli.js" install --with-deps firefox
-          node -e "console.log('FIREFOX_EXECUTABLE_PATH=' + require(process.argv[1]).firefox.executablePath())" "$RUNNER_TEMP/firefox-playwright/node_modules/playwright-core" >> "$GITHUB_ENV"
-      - name: Test Chromium
-        run: python web/test_browser.py
-      - name: Test Firefox
-        run: python web/test_browser.py --browser firefox --executable-path "$FIREFOX_EXECUTABLE_PATH"
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox
+      - name: Test Node tooling
+        run: npm test
+      - name: Test Chromium and Firefox
+        run: npm run test:browser
