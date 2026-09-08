@@ -10,8 +10,8 @@ const UNEXPECTED_HTML = '<!doctype html><title>Unexpected game response</title>\
 // No requests reach Neopets. Model its page links and a server-side referrer check.
 export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard } = {}) {
     const scenarios = hostedUrl
-        ? ['success', 'start-lost', 'changed-before-moves', 'solver-error', 'timeout-restart', 'timeout-win', 'timeout-stop',
-            'timeout-changed', 'timeout-bad-form', 'timeout-restart-error', 'unexpected-page', 'unexpected-final',
+        ? ['success', 'one-piece', 'start-lost', 'changed-before-moves', 'solver-error', 'timeout-restart', 'timeout-win', 'timeout-stop',
+            'timeout-changed', 'timeout-bad-form', 'timeout-restart-error', 'unexpected-page', 'timeout-unexpected-final',
             'network-error', 'cancel-search', 'stop']
         : ['success', 'wrong-board', 'refused', 'uncertain-response', 'changed-board', 'stop'];
     for (const scenario of scenarios) {
@@ -31,7 +31,9 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
         const requests = [];
         const timeout = scenario.startsWith('timeout-');
         const state = structuredClone(scenario === 'start-lost' ? { ...TIMEOUT_PUZZLE, level: puzzle.level, pieces: [] }
-            : timeout || scenario === 'unexpected-final' ? { ...TIMEOUT_PUZZLE, level: puzzle.level }
+            : scenario === 'one-piece' ? { ...TIMEOUT_PUZZLE, level: puzzle.level,
+                board: [[0, 0, 0], [0, 0, 0], [0, 0, 1]], pieces: [[[true]]] }
+            : timeout ? { ...TIMEOUT_PUZZLE, level: puzzle.level }
             : scenario === 'cancel-search' ? hard : puzzle);
         if (scenario === 'timeout-win') state.board = state.board.map(row => row.map(() => 0));
         let moves = 0;
@@ -63,7 +65,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             for (let row = 0; row <= state.rows - state.pieces[0].length; row++) {
                 for (let col = 0; col <= state.columns - state.pieces[0][0].length; col++) {
                     html += `<a href="${ACTION}?type=action&amp;posx=${col}&amp;posy=${row}&amp;turn=${moves}">`
-                        + `<img name="i${col}_${row}"></a>`;
+                        + `<img name="i${col}_${row}" width="20" height="20"></a>`;
                 }
             }
             return html;
@@ -119,7 +121,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     : { contentType: 'text/html', body: gameHtml() });
                 return;
             }
-            requests.push({ at: Date.now(), headers, url: url.href, overlap: inFlight });
+            requests.push({ at: Date.now(), headers, url: url.href, overlap: inFlight, navigation: request.isNavigationRequest() });
             inFlight++;
             await new Promise(resolve => setTimeout(resolve, 25));
             if (scenario === 'refused') {
@@ -141,7 +143,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             inFlight--;
             if (scenario === 'network-error') {
                 await route.abort('failed');
-            } else if (scenario === 'unexpected-page' || (scenario === 'unexpected-final' && !state.pieces.length)) {
+            } else if (scenario === 'unexpected-page' || (scenario === 'timeout-unexpected-final' && !state.pieces.length)) {
                 await route.fulfill({ contentType: 'text/html', body: UNEXPECTED_HTML });
             } else if (scenario === 'uncertain-response') {
                 await route.fulfill({ status: 500, body: 'The move happened, but its response failed.' });
@@ -201,18 +203,49 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 assert.equal(await page.locator('#shapeshifter-status [role="timer"]').count(), 0, 'Stop the countdown during placement');
             }
             async function assertSolved() {
+                const totalMoves = scenario === 'one-piece' ? 1 : scenario === 'timeout-win' ? TIMEOUT_PUZZLE.pieces.length
+                    : puzzle.pieces.length + (timeout ? TIMEOUT_PUZZLE.pieces.length : 0);
+                if (hostedUrl) {
+                    await page.waitForFunction(() => window.shapeshifterMoves?.running === false, null, { timeout: 60000 });
+                    const control = await page.evaluate(() => ({ phase: shapeshifterMoves.phase, completed: shapeshifterMoves.completed,
+                        total: shapeshifterMoves.total, finalMove: shapeshifterMoves.finalMove, error: shapeshifterMoves.error }));
+                    assert.equal(control.error, null, logs.join('\n'));
+                    assert.equal(control.phase, 'manual');
+                    assert.equal(control.completed, control.total - 1);
+                    assert.equal(moves, totalMoves - 1, 'Leave the winning move unsent');
+                    assert.equal(state.pieces.length, 1);
+                    const { row, col } = control.finalMove;
+                    assert.equal(await progress.textContent(), `One piece left. Refresh the board, then click row ${row + 1}, column ${col + 1} (from the top left).`);
+                    assert(await badge.isVisible());
+                    assert.equal(await page.locator('iframe').count(), 0, 'Release workers before the manual handoff');
+                    await page.waitForTimeout(1200);
+                    assert.equal(moves, totalMoves - 1, 'No later timer may submit the final move');
+                    await Promise.all([
+                        page.waitForEvent('load'),
+                        page.getByRole('button', { name: 'Refresh board' }).click(),
+                    ]);
+                    assert.equal(await page.locator('#shapeshifter-status').count(), 0);
+                    assert.equal(await page.evaluate(() => typeof window.shapeshifterMoves), 'undefined', 'Load a fresh game document');
+                    assert.equal(moves, totalMoves - 1, 'Refreshing the board must not place a piece');
+                    assert.equal(state.pieces.length, 1);
+                    await Promise.all([
+                        page.waitForURL(url => url.pathname === ACTION),
+                        page.locator(`img[name="i${col}_${row}"]`).click(),
+                    ]);
+                    assert(requests.at(-1).navigation, 'The final piece uses the game link through normal browser navigation');
+                    assert(requests.slice(0, -1).every(request => !request.navigation), 'Only the final piece is placed manually');
+                }
                 await page.waitForFunction(() => document.body.textContent.includes('You Won!')
                     || window.shapeshifterMoves?.error, null, { timeout: 60000 });
                 assert((await page.locator('body').innerText()).includes('You Won!'), logs.join('\n'));
-                assert.equal(moves, scenario === 'timeout-win' ? TIMEOUT_PUZZLE.pieces.length
-                    : puzzle.pieces.length + (timeout ? TIMEOUT_PUZZLE.pieces.length : 0));
+                assert.equal(moves, totalMoves);
                 assert.equal(requests.length, moves);
                 assert(state.board.every(row => row.every(value => value === 0)), 'Replay solves the original board');
                 for (let i = 1; i < requests.length; i++) {
                     assert(requests[i].at - requests[i - 1].at >= 900, 'Wait between confirmed moves');
                 }
             }
-            if (['success', 'start-lost', 'timeout-restart', 'timeout-win'].includes(scenario)) {
+            if (['success', 'one-piece', 'start-lost', 'timeout-restart', 'timeout-win'].includes(scenario)) {
                 if (hostedUrl && scenario === 'success') await assertPlacementProgress(puzzle.pieces.length);
                 if (scenario === 'timeout-restart') {
                     await assertPlacementProgress(TIMEOUT_PUZZLE.pieces.length);
@@ -234,7 +267,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 }
                 await page.waitForFunction(() => window.shapeshifterMoves?.running === false);
                 assert.equal(requests.length, ['wrong-board', 'changed-before-moves', 'solver-error', 'timeout-changed', 'cancel-search'].includes(scenario) ? 0
-                    : ['timeout-bad-form', 'timeout-restart-error', 'unexpected-final'].includes(scenario) ? TIMEOUT_PUZZLE.pieces.length : 1,
+                    : ['timeout-bad-form', 'timeout-restart-error', 'timeout-unexpected-final'].includes(scenario) ? TIMEOUT_PUZZLE.pieces.length : 1,
                     'Stop without retrying or placing more pieces');
                 assert.equal(restarts, scenario === 'timeout-restart-error' ? 1 : 0);
                 const control = await page.evaluate(() => ({ message: shapeshifterMoves.message, result: shapeshifterMoves.result,
@@ -268,7 +301,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                         assert.equal(debug.error.message, control.error);
                         assert.equal(typeof debug.error.stack, 'string');
                         assert(!JSON.stringify(debug).includes('test_session=fixture'), 'Do not collect request cookies');
-                        if (scenario.startsWith('unexpected-')) {
+                        if (scenario.includes('unexpected-')) {
                             assert.equal(debug.request.html, UNEXPECTED_HTML, 'Copy the actual failing response, not the visible game page');
                             assert.equal(debug.request.status, 200);
                             assert.equal(debug.phase, 'placing');
@@ -287,7 +320,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                         } else {
                             assert.equal(debug.request.html, gameHtml());
                         }
-                        if (scenario.startsWith('unexpected-') || scenario === 'network-error') {
+                        if (scenario.includes('unexpected-') || scenario === 'network-error') {
                             assert.equal(debug.request.url, requests.at(-1).url);
                         }
                         assert.deepEqual({ reads, moves, restarts }, activity, 'Copying debug info must not fetch or replay a request');
@@ -315,6 +348,6 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             await context.close();
         }
     }
-    console.log(hostedUrl ? 'PASS console auto-solve: hosted workers, countdown, placement progress, replay, timeout forfeits and restart, live-state checks, copyable error details, cancellation, stop/resume'
+    console.log(hostedUrl ? 'PASS console auto-solve: manual final piece, native game navigation, hosted workers, countdown, placement progress, replay, timeout forfeits and restart, live-state checks, copyable error details, cancellation, stop/resume'
         : 'PASS console move script: same-origin requests, live links, replay, delays, state checks, stop/resume, no retries');
 }

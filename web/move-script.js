@@ -88,9 +88,16 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
                 || url.searchParams.get('posx') !== String(col) || url.searchParams.get('posy') !== String(row)) {
                 throw new Error(`Could not find the game's placement link at row ${row}, column ${col}.`);
             }
+            const last = index + 1 === placements.length;
+            const wins = last && expected.every((cells, r) => cells.every((value, c) =>
+                value === Number(puzzle.pieces[index][r - row]?.[c - col] === true)));
+            if (solve && wins) {
+                control.message = '';
+                control.update({ phase: 'manual', finalMove: { row, col } });
+                return { manual: true };
+            }
             html = await read(url);
             apply(index);
-            const last = index + 1 === placements.length;
             const won = html.includes('You Won!');
             if (last) {
                 if (!(won || (forfeiting && html.includes('You Lost!')))
@@ -135,6 +142,7 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             }
             const outcome = await play(html, current, forfeiting);
             if (!outcome) break;
+            if (outcome.manual) return;
             if (outcome.won) {
                 location.assign(gameUrl.href);
                 return;

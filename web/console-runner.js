@@ -65,7 +65,7 @@ export function run() {
     let panel, text, progress, badge, button, copy, ticker;
     return runMoves(null, null, parseShapeshifterHtml, 1000, solveInFrame, (message, control) => {
         clearInterval(ticker);
-        if (!control.running && !control.error) {
+        if (!control.running && !control.error && control.phase !== 'manual') {
             panel?.remove();
             return;
         }
@@ -90,7 +90,8 @@ export function run() {
             button = document.createElement('button');
             button.style.cssText = 'padding:4px 12px;cursor:pointer;font:inherit;';
             button.onclick = () => {
-                if (control.running) control.stop();
+                if (control.phase === 'manual') location.reload();
+                else if (control.running) control.stop();
                 else panel.remove();
             };
             panel.append(text, progress, badge, button);
@@ -108,6 +109,9 @@ export function run() {
                 progress.textContent = `Searching · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} remaining`;
             } else if (control.phase === 'placing') {
                 progress.textContent = `Placing pieces · ${control.completed} / ${control.total}`;
+            } else if (control.phase === 'manual') {
+                progress.textContent = `One piece left. Refresh the board, then click row ${control.finalMove.row + 1}, `
+                    + `column ${control.finalMove.col + 1} (from the top left).`;
             } else {
                 progress.textContent = { reading: 'Reading game…', loading: 'Loading solver…',
                     preparing: 'Preparing puzzle…', checking: 'Checking board…', restarting: 'Starting a new puzzle…' }[control.phase];
@@ -123,7 +127,7 @@ export function run() {
             badge.style.color = info.threaded ? '#9ae6b4' : '#f6d58b';
         }
         button.style.marginTop = message && control.error ? '8px' : '0';
-        button.textContent = control.running ? 'Stop' : 'Dismiss';
+        button.textContent = control.phase === 'manual' ? 'Refresh board' : control.running ? 'Stop' : 'Dismiss';
         button.disabled = control.running && control.stopped;
         if (control.error && !copy) {
             copy = document.createElement('button');
