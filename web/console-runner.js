@@ -1,10 +1,11 @@
 import { parseShapeshifterHtml } from './parser.js';
 import { runMoves } from './move-script.js';
 
-const SEARCH_BUDGET_MS = 10000; // Temporary budget for testing timeout recovery.
+const SEARCH_BUDGET_MS = 120000;
 
 async function solveInFrame(puzzle, control) {
-    control.report('Starting the solver in 3 seconds. Close DevTools for best WebAssembly performance.');
+    control.solver = null;
+    control.report('');
     await new Promise(resolve => setTimeout(resolve, 3000));
     if (control.stopped) return { cancelled: true };
 
@@ -26,6 +27,8 @@ async function solveInFrame(puzzle, control) {
             port1.close();
             port2.close();
             frame.remove();
+            if (control.solver) control.solver.type = 'finished';
+            control.report('');
             if (error) reject(error);
             else resolve(result);
         }
@@ -38,13 +41,14 @@ async function solveInFrame(puzzle, control) {
             else if (data.type === 'error') finish(null, new Error(data.message));
             else if (data.type === 'status') {
                 const status = data.status;
+                control.solver = status;
                 if (status.type === 'ready') {
                     clearTimeout(timer);
                     timer = setTimeout(() => finish(null, new Error('Hosted solver stopped responding.')), 300000);
-                    control.report(`Solver ready: ${status.workers} search workers.`);
-                    if (!status.threaded) control.report('Shared memory is unavailable here; this run uses one worker.', 'warn');
-                } else if (status.type === 'preparing') control.report('Preparing puzzle…');
-                else if (status.type === 'searching') control.report(`Searching (${SEARCH_BUDGET_MS / 1000} second budget)…`);
+                    control.report('');
+                } else if (status.type === 'fallback') {
+                    control.report('Parallel solver failed to start. Using one worker.');
+                }
             }
         };
         document.body.append(frame);
@@ -52,8 +56,12 @@ async function solveInFrame(puzzle, control) {
 }
 
 export function run() {
-    let panel, text, button;
+    let panel, text, badge, button;
     return runMoves(null, null, parseShapeshifterHtml, 1000, solveInFrame, (message, control) => {
+        if (!control.running && !control.error) {
+            panel?.remove();
+            return;
+        }
         if (!panel) {
             document.getElementById('shapeshifter-status')?.remove();
             panel = document.createElement('aside');
@@ -63,18 +71,30 @@ export function run() {
                 + 'box-shadow:0 2px 12px #0006;font:14px/1.5 system-ui;text-align:left;';
             text = document.createElement('div');
             text.setAttribute('role', 'status');
+            badge = document.createElement('span');
+            badge.className = 'solver-features';
+            badge.style.cssText = 'margin-right:12px;font-size:12px;';
+            badge.title = 'Loaded solver features. Browser JIT optimization cannot be verified here; close DevTools for best performance.';
             button = document.createElement('button');
             button.style.cssText = 'margin-top:8px;padding:4px 12px;cursor:pointer;font:inherit;';
             button.onclick = () => {
-                if (control.running) {
-                    control.stop();
-                    control.report('Stopping…');
-                } else panel.remove();
+                if (control.running) control.stop();
+                else panel.remove();
             };
-            panel.append(text, button);
+            panel.append(text, badge, button);
             document.body.append(panel);
         }
         text.textContent = message;
+        text.hidden = !message;
+        const info = control.solver;
+        badge.hidden = !info?.workers || info.type === 'finished';
+        if (info?.workers) {
+            // The threaded package is built with SIMD; the fallback package uses scalar instructions.
+            badge.textContent = `${info.threaded ? 'SIMD' : 'Scalar'} · ${info.workers} worker${info.workers === 1 ? '' : 's'}`;
+            badge.style.color = info.threaded ? '#9ae6b4' : '#f6d58b';
+        }
+        panel.style.padding = message ? '16px' : '8px';
+        button.style.marginTop = message ? '8px' : '0';
         button.textContent = control.running ? 'Stop' : 'Dismiss';
         button.disabled = control.running && control.stopped;
     });

@@ -23,6 +23,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
         }
         const page = await context.newPage();
         const logs = [];
+        const routineLogs = [];
         const errors = [];
         const requests = [];
         const timeout = scenario.startsWith('timeout-');
@@ -36,7 +37,10 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
         let rejected = 0;
         let reads = 0;
         if (scenario === 'wrong-board') state.board[0][0] = (state.board[0][0] + 1) % state.m;
-        page.on('console', entry => logs.push(entry.text()));
+        page.on('console', entry => {
+            logs.push(entry.text());
+            if (['log', 'info'].includes(entry.type())) routineLogs.push(entry.text());
+        });
         page.on('pageerror', error => errors.push(String(error)));
         await context.addCookies([{ name: 'test_session', value: 'fixture', url: GAME }]);
 
@@ -147,16 +151,25 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 assert.equal(moves, 0);
             }
             await page.goto(GAME);
-            const searching = scenario === 'cancel-search' ? page.waitForEvent('console', {
-                predicate: entry => entry.text() === 'Searching (10 second budget)…', timeout: 60000,
-            }) : null;
             await page.evaluate(source => {
                 (0, eval)(source);
                 (0, eval)(source);
             }, script);
-            if (searching) {
-                await searching;
-                assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), 'Searching (10 second budget)…');
+            if (hostedUrl && ['success', 'cancel-search'].includes(scenario)) {
+                await page.waitForFunction(() => !!window.shapeshifterMoves?.solver?.workers, null, { timeout: 60000 });
+                const info = await page.evaluate(() => shapeshifterMoves.solver);
+                const threaded = browser.browserType().name() === 'chromium';
+                assert.equal(info.threaded, threaded);
+                assert.equal(info.workers, threaded ? await page.evaluate(() => navigator.hardwareConcurrency) : 1);
+            }
+            if (scenario === 'cancel-search') {
+                await page.waitForFunction(() => window.shapeshifterMoves?.solver?.type === 'searching', null, { timeout: 60000 });
+                const info = await page.evaluate(() => shapeshifterMoves.solver);
+                const badge = page.locator('#shapeshifter-status .solver-features');
+                assert(await badge.isVisible());
+                assert.equal(await badge.textContent(), `${info.threaded ? 'SIMD' : 'Scalar'} · ${info.workers} worker${info.workers === 1 ? '' : 's'}`);
+                assert((await badge.getAttribute('title')).includes('JIT optimization cannot be verified'));
+                assert(await page.locator('#shapeshifter-status [role="status"]').isHidden(), 'No routine progress message');
                 await page.locator('#shapeshifter-status button').click();
             }
             async function assertSolved() {
@@ -186,12 +199,10 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     : ['timeout-bad-form', 'timeout-restart-error'].includes(scenario) ? TIMEOUT_PUZZLE.pieces.length : 1,
                     'Stop without retrying or placing more pieces');
                 assert.equal(restarts, scenario === 'timeout-restart-error' ? 1 : 0);
-                assert(logs.some(text => /stopped/i.test(text)), logs.join('\n'));
+                const control = await page.evaluate(() => ({ message: shapeshifterMoves.message, result: shapeshifterMoves.result,
+                    error: shapeshifterMoves.error, stopped: shapeshifterMoves.stopped }));
+                if (control.error) assert(logs.some(text => text.includes(control.error)), logs.join('\n'));
                 if (hostedUrl) {
-                    const control = await page.evaluate(() => ({ message: shapeshifterMoves.message, result: shapeshifterMoves.result,
-                        error: shapeshifterMoves.error }));
-                    assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), control.message);
-                    assert(await page.locator('#shapeshifter-status').isVisible(), 'Keep the outcome visible without DevTools');
                     if (timeout) {
                         assert(control.result.timed_out && !control.result.solved);
                         assert(logs.some(text => text.includes('Search timed out.')));
@@ -199,7 +210,11 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     if (scenario === 'timeout-bad-form') assert(control.error.includes('Try Again form'));
                     if (scenario === 'timeout-restart-error') assert(control.error.includes('HTTP 500'));
                     if (scenario === 'solver-error') assert(control.error.includes('Test solver failed'));
-                    await page.locator('#shapeshifter-status button', { hasText: 'Dismiss' }).click();
+                    if (control.error) {
+                        assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), control.message);
+                        assert(await page.locator('#shapeshifter-status').isVisible(), 'Keep errors visible without DevTools');
+                        await page.locator('#shapeshifter-status button', { hasText: 'Dismiss' }).click();
+                    } else assert(control.stopped, 'User cancellation is silent');
                     assert.equal(await page.locator('#shapeshifter-status').count(), 0);
                     assert.equal(await page.evaluate(() => shapeshifterMoves.message), control.message, 'Retain diagnostics after dismissal');
                 }
@@ -212,15 +227,10 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             }
             assert(requests.every(request => request.overlap === 0), 'Requests must be sequential');
             assert(logs.some(text => text.includes('already running')), 'Repeated pastes do not start another runner');
+            assert.deepEqual(routineLogs, [], 'Only problems produce console output');
             assert.deepEqual(scenario === 'solver-error'
                 ? errors.filter(error => !error.includes('Test solver failed')) : errors, []);
             assert.equal(await page.locator('iframe').count(), 0, 'Release the hosted solver after completion or cancellation');
-            if (hostedUrl && ['success', 'cancel-search'].includes(scenario)) {
-                const workers = browser.browserType().name() === 'chromium'
-                    ? await page.evaluate(() => navigator.hardwareConcurrency) : 1;
-                assert(logs.some(text => text === `Solver ready: ${workers} search workers.`), logs.join('\n'));
-                assert.equal(logs.some(text => text.includes('Shared memory is unavailable')), browser.browserType().name() !== 'chromium');
-            }
         } catch (error) {
             throw new Error(`Scenario: ${scenario}\n${logs.join('\n')}`, { cause: error });
         } finally {

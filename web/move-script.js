@@ -14,10 +14,10 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
     }
     const control = window.shapeshifterMoves = {
         running: true, stopped: false, completed: 0, message: '', result: null, error: null,
-        stop() { this.stopped = true; this.onStop?.(); },
-        report(message, level = 'log') {
+        stop() { this.stopped = true; this.onStop?.(); onStatus?.(this.message, this); },
+        report(message, level = 'warn') {
             this.message = message;
-            console[level](message);
+            if (message) console[level](message);
             onStatus?.(message, this);
         },
     };
@@ -59,7 +59,6 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             || url.searchParams.get('type') !== 'init' || form.method !== 'post') {
             throw new Error('Could not find the game’s Try Again form.');
         }
-        control.report('Neopets confirmed the loss. Starting a new puzzle…');
         const next = await read(url, { method: 'POST', body: new URLSearchParams(new FormData(form)) });
         if (parseHtml(next).level !== level) throw new Error('Try Again returned a different level.');
         return next;
@@ -82,7 +81,6 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
                 || url.searchParams.get('posx') !== String(col) || url.searchParams.get('posy') !== String(row)) {
                 throw new Error(`Could not find the game's placement link at row ${row}, column ${col}.`);
             }
-            control.report(`Placing piece ${index + 1}/${placements.length} at row ${row}, column ${col}…`);
             html = await read(url);
             apply(index);
             const last = index + 1 === placements.length;
@@ -96,16 +94,16 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
                 check(parseHtml(html), index + 1);
             }
             control.completed = index + 1;
-            control.report(`Confirmed ${control.completed}/${placements.length} pieces.`);
             if (last) return { html, won };
             if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
         }
         return null;
     }
     try {
-        control.report(`Checking the live puzzle. Delay between moves: ${delayMs} ms. Stop with shapeshifterMoves.stop().`);
+        control.report('');
         let html = await read(gameUrl);
         while (!control.stopped) {
+            control.report('');
             if (solve && html.includes('You Lost!')) {
                 html = await restart(html);
                 continue;
@@ -118,12 +116,11 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
                 const result = await solve(puzzle, control);
                 control.result = result;
                 if (control.stopped || result.cancelled) {
-                    control.report('Solver stopped.');
                     return;
                 }
                 if (!result.solved && !result.timed_out) throw new Error('No solution found.');
                 forfeiting = !result.solved;
-                if (forfeiting) control.report('Search timed out. Placing the remaining pieces at the top left to start a new puzzle…');
+                if (forfeiting) control.report('Search timed out. Starting a new puzzle.');
                 placements = forfeiting ? puzzle.pieces.map(() => [0, 0]) : result.placements;
                 html = await read(gameUrl);
                 current = parseHtml(html);
@@ -131,16 +128,14 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             const outcome = await play(html, current, forfeiting);
             if (!outcome) break;
             if (outcome.won) {
-                control.report('Neopets confirmed the level is solved. Refreshing the game page.');
                 location.assign(gameUrl.href);
                 return;
             }
             html = outcome.html;
         }
-        control.report('Move script stopped. Refresh the game page before continuing.');
     } catch (error) {
         control.error = error.message;
-        control.report(`Move script stopped: ${error.message} No move was retried. Refresh the game page before continuing.`, 'error');
+        control.report(`Stopped: ${error.message}`, 'error');
     } finally {
         control.running = false;
         onStatus?.(control.message, control);
