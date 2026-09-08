@@ -7,7 +7,7 @@ const ACTION = '/medieval/process_shapeshifter.phtml';
 // No requests reach Neopets. Model its page links and a server-side referrer check.
 export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard } = {}) {
     const scenarios = hostedUrl
-        ? ['success', 'changed-before-moves', 'solver-error', 'cancel-search', 'stop']
+        ? ['success', 'changed-before-moves', 'solver-error', 'search-timeout', 'cancel-search', 'stop']
         : ['success', 'wrong-board', 'refused', 'uncertain-response', 'changed-board', 'stop'];
     for (const scenario of scenarios) {
         // A dead proxy also blocks requests that might escape interception.
@@ -22,7 +22,7 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
         const logs = [];
         const errors = [];
         const requests = [];
-        const state = structuredClone(scenario === 'cancel-search' ? hard : puzzle);
+        const state = structuredClone(['cancel-search', 'search-timeout'].includes(scenario) ? hard : puzzle);
         let moves = 0;
         let inFlight = 0;
         let rejected = 0;
@@ -48,8 +48,15 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             const request = route.request();
             const url = new URL(request.url());
             if (hostedUrl && url.origin === new URL(hostedUrl).origin) {
+                if (scenario === 'search-timeout' && url.pathname.endsWith('/console-solver.js')) {
+                    const response = await route.fetch();
+                    const body = (await response.text()).replace('client.solve(event.data.puzzle)', 'client.solve(event.data.puzzle, 100)');
+                    await route.fulfill({ response, body });
+                    return;
+                }
                 if (scenario === 'solver-error' && url.pathname.endsWith('/search-worker.js')) {
-                    await route.fulfill({ contentType: 'text/javascript', body: 'throw new Error("Test solver failed");' });
+                    const response = await route.fetch();
+                    await route.fulfill({ response, body: 'throw new Error("Test solver failed");' });
                     return;
                 }
                 return route.continue();
@@ -120,7 +127,8 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             }, script);
             if (searching) {
                 await searching;
-                await page.evaluate(() => window.shapeshifterMoves.stop());
+                assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), 'Searching (2 minute budget)…');
+                await page.locator('#shapeshifter-status button').click();
             }
             async function assertSolved() {
                 await page.waitForFunction(total => document.body.textContent.includes('You Won!')
@@ -142,9 +150,24 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     await page.evaluate(() => window.shapeshifterMoves.stop());
                 }
                 await page.waitForFunction(() => window.shapeshifterMoves?.running === false);
-                assert.equal(requests.length, ['wrong-board', 'changed-before-moves', 'solver-error', 'cancel-search'].includes(scenario) ? 0 : 1,
+                assert.equal(requests.length, ['wrong-board', 'changed-before-moves', 'solver-error', 'search-timeout', 'cancel-search'].includes(scenario) ? 0 : 1,
                     'Stop without retrying or placing more pieces');
                 assert(logs.some(text => /stopped/i.test(text)), logs.join('\n'));
+                if (hostedUrl) {
+                    const control = await page.evaluate(() => ({ message: shapeshifterMoves.message, result: shapeshifterMoves.result,
+                        error: shapeshifterMoves.error }));
+                    assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), control.message);
+                    assert(await page.locator('#shapeshifter-status').isVisible(), 'Keep the outcome visible without DevTools');
+                    if (scenario === 'search-timeout') {
+                        assert(control.result.timed_out && !control.result.solved);
+                        assert.equal(control.error, 'No solution found within 2 minutes.');
+                        assert(control.message.includes(control.error));
+                    }
+                    if (scenario === 'solver-error') assert(control.error.includes('Test solver failed'));
+                    await page.locator('#shapeshifter-status button', { hasText: 'Dismiss' }).click();
+                    assert.equal(await page.locator('#shapeshifter-status').count(), 0);
+                    assert.equal(await page.evaluate(() => shapeshifterMoves.message), control.message, 'Retain diagnostics after dismissal');
+                }
                 if (scenario === 'refused') assert(logs.some(text => text.includes('wrong place')));
                 if (scenario === 'stop') {
                     await page.reload();
@@ -154,7 +177,8 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             }
             assert(requests.every(request => request.overlap === 0), 'Requests must be sequential');
             assert(logs.some(text => text.includes('already running')), 'Repeated pastes do not start another runner');
-            assert.deepEqual(errors, []);
+            assert.deepEqual(scenario === 'solver-error'
+                ? errors.filter(error => !error.includes('Test solver failed')) : errors, []);
             assert.equal(await page.locator('iframe').count(), 0, 'Release the hosted solver after completion or cancellation');
             if (hostedUrl && ['success', 'cancel-search'].includes(scenario)) {
                 const workers = browser.browserType().name() === 'chromium'
@@ -168,6 +192,6 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             await context.close();
         }
     }
-    console.log(hostedUrl ? 'PASS console auto-solve: hosted workers, browser isolation, replay, live-state recheck, failure, cancellation, stop/resume'
+    console.log(hostedUrl ? 'PASS console auto-solve: hosted workers, browser isolation, replay, live-state recheck, visible errors/timeouts, cancellation, stop/resume'
         : 'PASS console move script: same-origin requests, live links, replay, delays, state checks, stop/resume, no retries');
 }
