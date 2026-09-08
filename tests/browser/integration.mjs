@@ -5,6 +5,7 @@ import * as playwright from 'playwright';
 import { serve } from '../../scripts/serve.mjs';
 import { openClient, puzzleHtml, verifySolution } from '../../scripts/browser-tools.mjs';
 import { testMoveScript } from './move-script.mjs';
+import { testConsoleSolver } from './console-solver.mjs';
 
 const PREPARATION_TIMEOUT_MS = 180_000;
 const easy = JSON.parse(readFileSync(new URL('./fixtures/easy.json', import.meta.url), 'utf8'));
@@ -132,7 +133,10 @@ export async function testMode(browser, isolated, deployedUrl) {
         await copy.click();
         await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy failed');
         await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy move script');
-        if (isolated) await testMoveScript(browser, moveScript, easy);
+        if (isolated) {
+            await testMoveScript(browser, moveScript, easy);
+            await testConsoleSolver(browser, server.url, easy, hard);
+        }
         await input.fill(puzzleHtml(hard));
         await assertPreview(page, hard);
         assert.equal(await page.locator('.copy-move-script').count(), 0, 'Remove the old solution script on new input');

@@ -1,7 +1,8 @@
 import { parseShapeshifterHtml } from './parser.js';
+import { copyOnClick } from './copy-button.js';
 
 // Serialized into the console script; keep this function self-contained.
-async function runMoves(puzzle, placements, parseHtml, delayMs) {
+export async function runMoves(puzzle, placements, parseHtml, delayMs, solve) {
     if (location.protocol !== 'https:' || !['www.neopets.com', 'neopets.com'].includes(location.hostname)
         || location.pathname !== '/medieval/shapeshifter.phtml') {
         console.error('Run this script in the console of your Neopets Shapeshifter game tab.');
@@ -13,11 +14,11 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
     }
     const control = window.shapeshifterMoves = {
         running: true, stopped: false, completed: 0,
-        stop() { this.stopped = true; },
+        stop() { this.stopped = true; this.onStop?.(); },
     };
     const gameUrl = new URL('/medieval/shapeshifter.phtml', location.origin);
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    const expected = puzzle.board.map(row => [...row]);
+    let expected;
     function apply(index) {
         const [row, col] = placements[index];
         puzzle.pieces[index].forEach((cells, r) => cells.forEach((active, c) => {
@@ -45,7 +46,22 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
     try {
         console.log(`Checking the live puzzle. Delay between moves: ${delayMs} ms. Stop with shapeshifterMoves.stop().`);
         let html = await read(gameUrl);
-        const current = parseHtml(html);
+        let current = parseHtml(html);
+        if (solve) {
+            if (control.stopped) return;
+            puzzle = current;
+            const result = await solve(puzzle, control);
+            if (control.stopped || result.cancelled) {
+                console.log('Solver stopped.');
+                return;
+            }
+            if (!result.solved) throw new Error(result.timed_out
+                ? 'No solution found within 2 minutes.' : 'No solution found.');
+            placements = result.placements;
+            html = await read(gameUrl);
+            current = parseHtml(html);
+        }
+        expected = puzzle.board.map(row => [...row]);
         let index = puzzle.pieces.length - current.pieces.length;
         if (index < 0 || index >= placements.length) throw new Error('This solution does not match the live puzzle.');
         for (let i = 0; i < index; i++) apply(i);
@@ -103,18 +119,6 @@ export function addMoveScript(container, puzzle, placements) {
     const button = document.createElement('button');
     button.textContent = 'Copy move script';
     button.className = 'copy-move-script';
-    button.setAttribute('aria-live', 'polite');
     container.querySelector('.step-nav').append(button);
-
-    let reset;
-    button.addEventListener('click', async () => {
-        try {
-            await navigator.clipboard.writeText(script);
-            button.textContent = 'Copied!';
-        } catch {
-            button.textContent = 'Copy failed';
-        }
-        clearTimeout(reset);
-        reset = setTimeout(() => { button.textContent = 'Copy move script'; }, 2000);
-    });
+    copyOnClick(button, script);
 }

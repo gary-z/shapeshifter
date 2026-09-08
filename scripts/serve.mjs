@@ -18,7 +18,9 @@ export async function serve({ root = SITE_ROOT, port = 0, isolated = true, failT
         if (isolated) {
             response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
             response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+            response.setHeader('Document-Isolation-Policy', 'isolate-and-require-corp');
         }
+        response.setHeader('Access-Control-Allow-Origin', '*');
         try {
             if (!['GET', 'HEAD'].includes(request.method)) {
                 response.writeHead(405).end();
