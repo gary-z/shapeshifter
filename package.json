@@ -7,7 +7,7 @@
     "build:wasm": "bash scripts/build-wasm.sh",
     "build:site": "bash scripts/package-site.sh",
     "serve": "node scripts/serve.mjs",
-    "test": "node --test tests/browser/tooling.test.mjs",
+    "test": "node --test tests/browser/*.test.mjs",
     "test:browser": "node tests/browser/integration.mjs",
     "bench:browser": "node scripts/bench-browser.mjs"
   },

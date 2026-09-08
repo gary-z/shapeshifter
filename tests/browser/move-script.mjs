@@ -5,12 +5,14 @@ const GAME = 'https://www.neopets.com/medieval/shapeshifter.phtml';
 const ACTION = '/medieval/process_shapeshifter.phtml';
 const TIMEOUT_PUZZLE = { level: 10, m: 2, rows: 3, columns: 3,
     board: [[1, 0, 0], [0, 0, 0], [0, 0, 1]], pieces: [[[true]], [[true]]] };
+const UNEXPECTED_HTML = '<!doctype html><title>Unexpected game response</title>\n<p>"Try again" &amp; continue.</p>';
 
 // No requests reach Neopets. Model its page links and a server-side referrer check.
 export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard } = {}) {
     const scenarios = hostedUrl
         ? ['success', 'start-lost', 'changed-before-moves', 'solver-error', 'timeout-restart', 'timeout-win', 'timeout-stop',
-            'timeout-changed', 'timeout-bad-form', 'timeout-restart-error', 'cancel-search', 'stop']
+            'timeout-changed', 'timeout-bad-form', 'timeout-restart-error', 'unexpected-page', 'unexpected-final',
+            'network-error', 'cancel-search', 'stop']
         : ['success', 'wrong-board', 'refused', 'uncertain-response', 'changed-board', 'stop'];
     for (const scenario of scenarios) {
         // A dead proxy also blocks requests that might escape interception.
@@ -22,13 +24,14 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             await context.grantPermissions(['local-network-access'], { origin: new URL(GAME).origin });
         }
         const page = await context.newPage();
+        if (scenario === 'cancel-search') await page.clock.install();
         const logs = [];
         const routineLogs = [];
         const errors = [];
         const requests = [];
         const timeout = scenario.startsWith('timeout-');
         const state = structuredClone(scenario === 'start-lost' ? { ...TIMEOUT_PUZZLE, level: puzzle.level, pieces: [] }
-            : timeout ? { ...TIMEOUT_PUZZLE, level: puzzle.level }
+            : timeout || scenario === 'unexpected-final' ? { ...TIMEOUT_PUZZLE, level: puzzle.level }
             : scenario === 'cancel-search' ? hard : puzzle);
         if (scenario === 'timeout-win') state.board = state.board.map(row => row.map(() => 0));
         let moves = 0;
@@ -53,7 +56,10 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     + '<input type="hidden" name="turn" value="2"><input type="submit" value="Try again?"></form>'
                     + `<form name="redo_game" method="post" action="${ACTION}?type=init"><select name="past_level"><option value="1">1</option></select></form>`;
             }
-            let html = puzzleHtml(state);
+            let html = puzzleHtml(scenario === 'timeout-restart' ? { ...state, icons: ['swo', 'hel'] } : state);
+            if (moves % 2 === 1) {
+                html = '<table><tr><td>Sinsi says: match the symbol above the word <b>GOAL</b> to win.</td></tr></table>' + html;
+            }
             for (let row = 0; row <= state.rows - state.pieces[0].length; row++) {
                 for (let col = 0; col <= state.columns - state.pieces[0][0].length; col++) {
                     html += `<a href="${ACTION}?type=action&amp;posx=${col}&amp;posy=${row}&amp;turn=${moves}">`
@@ -133,7 +139,11 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             }));
             moves++;
             inFlight--;
-            if (scenario === 'uncertain-response') {
+            if (scenario === 'network-error') {
+                await route.abort('failed');
+            } else if (scenario === 'unexpected-page' || (scenario === 'unexpected-final' && !state.pieces.length)) {
+                await route.fulfill({ contentType: 'text/html', body: UNEXPECTED_HTML });
+            } else if (scenario === 'uncertain-response') {
                 await route.fulfill({ status: 500, body: 'The move happened, but its response failed.' });
             } else {
                 if (scenario === 'changed-board') state.board[0][0] = (state.board[0][0] + 1) % state.m;
@@ -155,6 +165,13 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 (0, eval)(source);
                 (0, eval)(source);
             }, script);
+            const progress = page.locator('#shapeshifter-status .solver-progress');
+            const badge = page.locator('#shapeshifter-status .solver-features');
+            if (scenario === 'cancel-search') {
+                await page.waitForFunction(() => window.shapeshifterMoves?.phase === 'loading');
+                assert.equal(await progress.textContent(), 'Loading solver…');
+                assert.equal(await page.locator('#shapeshifter-status [role="timer"]').count(), 0, 'Startup does not consume the search countdown');
+            }
             if (hostedUrl && ['success', 'cancel-search'].includes(scenario)) {
                 await page.waitForFunction(() => !!window.shapeshifterMoves?.solver?.workers, null, { timeout: 60000 });
                 const info = await page.evaluate(() => shapeshifterMoves.solver);
@@ -165,12 +182,23 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             if (scenario === 'cancel-search') {
                 await page.waitForFunction(() => window.shapeshifterMoves?.solver?.type === 'searching', null, { timeout: 60000 });
                 const info = await page.evaluate(() => shapeshifterMoves.solver);
-                const badge = page.locator('#shapeshifter-status .solver-features');
                 assert(await badge.isVisible());
                 assert.equal(await badge.textContent(), `${info.threaded ? 'SIMD' : 'Scalar'} · ${info.workers} worker${info.workers === 1 ? '' : 's'}`);
                 assert((await badge.getAttribute('title')).includes('JIT optimization cannot be verified'));
-                assert(await page.locator('#shapeshifter-status [role="status"]').isHidden(), 'No routine progress message');
+                assert(await page.locator('#shapeshifter-status .solver-message').isHidden(), 'Normal progress produces no warning');
+                assert.equal(await progress.getAttribute('role'), 'timer');
+                assert.match(await progress.textContent(), /^Searching · (2:00|1:59) remaining$/);
+                // A delayed/background timer must catch up to elapsed time, not just subtract one tick.
+                await page.clock.fastForward(65000);
+                assert.match(await progress.textContent(), /^Searching · 0:5[45] remaining$/);
                 await page.locator('#shapeshifter-status button').click();
+            }
+            async function assertPlacementProgress(total) {
+                await page.waitForFunction(() => window.shapeshifterMoves?.phase === 'placing' && shapeshifterMoves.completed === 1);
+                assert.equal(await progress.textContent(), `Placing pieces · 1 / ${total}`);
+                assert.equal(await page.locator('.solver-copy-debug').count(), 0, 'Debug copying is only shown for errors');
+                assert(await badge.isVisible(), 'Keep solver capabilities visible after the search workers finish');
+                assert.equal(await page.locator('#shapeshifter-status [role="timer"]').count(), 0, 'Stop the countdown during placement');
             }
             async function assertSolved() {
                 await page.waitForFunction(() => document.body.textContent.includes('You Won!')
@@ -185,18 +213,28 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 }
             }
             if (['success', 'start-lost', 'timeout-restart', 'timeout-win'].includes(scenario)) {
+                if (hostedUrl && scenario === 'success') await assertPlacementProgress(puzzle.pieces.length);
+                if (scenario === 'timeout-restart') {
+                    await assertPlacementProgress(TIMEOUT_PUZZLE.pieces.length);
+                    await page.waitForFunction(() => window.shapeshifterMoves?.phase === 'loading' && shapeshifterMoves.result?.timed_out);
+                    assert(await badge.isVisible(), 'Keep the last search capabilities visible while starting a new puzzle');
+                    assert.equal(await progress.textContent(), 'Loading solver…');
+                    assert.equal(await page.evaluate(() => shapeshifterMoves.completed), 0);
+                    await assertPlacementProgress(puzzle.pieces.length);
+                }
                 await assertSolved();
                 assert.equal(restarts, ['start-lost', 'timeout-restart'].includes(scenario) ? 1 : 0);
                 if (timeout) assert(logs.some(text => text.includes('Search timed out.')));
             } else {
                 if (['stop', 'timeout-stop'].includes(scenario)) {
-                    await page.waitForFunction(() => window.shapeshifterMoves?.completed === 1);
+                    if (hostedUrl) await assertPlacementProgress(timeout ? TIMEOUT_PUZZLE.pieces.length : puzzle.pieces.length);
+                    else await page.waitForFunction(() => window.shapeshifterMoves?.completed === 1);
                     if (timeout) await page.locator('#shapeshifter-status button').click();
                     else await page.evaluate(() => window.shapeshifterMoves.stop());
                 }
                 await page.waitForFunction(() => window.shapeshifterMoves?.running === false);
                 assert.equal(requests.length, ['wrong-board', 'changed-before-moves', 'solver-error', 'timeout-changed', 'cancel-search'].includes(scenario) ? 0
-                    : ['timeout-bad-form', 'timeout-restart-error'].includes(scenario) ? TIMEOUT_PUZZLE.pieces.length : 1,
+                    : ['timeout-bad-form', 'timeout-restart-error', 'unexpected-final'].includes(scenario) ? TIMEOUT_PUZZLE.pieces.length : 1,
                     'Stop without retrying or placing more pieces');
                 assert.equal(restarts, scenario === 'timeout-restart-error' ? 1 : 0);
                 const control = await page.evaluate(() => ({ message: shapeshifterMoves.message, result: shapeshifterMoves.result,
@@ -211,8 +249,48 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                     if (scenario === 'timeout-restart-error') assert(control.error.includes('HTTP 500'));
                     if (scenario === 'solver-error') assert(control.error.includes('Test solver failed'));
                     if (control.error) {
-                        assert.equal(await page.locator('#shapeshifter-status [role="status"]').textContent(), control.message);
+                        assert.equal(await page.locator('#shapeshifter-status .solver-message').textContent(), control.message);
+                        assert(await progress.isHidden(), 'Do not leave stale progress running after an error');
                         assert(await page.locator('#shapeshifter-status').isVisible(), 'Keep errors visible without DevTools');
+                        const copy = page.locator('#shapeshifter-status .solver-copy-debug');
+                        const activity = { reads, moves, restarts };
+                        if (scenario === 'unexpected-page') {
+                            await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('Clipboard denied'); }; });
+                            await copy.click();
+                            await page.waitForFunction(() => document.querySelector('.solver-copy-debug').textContent === 'Copy failed');
+                        }
+                        await page.evaluate(() => { navigator.clipboard.writeText = async text => { window.copiedDebug = text; }; });
+                        await copy.click();
+                        await page.waitForFunction(() => document.querySelector('.solver-copy-debug').textContent === 'Copied!');
+                        const debug = JSON.parse(await page.evaluate(() => window.copiedDebug));
+                        assert.equal(debug.runnerUrl, `${hostedUrl}/console-runner.js`);
+                        assert.equal(debug.pageUrl, GAME);
+                        assert.equal(debug.error.message, control.error);
+                        assert.equal(typeof debug.error.stack, 'string');
+                        assert(!JSON.stringify(debug).includes('test_session=fixture'), 'Do not collect request cookies');
+                        if (scenario.startsWith('unexpected-')) {
+                            assert.equal(debug.request.html, UNEXPECTED_HTML, 'Copy the actual failing response, not the visible game page');
+                            assert.equal(debug.request.status, 200);
+                            assert.equal(debug.phase, 'placing');
+                            assert.equal(debug.completed, moves - 1, 'Do not count the unconfirmed move');
+                            assert.equal(debug.lastMove.piece, moves);
+                            assert.deepEqual(debug.expectedBoard, state.board);
+                        } else if (scenario === 'network-error') {
+                            assert.equal(debug.request.html, null, 'Do not attribute a previous page to a failed request');
+                            assert.equal(debug.request.status, null);
+                            assert.equal(debug.completed, 0);
+                            assert.equal(debug.lastMove.piece, 1);
+                        } else if (scenario === 'timeout-restart-error') {
+                            assert.equal(debug.request.status, 500);
+                            assert.equal(debug.request.method, 'POST');
+                            assert.equal(debug.request.html, 'The new game started, but its response failed.');
+                        } else {
+                            assert.equal(debug.request.html, gameHtml());
+                        }
+                        if (scenario.startsWith('unexpected-') || scenario === 'network-error') {
+                            assert.equal(debug.request.url, requests.at(-1).url);
+                        }
+                        assert.deepEqual({ reads, moves, restarts }, activity, 'Copying debug info must not fetch or replay a request');
                         await page.locator('#shapeshifter-status button', { hasText: 'Dismiss' }).click();
                     } else assert(control.stopped, 'User cancellation is silent');
                     assert.equal(await page.locator('#shapeshifter-status').count(), 0);
@@ -237,6 +315,6 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
             await context.close();
         }
     }
-    console.log(hostedUrl ? 'PASS console auto-solve: hosted workers, replay, timeout forfeits and restart, live-state checks, visible errors, cancellation, stop/resume'
+    console.log(hostedUrl ? 'PASS console auto-solve: hosted workers, countdown, placement progress, replay, timeout forfeits and restart, live-state checks, copyable error details, cancellation, stop/resume'
         : 'PASS console move script: same-origin requests, live links, replay, delays, state checks, stop/resume, no retries');
 }
