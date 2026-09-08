@@ -1,0 +1,138 @@
+import assert from 'node:assert/strict';
+import { puzzleHtml } from '../../scripts/browser-tools.mjs';
+
+const GAME = 'https://www.neopets.com/medieval/shapeshifter.phtml';
+const ACTION = '/medieval/process_shapeshifter.phtml';
+
+// No requests reach Neopets. Model its page links and a server-side referrer check.
+export async function testMoveScript(browser, script, puzzle) {
+    for (const scenario of ['success', 'wrong-board', 'refused', 'uncertain-response', 'changed-board', 'stop']) {
+        // A dead proxy also blocks requests that might escape interception.
+        const context = await browser.newContext({ proxy: { server: 'http://127.0.0.1:1' } });
+        const page = await context.newPage();
+        const logs = [];
+        const errors = [];
+        const requests = [];
+        const state = structuredClone(puzzle);
+        let moves = 0;
+        let inFlight = 0;
+        let rejected = 0;
+        if (scenario === 'wrong-board') state.board[0][0] = (state.board[0][0] + 1) % state.m;
+        page.on('console', entry => logs.push(entry.text()));
+        page.on('pageerror', error => errors.push(String(error)));
+        await context.addCookies([{ name: 'test_session', value: 'fixture', url: GAME }]);
+
+        function gameHtml() {
+            if (!state.pieces.length) return `<b>LEVEL ${state.level}</b><b>You Won!</b>`;
+            let html = puzzleHtml(state);
+            for (let row = 0; row <= state.rows - state.pieces[0].length; row++) {
+                for (let col = 0; col <= state.columns - state.pieces[0][0].length; col++) {
+                    html += `<a href="${ACTION}?type=action&amp;posx=${col}&amp;posy=${row}&amp;turn=${moves}">`
+                        + `<img name="i${col}_${row}"></a>`;
+                }
+            }
+            return html;
+        }
+
+        await context.route('**/*', async route => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (url.origin === 'https://solver.example.test') {
+                await route.fulfill({ contentType: 'text/html', body:
+                    `<a id="old-link" href="https://www.neopets.com${ACTION}?type=action&posx=0&posy=0">Place</a>` });
+                return;
+            }
+            if (url.origin !== new URL(GAME).origin) return route.abort();
+            if (url.pathname === '/medieval/shapeshifter.phtml') {
+                await route.fulfill({ contentType: 'text/html', body: gameHtml() });
+                return;
+            }
+            if (url.pathname !== ACTION) return route.abort();
+            const headers = await request.allHeaders();
+            if (headers.referer !== GAME || !headers.cookie?.includes('test_session=fixture')) {
+                rejected++;
+                await route.fulfill({ contentType: 'text/html', body: 'You came from the wrong place!' });
+                return;
+            }
+            requests.push({ at: Date.now(), headers, url: url.href, overlap: inFlight });
+            inFlight++;
+            await new Promise(resolve => setTimeout(resolve, 25));
+            if (scenario === 'refused') {
+                inFlight--;
+                await route.fulfill({ contentType: 'text/html', body: 'You came from the wrong place!' });
+                return;
+            }
+            const row = Number(url.searchParams.get('posy'));
+            const col = Number(url.searchParams.get('posx'));
+            assert.equal(url.searchParams.get('turn'), String(moves), 'Use the latest page link');
+            const piece = state.pieces.shift();
+            assert(piece, 'No request after the final piece');
+            assert(row >= 0 && col >= 0 && row + piece.length <= state.rows && col + piece[0].length <= state.columns);
+            piece.forEach((cells, r) => cells.forEach((active, c) => {
+                if (active) state.board[row + r][col + c] = (state.board[row + r][col + c] + state.m - 1) % state.m;
+            }));
+            moves++;
+            inFlight--;
+            if (scenario === 'uncertain-response') {
+                await route.fulfill({ status: 500, body: 'The move happened, but its response failed.' });
+            } else {
+                if (scenario === 'changed-board') state.board[0][0] = (state.board[0][0] + 1) % state.m;
+                // Model the final HTML returned after the action's redirect.
+                await route.fulfill({ contentType: 'text/html', body: gameHtml() });
+            }
+        });
+        try {
+            if (scenario === 'success') {
+                await page.goto('https://solver.example.test');
+                await page.evaluate(source => { (0, eval)(source); }, script);
+                assert(logs.some(text => text.includes('Neopets Shapeshifter game tab')));
+                await Promise.all([page.waitForURL(`**${ACTION}*`), page.locator('#old-link').click()]);
+                assert.equal(rejected, 1, 'Direct links from another site fail the fixture check');
+                assert.equal(moves, 0);
+            }
+            await page.goto(GAME);
+            await page.evaluate(source => {
+                (0, eval)(source);
+                (0, eval)(source);
+            }, script);
+            async function assertSolved() {
+                await page.waitForFunction(total => document.body.textContent.includes('You Won!')
+                    || (window.shapeshifterMoves?.running === false && window.shapeshifterMoves.completed < total),
+                puzzle.pieces.length, { timeout: 60000 });
+                assert((await page.locator('body').innerText()).includes('You Won!'), logs.join('\n'));
+                assert.equal(moves, puzzle.pieces.length);
+                assert.equal(requests.length, moves);
+                assert(state.board.every(row => row.every(value => value === 0)), 'Replay solves the original board');
+                for (let i = 1; i < requests.length; i++) {
+                    assert(requests[i].at - requests[i - 1].at >= 900, 'Wait between confirmed moves');
+                }
+            }
+            if (scenario === 'success') {
+                await assertSolved();
+            } else {
+                if (scenario === 'stop') {
+                    await page.waitForFunction(() => window.shapeshifterMoves?.completed === 1);
+                    await page.evaluate(() => window.shapeshifterMoves.stop());
+                }
+                await page.waitForFunction(() => window.shapeshifterMoves?.running === false);
+                assert.equal(requests.length, scenario === 'wrong-board' ? 0 : 1, 'Stop without retrying or placing more pieces');
+                assert(logs.some(text => /stopped/i.test(text)), logs.join('\n'));
+                if (scenario === 'refused') assert(logs.some(text => text.includes('wrong place')));
+                if (scenario === 'stop') {
+                    await page.reload();
+                    await page.evaluate(source => { (0, eval)(source); }, script);
+                    await assertSolved();
+                }
+            }
+            assert(requests.every(request => request.overlap === 0), 'Requests must be sequential');
+            assert(logs.some(text => text.includes('already running')), 'Repeated pastes do not start another runner');
+            assert.deepEqual(errors, []);
+        } catch (error) {
+            error.message += `\nScenario: ${scenario}\n${logs.join('\n')}`;
+            throw error;
+        } finally {
+            await context.close();
+        }
+    }
+    console.log('PASS console move script: same-origin requests, live links, replay, delays, state checks, stop/resume, no retries');
+}

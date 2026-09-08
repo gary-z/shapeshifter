@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import * as playwright from 'playwright';
 import { serve } from '../../scripts/serve.mjs';
 import { openClient, puzzleHtml, verifySolution } from '../../scripts/browser-tools.mjs';
+import { testMoveScript } from './move-script.mjs';
 
 const PREPARATION_TIMEOUT_MS = 180_000;
 const easy = JSON.parse(readFileSync(new URL('./fixtures/easy.json', import.meta.url), 'utf8'));
@@ -117,8 +118,24 @@ export async function testMode(browser, isolated, deployedUrl) {
         await page.waitForFunction(() => [...document.querySelectorAll('.cell img')]
             .every(image => image.complete && image.naturalWidth > 0));
         assert((await page.locator('#status').innerText()).includes('search'));
+        await page.evaluate(() => {
+            navigator.clipboard.writeText = async text => { window.copiedScript = text; };
+        });
+        const copy = page.locator('.copy-move-script');
+        await copy.click();
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copied!');
+        const moveScript = await page.evaluate(() => window.copiedScript);
+        assert(moveScript.includes('shapeshifterMoves.stop()'));
+        await page.evaluate(() => {
+            navigator.clipboard.writeText = async () => { throw new Error('Clipboard denied'); };
+        });
+        await copy.click();
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy failed');
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy move script');
+        if (isolated) await testMoveScript(browser, moveScript, easy);
         await input.fill(puzzleHtml(hard));
         await assertPreview(page, hard);
+        assert.equal(await page.locator('.copy-move-script').count(), 0, 'Remove the old solution script on new input');
         await solve.click();
         await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Searching'),
             null, { timeout: PREPARATION_TIMEOUT_MS });
