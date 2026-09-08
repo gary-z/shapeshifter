@@ -95,12 +95,12 @@
             <label for="puzzle-input">1. Go to <a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" style="color:#e94560">Shapeshifter</a> &nbsp; 2. Right-click &rarr; View Page Source &nbsp; 3. Select All &rarr; Copy &rarr; Paste below</label>
             <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
         </div>
-        <button id="solve-btn" disabled>Solve</button>
+        <button id="solve-btn" hidden disabled>Solve</button>
         <button id="cancel-btn" hidden>Cancel</button>
     </div>
 
     <div class="results-section">
-        <div id="results-content"></div>
+        <div id="results-content" aria-live="polite"></div>
     </div>
 
     <p style="text-align:center;margin-top:20px;font-size:0.85em"><a href="https://github.com/gary-z/shapeshifter" target="_blank" style="color:#888">GitHub</a></p>

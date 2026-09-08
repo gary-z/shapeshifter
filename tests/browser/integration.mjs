@@ -9,6 +9,17 @@ const PREPARATION_TIMEOUT_MS = 180_000;
 const easy = JSON.parse(readFileSync(new URL('./fixtures/easy.json', import.meta.url), 'utf8'));
 const hard = JSON.parse(readFileSync(new URL('./fixtures/hard.json', import.meta.url), 'utf8'));
 
+async function assertPreview(page, puzzle) {
+    const icons = ['hel', 'swo', 'cro', 'gob', 'sta'];
+    assert.equal(await page.locator('.step-nav').count(), 0);
+    assert.equal(await page.locator('.cell').count(), puzzle.rows * puzzle.columns);
+    assert.deepEqual(await page.locator('.cell img').evaluateAll(images => images.map(image =>
+        new URL(image.src).pathname.split('/').pop())),
+    puzzle.board.flat().map(value => `${icons[value]}_0.gif`));
+    assert(await page.locator('#solve-btn').isVisible());
+    assert.equal(await page.locator('#puzzle-input').getAttribute('aria-invalid'), 'false');
+}
+
 export async function testMode(browser, isolated, deployedUrl) {
     const server = deployedUrl ? { url: deployedUrl, close: async () => {} } : await serve({ isolated });
     try {
@@ -53,34 +64,79 @@ export async function testMode(browser, isolated, deployedUrl) {
         page = await browser.newPage();
         const errors = [];
         page.on('pageerror', error => errors.push(String(error)));
-        await page.goto(server.url);
-        await page.waitForFunction(() => !document.getElementById('solve-btn').disabled, null, { timeout: 65000 });
+        const input = page.locator('#puzzle-input');
+        const solve = page.locator('#solve-btn');
+        const html = puzzleHtml(easy);
+        let resumeStartup;
+        const startupPaused = new Promise(resolve => { resumeStartup = resolve; });
+        await page.route('**/search-worker.js', async route => {
+            await startupPaused;
+            await route.continue();
+        });
+        try {
+            await page.goto(server.url, { waitUntil: 'domcontentloaded' });
+            await page.waitForFunction(() => document.getElementById('status').textContent.includes('Loading'));
+            assert(await solve.isHidden(), 'Solve is hidden before input');
+            await input.fill(html);
+            await assertPreview(page, easy);
+            assert(await solve.isDisabled(), 'Preview does not wait for solver startup');
+
+            for (const [invalid, expectedError] of [
+                ['<img src=x onerror=alert(1)>', 'board dimensions'],
+                ['You Won!', 'You Won!'],
+                [html.replace('gX = 3', 'gX = 0'), 'Board dimensions'],
+                [html.replace(/^imgLocStr\[0\]\[0\].*$/m, ''), 'every board cell'],
+                [html.split('ACTIVE SHAPE')[0], 'any pieces'],
+                [html.replaceAll('square.gif', 'empty.gif'), 'valid piece shapes'],
+            ]) {
+                await input.fill(invalid);
+                const message = await page.locator('#results-content').innerText();
+                assert(message.startsWith('Parse error:') && message.includes(expectedError), message);
+                assert(await solve.isHidden());
+                assert.equal(await page.locator('.board').count(), 0, 'Old board is removed on error');
+                assert.equal(await input.getAttribute('aria-invalid'), 'true');
+            }
+            await input.fill('');
+            assert.equal(await page.locator('.cell').count(), 36);
+            assert(!(await page.locator('#results-content').innerText()).includes('Parse error:'));
+            assert(await solve.isHidden());
+        } finally {
+            resumeStartup();
+        }
+        await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'),
+            null, { timeout: 65000 });
+        assert(await solve.isHidden(), 'Worker readiness must not reveal Solve without input');
+        assert(await solve.isDisabled());
         const expected = isolated ? await page.evaluate(() => navigator.hardwareConcurrency) : 1;
         assert((await page.locator('#status').innerText()).includes(`${expected} search worker`));
-        await page.locator('#puzzle-input').fill('<img src=x onerror=alert(1)>');
-        await page.locator('#solve-btn').click();
-        assert((await page.locator('#results-content').innerText()).includes('Parse error:'));
-        await page.locator('#puzzle-input').fill(puzzleHtml(easy));
-        await page.locator('#solve-btn').click();
+        await input.fill(html);
+        await assertPreview(page, easy);
+        await solve.click();
         await page.waitForFunction(() => !document.getElementById('solve-btn').disabled);
         assert.equal(await page.locator('.step-nav').count(), 1, await page.locator('#results-content').innerText());
         await page.waitForFunction(() => [...document.querySelectorAll('.cell img')]
             .every(image => image.complete && image.naturalWidth > 0));
         assert((await page.locator('#status').innerText()).includes('search'));
-        await page.locator('#puzzle-input').fill(puzzleHtml(hard));
-        await page.locator('#solve-btn').click();
+        await input.fill(puzzleHtml(hard));
+        await assertPreview(page, hard);
+        await solve.click();
         await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Searching'),
             null, { timeout: PREPARATION_TIMEOUT_MS });
+        assert.equal(await page.locator('.cell').count(), hard.rows * hard.columns,
+            'Board remains visible during search');
         await page.locator('#cancel-btn').click();
         await page.waitForFunction(() => !document.getElementById('solve-btn').disabled);
         assert((await page.locator('#results-content').innerText()).includes('cancelled'));
+        await input.fill('   ');
+        assert(await solve.isHidden());
+        assert.equal(await page.locator('.cell').count(), 36);
         assert.deepEqual(errors, []);
         await page.close();
     } finally {
         await server.close();
     }
     console.log(`PASS ${isolated ? 'shared-memory' : 'single-worker'}: solution replay, reuse, validation, ` +
-        'deadline, cancellation, responsiveness, UI');
+        'deadline, cancellation, responsiveness, paste preview and errors');
 }
 
 async function testStartupFallback(browser) {

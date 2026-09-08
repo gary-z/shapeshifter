@@ -15,6 +15,9 @@ export function parseShapeshifterHtml(html) {
     }
     const gx = parseInt(gxMatch[1]); // columns
     const gy = parseInt(gyMatch[1]); // rows
+    if (gx < 3 || gx > 14 || gy < 3 || gy > 14) {
+        throw new Error('Board dimensions must be between 3 and 14 cells.');
+    }
 
     // Extract cell icons: imgLocStr[col][row] = "iconname"
     const imgEntries = [...html.matchAll(/imgLocStr\[(\d+)\]\[(\d+)\]\s*=\s*"(\w+)"/g)];
@@ -61,14 +64,20 @@ export function parseShapeshifterHtml(html) {
         m = sortedIcons.length;
         sortedIcons.forEach((icon, i) => { iconToVal[icon] = i; });
     }
+    if (m < 2 || m > 5 || Object.keys(iconToVal).length !== m) {
+        throw new Error('Could not read the symbol cycle. Paste the complete Shapeshifter page HTML.');
+    }
 
     // Build board grid (imgLocStr uses [col][row])
     const board = [];
     for (let row = 0; row < gy; row++) {
         const boardRow = [];
         for (let col = 0; col < gx; col++) {
-            const icon = cellMap[`${col},${row}`] || [...icons][0];
-            boardRow.push(iconToVal[icon] || 0);
+            const icon = cellMap[`${col},${row}`];
+            if (!Object.hasOwn(iconToVal, icon)) {
+                throw new Error('Could not read every board cell. Paste the complete Shapeshifter page HTML.');
+            }
+            boardRow.push(iconToVal[icon]);
         }
         board.push(boardRow);
     }
@@ -109,6 +118,14 @@ export function parseShapeshifterHtml(html) {
             if (pos >= 0 && pos < nextEnd) nextEnd = pos;
         }
         pieces.push(...parseShapeTables(html.slice(nextPos, nextEnd)));
+    }
+
+    if (!pieces.length) {
+        throw new Error('Could not find any pieces. Paste the complete Shapeshifter page HTML.');
+    }
+    if (pieces.length > 36 || pieces.some(piece => piece.length > 5 || piece[0].length > 5
+        || piece.some(row => row.length !== piece[0].length) || !piece.some(row => row.some(Boolean)))) {
+        throw new Error('Could not read valid piece shapes. Paste the complete Shapeshifter page HTML.');
     }
 
     // Build icon list ordered by deficit

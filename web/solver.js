@@ -9,6 +9,8 @@ const cancelButton = document.getElementById('cancel-btn');
 const input = document.getElementById('puzzle-input');
 const results = document.getElementById('results-content');
 let searchTimer;
+let parsedPuzzle = null;
+let loading = true;
 
 const solver = new SolverClient({ onStatus(update) {
     if (update.type === 'loading') status.textContent = 'Loading solver…';
@@ -34,21 +36,41 @@ function message(text) {
     results.append(paragraph);
 }
 
-async function solvePuzzle() {
-    let puzzle;
-    try {
-        if (!input.value.trim()) throw new Error('Paste the Shapeshifter page HTML first.');
-        puzzle = parseShapeshifterHtml(input.value.trim());
-    } catch (error) {
-        message(`Parse error: ${error.message}`);
-        return;
-    }
+function updateSolveButton() {
+    solveButton.hidden = !parsedPuzzle;
+    solveButton.disabled = !parsedPuzzle || loading || input.disabled;
+}
 
-    solveButton.disabled = true;
+function previewPuzzle() {
+    parsedPuzzle = null;
+    input.setAttribute('aria-invalid', 'false');
+    try {
+        const html = input.value.trim();
+        if (html) {
+            const puzzle = parseShapeshifterHtml(html);
+            boardRender(results, puzzle.board, puzzle.rows, puzzle.columns,
+                puzzle.icons, ASSETS_DIR, null, null);
+            parsedPuzzle = puzzle;
+        } else {
+            boardRender(results, Array.from({ length: 6 }, () => Array(6).fill(0)),
+                6, 6, DEFAULT_ICONS, ASSETS_DIR, null, null);
+        }
+    } catch (error) {
+        input.setAttribute('aria-invalid', 'true');
+        message(`Parse error: ${error.message}`);
+    }
+    updateSolveButton();
+}
+
+async function solvePuzzle() {
+    const puzzle = parsedPuzzle;
+    if (!puzzle || loading || input.disabled) return;
+
     input.disabled = true;
+    updateSolveButton();
     cancelButton.hidden = false;
     cancelButton.disabled = false;
-    message('Solving…');
+    status.textContent = 'Preparing puzzle…';
     try {
         const result = await solver.solve(puzzle);
         if (result.cancelled) message('Search cancelled.');
@@ -62,12 +84,13 @@ async function solvePuzzle() {
         status.textContent = 'Solver stopped. Try again.';
     } finally {
         clearInterval(searchTimer);
-        solveButton.disabled = false;
         input.disabled = false;
+        updateSolveButton();
         cancelButton.hidden = true;
     }
 }
 
+input.addEventListener('input', previewPuzzle);
 solveButton.addEventListener('click', solvePuzzle);
 cancelButton.addEventListener('click', () => {
     cancelButton.disabled = true;
@@ -75,9 +98,10 @@ cancelButton.addEventListener('click', () => {
     status.textContent = 'Cancelling…';
     solver.cancel();
 });
-boardRender(results, Array.from({ length: 6 }, () => Array(6).fill(0)),
-    6, 6, DEFAULT_ICONS, ASSETS_DIR, null, null);
-solver.init().then(() => { solveButton.disabled = false; }).catch(error => {
+previewPuzzle();
+solver.init().catch(error => {
     status.textContent = `Failed to load solver: ${error.message}`;
-    solveButton.disabled = false;
+}).finally(() => {
+    loading = false;
+    updateSolveButton();
 });
