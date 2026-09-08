@@ -118,11 +118,20 @@ export async function testMode(browser, isolated, deployedUrl) {
         await page.waitForFunction(() => [...document.querySelectorAll('.cell img')]
             .every(image => image.complete && image.naturalWidth > 0));
         assert((await page.locator('#status').innerText()).includes('search'));
-        const moveScript = await page.locator('.move-script-source').inputValue();
+        await page.evaluate(() => {
+            navigator.clipboard.writeText = async text => { window.copiedScript = text; };
+        });
+        const copy = page.locator('.copy-move-script');
+        await copy.click();
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copied!');
+        const moveScript = await page.evaluate(() => window.copiedScript);
         assert(moveScript.includes('shapeshifterMoves.stop()'));
-        await page.locator('.copy-move-script').click();
-        assert(await page.locator('.move-script-source').isVisible());
-        await page.waitForFunction(() => document.querySelector('.move-script-help [role=status]').textContent.length > 0);
+        await page.evaluate(() => {
+            navigator.clipboard.writeText = async () => { throw new Error('Clipboard denied'); };
+        });
+        await copy.click();
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy failed');
+        await page.waitForFunction(() => document.querySelector('.copy-move-script').textContent === 'Copy move script');
         if (isolated) await testMoveScript(browser, moveScript, easy);
         await input.fill(puzzleHtml(hard));
         await assertPreview(page, hard);

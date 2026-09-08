@@ -99,38 +99,22 @@ export function createMoveScript(puzzle, placements, delayMs = 1000) {
 }
 
 export function addMoveScript(container, puzzle, placements) {
+    const script = createMoveScript(puzzle, placements);
     const button = document.createElement('button');
     button.textContent = 'Copy move script';
     button.className = 'copy-move-script';
+    button.setAttribute('aria-live', 'polite');
     container.querySelector('.step-nav').append(button);
 
-    const details = document.createElement('details');
-    details.className = 'move-script-help';
-    const summary = document.createElement('summary');
-    summary.textContent = 'Run moves on Neopets (experimental)';
-    const instructions = document.createElement('p');
-    instructions.textContent = 'Copy the script, switch to your Neopets game tab, open the developer console, '
-        + 'paste, and press Enter. It places the remaining pieces one at a time, waiting one second between '
-        + 'confirmed moves, then refreshes the game page. Keep the game tab idle while it runs. '
-        + 'To stop, enter shapeshifterMoves.stop() in that console.';
-    const feedback = document.createElement('p');
-    feedback.setAttribute('role', 'status');
-    const source = document.createElement('textarea');
-    source.className = 'move-script-source';
-    source.setAttribute('aria-label', 'Move script for the Neopets console');
-    source.readOnly = true;
-    source.value = createMoveScript(puzzle, placements);
-    details.append(summary, instructions, feedback, source);
-    container.querySelector('.step-nav').after(details);
+    let reset;
     button.addEventListener('click', async () => {
-        details.open = true;
         try {
-            await navigator.clipboard.writeText(source.value);
-            feedback.textContent = 'Copied. Paste into the console on your Neopets game tab.';
+            await navigator.clipboard.writeText(script);
+            button.textContent = 'Copied!';
         } catch {
-            source.focus();
-            source.select();
-            feedback.textContent = 'Copy the selected script below, then paste into the console on your Neopets game tab.';
+            button.textContent = 'Copy failed';
         }
+        clearTimeout(reset);
+        reset = setTimeout(() => { button.textContent = 'Copy move script'; }, 2000);
     });
 }

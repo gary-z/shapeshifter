@@ -9,20 +9,6 @@ The search limit is 120 seconds; puzzle preparation and WASM/pool startup are
 measured separately. Rust checks deadlines inside search, and the UI has a
 recovery watchdog. The UI stays responsive and supports cancellation.
 
-After solving, **Copy move script** copies a self-contained script for the
-developer console on the Neopets Shapeshifter tab. This experimental runner
-reads the live game, checks it against the solution, and submits one placement
-at a time with a one-second delay between confirmed moves. It uses the links
-from each returned page and refreshes the game after a confirmed win.
-`shapeshifterMoves.stop()` stops before another move; an in-flight request may
-still finish. A failed or unexpected response stops the script without retries.
-Refresh the game before continuing after a stop. The script can resume a
-partially completed solution when the live board and remaining pieces match.
-
-Requests run on Neopets, with that tab's session and a same-origin game referrer.
-Browser tests use a simulated game with a referrer check; acceptance by the
-authenticated Neopets server still needs manual verification.
-
 ## Hosting
 
 Cloudflare Pages serves the app as a static site:
