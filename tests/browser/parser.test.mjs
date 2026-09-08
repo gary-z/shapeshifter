@@ -62,3 +62,13 @@ test('missing level and incomplete piece sections fail instead of guessing', () 
     assert.throws(() => parseShapeshifterHtml(html.replace('ACTIVE SHAPE', '')),
         /Could not find any pieces/);
 });
+
+test('invalid board and piece data produce explicit parse errors', () => {
+    for (const [invalid, error] of [
+        ['<img src=x onerror=alert(1)>', /board dimensions/],
+        ['You Won!', /You Won!/],
+        [html.replace('gX = 3', 'gX = 0'), /Board dimensions/],
+        [html.replace(/^imgLocStr\[0\]\[0\].*$/m, ''), /every board cell/],
+        [html.replaceAll('square.gif', 'empty.gif'), /valid piece shapes/],
+    ]) assert.throws(() => parseShapeshifterHtml(invalid), error);
+});

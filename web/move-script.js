@@ -1,7 +1,3 @@
-import { parseShapeshifterHtml } from './parser.js';
-import { copyOnClick } from './copy-button.js';
-
-// Serialized into the console script; keep this function self-contained.
 export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, onStatus) {
     if (location.protocol !== 'https:' || !['www.neopets.com', 'neopets.com'].includes(location.hostname)
         || location.pathname !== '/medieval/shapeshifter.phtml') {
@@ -155,21 +151,4 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         control.running = false;
         onStatus?.(control.message, control);
     }
-}
-
-export function createMoveScript(puzzle, placements, delayMs = 1000) {
-    if (!Number.isFinite(delayMs) || delayMs < 0) throw new Error('Move delay must be a nonnegative number.');
-    return `// Paste into the console on https://www.neopets.com/medieval/shapeshifter.phtml\n`
-        + `// Stop: shapeshifterMoves.stop()\n`
-        + `void (${runMoves.toString()})(\n${JSON.stringify(puzzle)},\n${JSON.stringify(placements)},\n`
-        + `${parseShapeshifterHtml.toString()},\n${delayMs} /* milliseconds between confirmed moves */\n);`;
-}
-
-export function addMoveScript(container, puzzle, placements) {
-    const script = createMoveScript(puzzle, placements);
-    const button = document.createElement('button');
-    button.textContent = 'Copy move script';
-    button.className = 'copy-move-script';
-    container.querySelector('.step-nav').append(button);
-    copyOnClick(button, script);
 }

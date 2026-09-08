@@ -53,8 +53,7 @@ export function puzzleHtml(puzzle) {
 
 export async function openClient(browser, url, threads = null) {
     const page = await browser.newPage();
-    // Use the hosted page and its isolation headers without starting the UI's worker pool.
-    await page.route('**/solver.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
+    // The copy page supplies isolation headers without starting a worker pool.
     const response = await page.goto(url);
     assert(response.ok(), `Page returned ${response.status()}: ${url}`);
     const info = await page.evaluate(async threads => {
