@@ -2,7 +2,6 @@
 
 export function parseShapeshifterHtml(html) {
     const levelMatch = html.match(/LEVEL\s+(\d+)/);
-    const level = levelMatch ? parseInt(levelMatch[1]) : 0;
 
     if (html.includes('You Won!')) {
         throw new Error("This is a 'You Won!' page. Save the page BEFORE clicking to solve.");
@@ -18,6 +17,10 @@ export function parseShapeshifterHtml(html) {
     if (gx < 3 || gx > 14 || gy < 3 || gy > 14) {
         throw new Error('Board dimensions must be between 3 and 14 cells.');
     }
+    if (!levelMatch) {
+        throw new Error('Could not find the level. Paste the complete Shapeshifter page HTML.');
+    }
+    const level = parseInt(levelMatch[1]);
 
     // Extract cell icons: imgLocStr[col][row] = "iconname"
     const imgEntries = [...html.matchAll(/imgLocStr\[(\d+)\]\[(\d+)\]\s*=\s*"(\w+)"/g)];
@@ -91,21 +94,15 @@ export function parseShapeshifterHtml(html) {
 
     const pieces = [];
     const activePos = html.indexOf('ACTIVE SHAPE');
-    const nextPos = html.indexOf('NEXT SHAPES');
-
+    // Read the whole piece area: the queue heading becomes singular near the end.
     if (activePos >= 0) {
-        const activeEnd = nextPos >= 0 ? nextPos : activePos + 2000;
-        pieces.push(...parseShapeTables(html.slice(activePos, activeEnd)));
-    }
-
-    if (nextPos >= 0) {
         const endMarkers = ['rules_icon', 'Back to Games', 'shapeshifter_instruct'];
-        let nextEnd = html.length;
-        for (const marker of endMarkers) {
-            const pos = html.indexOf(marker, nextPos);
-            if (pos >= 0 && pos < nextEnd) nextEnd = pos;
+        const ends = endMarkers.map(marker => html.indexOf(marker, activePos)).filter(pos => pos >= 0);
+        if (!ends.length) {
+            throw new Error('Could not find the end of the piece list. Paste the complete Shapeshifter page HTML.');
         }
-        pieces.push(...parseShapeTables(html.slice(nextPos, nextEnd)));
+        const piecesEnd = Math.min(...ends);
+        pieces.push(...parseShapeTables(html.slice(activePos, piecesEnd)));
     }
 
     if (!pieces.length) {

@@ -86,6 +86,8 @@ export async function testMode(browser, isolated, deployedUrl) {
             for (const [invalid, expectedError] of [
                 ['<img src=x onerror=alert(1)>', 'board dimensions'],
                 ['You Won!', 'You Won!'],
+                [html.replace(/LEVEL\s+\d+/, ''), 'find the level'],
+                [html.replace('shapeshifter_instruct.phtml', 'missing-boundary'), 'end of the piece list'],
                 [html.replace('gX = 3', 'gX = 0'), 'Board dimensions'],
                 [html.replace(/^imgLocStr\[0\]\[0\].*$/m, ''), 'every board cell'],
                 [html.split('ACTIVE SHAPE')[0], 'any pieces'],
