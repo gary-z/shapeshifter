@@ -31,14 +31,14 @@ export function verifySolution(puzzle, result) {
 }
 
 export function puzzleHtml(puzzle) {
-    const icons = ['hel', 'swo', 'cro', 'gob', 'sta'].slice(0, puzzle.m);
+    const icons = puzzle.icons?.length ? puzzle.icons : ['hel', 'swo', 'cro', 'gob', 'sta'].slice(0, puzzle.m);
     const lines = [`LEVEL ${puzzle.level}; gX = ${puzzle.columns}; gY = ${puzzle.rows};`];
     puzzle.board.forEach((cells, row) => cells.forEach((value, column) => {
         lines.push(`imgLocStr[${column}][${row}] = "${icons[value]}";`);
     }));
     const cycle = [icons[0], ...icons.slice(1).reverse()];
     lines.push('<table>' + cycle.map((icon, i) =>
-        `<img src="/${icon}_0.gif">` + (i === 0 ? '<br><b><small>GOAL' : '')).join('') + '</table>');
+        `<img src="/${icon}_0.gif">` + (i === 0 ? '<br><b><small>GOAL</small></b>' : '')).join('') + '</table>');
     lines.push('ACTIVE SHAPE');
     puzzle.pieces.forEach((piece, index) => {
         if (index === 1) lines.push('NEXT SHAPES');

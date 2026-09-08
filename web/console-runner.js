@@ -1,11 +1,11 @@
 import { parseShapeshifterHtml } from './parser.js';
 import { runMoves } from './move-script.js';
+import { copyOnClick } from './copy-button.js';
 
 const SEARCH_BUDGET_MS = 120000;
 
 async function solveInFrame(puzzle, control) {
-    control.solver = null;
-    control.report('');
+    control.update({ solver: null, phase: 'loading', searchDeadline: null });
     await new Promise(resolve => setTimeout(resolve, 3000));
     if (control.stopped) return { cancelled: true };
 
@@ -28,6 +28,8 @@ async function solveInFrame(puzzle, control) {
             port2.close();
             frame.remove();
             if (control.solver) control.solver.type = 'finished';
+            if (!error) control.phase = 'checking';
+            control.searchDeadline = null;
             control.report('');
             if (error) reject(error);
             else resolve(result);
@@ -48,6 +50,10 @@ async function solveInFrame(puzzle, control) {
                     control.report('');
                 } else if (status.type === 'fallback') {
                     control.report('Parallel solver failed to start. Using one worker.');
+                } else if (status.type === 'preparing') {
+                    control.update({ phase: 'preparing' });
+                } else if (status.type === 'searching') {
+                    control.update({ phase: 'searching', searchDeadline: performance.now() + SEARCH_BUDGET_MS });
                 }
             }
         };
@@ -56,8 +62,9 @@ async function solveInFrame(puzzle, control) {
 }
 
 export function run() {
-    let panel, text, badge, button;
+    let panel, text, progress, badge, button, copy, ticker;
     return runMoves(null, null, parseShapeshifterHtml, 1000, solveInFrame, (message, control) => {
+        clearInterval(ticker);
         if (!control.running && !control.error) {
             panel?.remove();
             return;
@@ -67,35 +74,65 @@ export function run() {
             panel = document.createElement('aside');
             panel.id = 'shapeshifter-status';
             panel.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:2147483647;'
-                + 'max-width:420px;padding:16px;background:#172033;color:#fff;border-radius:8px;'
+                + 'min-width:240px;max-width:420px;padding:16px;background:#172033;color:#fff;border-radius:8px;'
                 + 'box-shadow:0 2px 12px #0006;font:14px/1.5 system-ui;text-align:left;';
             text = document.createElement('div');
+            text.className = 'solver-message';
             text.setAttribute('role', 'status');
+            progress = document.createElement('div');
+            progress.className = 'solver-progress';
+            progress.style.cssText = 'margin-bottom:8px;font-variant-numeric:tabular-nums;';
             badge = document.createElement('span');
             badge.className = 'solver-features';
+            badge.hidden = true;
             badge.style.cssText = 'margin-right:12px;font-size:12px;';
-            badge.title = 'Loaded solver features. Browser JIT optimization cannot be verified here; close DevTools for best performance.';
+            badge.title = 'Features used by the latest search. Browser JIT optimization cannot be verified here; close DevTools for best performance.';
             button = document.createElement('button');
-            button.style.cssText = 'margin-top:8px;padding:4px 12px;cursor:pointer;font:inherit;';
+            button.style.cssText = 'padding:4px 12px;cursor:pointer;font:inherit;';
             button.onclick = () => {
                 if (control.running) control.stop();
                 else panel.remove();
             };
-            panel.append(text, badge, button);
+            panel.append(text, progress, badge, button);
             document.body.append(panel);
         }
         text.textContent = message;
         text.hidden = !message;
+        const searching = control.phase === 'searching';
+        progress.hidden = !!control.error;
+        progress.setAttribute('role', searching ? 'timer' : 'status');
+        function showProgress() {
+            if (control.stopped) progress.textContent = 'Stopping…';
+            else if (searching) {
+                const seconds = Math.max(0, Math.ceil((control.searchDeadline - performance.now()) / 1000));
+                progress.textContent = `Searching · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} remaining`;
+            } else if (control.phase === 'placing') {
+                progress.textContent = `Placing pieces · ${control.completed} / ${control.total}`;
+            } else {
+                progress.textContent = { reading: 'Reading game…', loading: 'Loading solver…',
+                    preparing: 'Preparing puzzle…', checking: 'Checking board…', restarting: 'Starting a new puzzle…' }[control.phase];
+            }
+        }
+        showProgress();
+        if (searching && control.running && !control.stopped && !control.error) ticker = setInterval(showProgress, 250);
         const info = control.solver;
-        badge.hidden = !info?.workers || info.type === 'finished';
         if (info?.workers) {
+            badge.hidden = false;
             // The threaded package is built with SIMD; the fallback package uses scalar instructions.
             badge.textContent = `${info.threaded ? 'SIMD' : 'Scalar'} · ${info.workers} worker${info.workers === 1 ? '' : 's'}`;
             badge.style.color = info.threaded ? '#9ae6b4' : '#f6d58b';
         }
-        panel.style.padding = message ? '16px' : '8px';
-        button.style.marginTop = message ? '8px' : '0';
+        button.style.marginTop = message && control.error ? '8px' : '0';
         button.textContent = control.running ? 'Stop' : 'Dismiss';
         button.disabled = control.running && control.stopped;
+        if (control.error && !copy) {
+            copy = document.createElement('button');
+            copy.className = 'solver-copy-debug';
+            copy.textContent = 'Copy debug info';
+            copy.title = 'Copy error details and the last game response HTML.';
+            copy.style.cssText = 'margin:8px 0 0 8px;padding:4px 12px;cursor:pointer;font:inherit;';
+            copyOnClick(copy, JSON.stringify({ runnerUrl: import.meta.url, ...control.debug }, null, 2));
+            panel.append(copy);
+        }
     });
 }

@@ -22,28 +22,21 @@ export function parseShapeshifterHtml(html) {
     // Extract cell icons: imgLocStr[col][row] = "iconname"
     const imgEntries = [...html.matchAll(/imgLocStr\[(\d+)\]\[(\d+)\]\s*=\s*"(\w+)"/g)];
     const cellMap = {};
-    const icons = new Set();
     for (const [, x, y, icon] of imgEntries) {
         cellMap[`${x},${y}`] = icon;
-        icons.add(icon);
     }
 
-    // Parse icon cycle from GOAL section
-    let m, iconToVal = {};
-    const goalPos = html.indexOf('GOAL');
-    if (goalPos >= 0) {
-        const searchStart = Math.max(0, goalPos - 2000);
-        const tableStart = html.lastIndexOf('<table', goalPos);
-        const tableEnd = html.indexOf('</table>', goalPos);
-        if (tableStart >= searchStart && tableEnd >= 0) {
+    // The goal label sits below its icon; Sinsi's hints can also mention GOAL.
+    let m = 0, iconToVal = {};
+    const goal = html.match(/<img\b[^>]*\/(\w+)_0\.gif[^>]*>\s*<br\s*\/?>\s*<b>\s*<small>\s*GOAL\s*<\/small>/i);
+    if (goal) {
+        const tableStart = html.lastIndexOf('<table', goal.index);
+        const tableEnd = html.indexOf('</table>', goal.index);
+        if (tableStart >= 0 && tableEnd >= 0) {
             const cycleSection = html.slice(tableStart, tableEnd + 10);
             let cycleIcons = [...cycleSection.matchAll(/\/(\w+)_0\.gif/g)]
                 .map(m => m[1])
                 .filter(i => i !== 'arrow');
-
-            // Find goal icon
-            const goalIconMatch = cycleSection.match(/\/(\w+)_0\.gif[^>]*>[^<]*<br><b><small>GOAL/s);
-            const goalIcon = goalIconMatch ? goalIconMatch[1] : cycleIcons[Math.floor(cycleIcons.length / 2)];
 
             // Remove trailing duplicate (wrap)
             if (cycleIcons.length > 1 && cycleIcons[cycleIcons.length - 1] === cycleIcons[0]) {
@@ -51,19 +44,14 @@ export function parseShapeshifterHtml(html) {
             }
 
             m = cycleIcons.length;
-            const goalIdx = cycleIcons.indexOf(goalIcon);
-            for (let offset = 0; offset < m; offset++) {
+            const goalIdx = cycleIcons.indexOf(goal[1]);
+            for (let offset = 0; goalIdx >= 0 && offset < m; offset++) {
                 const idx = (goalIdx + offset) % m;
                 iconToVal[cycleIcons[idx]] = (m - offset) % m;
             }
         }
     }
 
-    if (!m) {
-        const sortedIcons = [...icons].sort();
-        m = sortedIcons.length;
-        sortedIcons.forEach((icon, i) => { iconToVal[icon] = i; });
-    }
     if (m < 2 || m > 5 || Object.keys(iconToVal).length !== m) {
         throw new Error('Could not read the symbol cycle. Paste the complete Shapeshifter page HTML.');
     }

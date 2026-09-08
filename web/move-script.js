@@ -13,8 +13,9 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         return;
     }
     const control = window.shapeshifterMoves = {
-        running: true, stopped: false, completed: 0, message: '', result: null, error: null,
+        running: true, stopped: false, completed: 0, total: 0, phase: 'reading', message: '', result: null, error: null,
         stop() { this.stopped = true; this.onStop?.(); onStatus?.(this.message, this); },
+        update(state) { Object.assign(this, state); onStatus?.(this.message, this); },
         report(message, level = 'warn') {
             this.message = message;
             if (message) console[level](message);
@@ -23,7 +24,7 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
     };
     const gameUrl = new URL('/medieval/shapeshifter.phtml', location.origin);
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    let expected;
+    let expected, lastRequest = null, lastMove = null;
     function apply(index) {
         const [row, col] = placements[index];
         puzzle.pieces[index].forEach((cells, r) => cells.forEach((active, c) => {
@@ -38,18 +39,23 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         }
     }
     async function read(url, options = {}) {
+        lastRequest = { url: String(url), method: options.method ?? 'GET', responseUrl: null, status: null, html: null };
         const response = await fetch(url, {
             ...options,
             mode: 'same-origin', credentials: 'same-origin', cache: 'no-store',
             referrer: gameUrl.href, referrerPolicy: 'same-origin',
             signal: AbortSignal.timeout(30000),
         });
-        if (!response.ok) throw new Error(`Neopets returned HTTP ${response.status}.`);
+        lastRequest.responseUrl = response.url;
+        lastRequest.status = response.status;
         const html = await response.text();
+        lastRequest.html = html;
+        if (!response.ok) throw new Error(`Neopets returned HTTP ${response.status}.`);
         if (/from the wrong place/i.test(html)) throw new Error('Neopets rejected the request: wrong place.');
         return html;
     }
     async function restart(html) {
+        control.update({ phase: 'restarting', completed: 0, total: 0 });
         const level = Number(html.match(/LEVEL\s+(\d+)/)?.[1]);
         const page = new DOMParser().parseFromString(html, 'text/html');
         const form = page.querySelector('form[name="start_game"]');
@@ -69,10 +75,11 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         if (index < 0 || index >= placements.length) throw new Error('This solution does not match the live puzzle.');
         for (let i = 0; i < index; i++) apply(i);
         check(current, index);
-        control.completed = index;
+        control.update({ phase: 'placing', completed: index, total: placements.length });
         for (; index < placements.length; index++) {
             if (control.stopped) break;
             const [row, col] = placements[index];
+            lastMove = { piece: index + 1, row, col };
             const page = new DOMParser().parseFromString(html, 'text/html');
             const href = page.querySelector(`img[name="i${col}_${row}"]`)?.closest('a')?.getAttribute('href');
             const url = href && new URL(href, gameUrl);
@@ -93,7 +100,7 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             } else {
                 check(parseHtml(html), index + 1);
             }
-            control.completed = index + 1;
+            control.update({ completed: index + 1 });
             if (last) return { html, won };
             if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
         }
@@ -112,6 +119,7 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             let forfeiting = false;
             if (solve) {
                 puzzle = current;
+                placements = expected = lastMove = null;
                 control.completed = 0;
                 const result = await solve(puzzle, control);
                 control.result = result;
@@ -135,6 +143,13 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         }
     } catch (error) {
         control.error = error.message;
+        control.debug = {
+            capturedAt: new Date().toISOString(), pageUrl: location.href, userAgent: navigator.userAgent,
+            error: { message: error.message, stack: error.stack },
+            phase: control.phase, completed: control.completed, total: control.total,
+            solver: control.solver ?? null, lastResult: control.result,
+            puzzle, placements, expectedBoard: expected ?? null, lastMove, request: lastRequest,
+        };
         control.report(`Stopped: ${error.message}`, 'error');
     } finally {
         control.running = false;
