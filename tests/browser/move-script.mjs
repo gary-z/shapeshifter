@@ -71,6 +71,8 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 if (++reads === 3 && scenario === 'changed-before-moves') {
                     state.board[0][0] = (state.board[0][0] + 1) % state.m;
                 }
+                // The final move can be confirmed before the win-page navigation finishes.
+                if (!state.pieces.length) await new Promise(resolve => setTimeout(resolve, 250));
                 await route.fulfill({ contentType: 'text/html', body: gameHtml() });
                 return;
             }
@@ -131,9 +133,8 @@ export async function testMoveScript(browser, script, puzzle, { hostedUrl, hard 
                 await page.locator('#shapeshifter-status button').click();
             }
             async function assertSolved() {
-                await page.waitForFunction(total => document.body.textContent.includes('You Won!')
-                    || (window.shapeshifterMoves?.running === false && window.shapeshifterMoves.completed < total),
-                puzzle.pieces.length, { timeout: 60000 });
+                await page.waitForFunction(() => document.body.textContent.includes('You Won!')
+                    || window.shapeshifterMoves?.error, null, { timeout: 60000 });
                 assert((await page.locator('body').innerText()).includes('You Won!'), logs.join('\n'));
                 assert.equal(moves, puzzle.pieces.length);
                 assert.equal(requests.length, moves);
