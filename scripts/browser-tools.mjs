@@ -41,12 +41,13 @@ export function puzzleHtml(puzzle) {
         `<img src="/${icon}_0.gif">` + (i === 0 ? '<br><b><small>GOAL</small></b>' : '')).join('') + '</table>');
     lines.push('ACTIVE SHAPE');
     puzzle.pieces.forEach((piece, index) => {
-        if (index === 1) lines.push('NEXT SHAPES');
+        if (index === 1) lines.push(puzzle.pieces.length === 2 ? 'NEXT SHAPE' : 'NEXT SHAPES');
         lines.push('<table border=0 cellpadding=0 cellspacing=0>');
         for (const cells of piece) lines.push('<tr>' + cells.map(active =>
             active ? '<td><img src="square.gif"></td>' : '<td></td>').join('') + '</tr>');
         lines.push('</table>');
     });
+    lines.push('<a href="shapeshifter_instruct.phtml">Rules</a>');
     return lines.join('\n');
 }
 

@@ -36,3 +36,29 @@ test('missing or invalid goal cycles fail instead of guessing a symbol order', (
         assert.throws(() => parseShapeshifterHtml(hint + invalid), /Could not read the symbol cycle/);
     }
 });
+
+const largePiece = Array.from({ length: 5 }, () => Array(5).fill(true));
+for (const pieces of [[largePiece], [[[true]], largePiece], [[[true]], largePiece, [[true]]]]) {
+    test(`reads ${pieces.length} remaining shape${pieces.length === 1 ? '' : 's'} with full-size game markup`, () => {
+        const input = { ...puzzle, rows: 5, columns: 5,
+            board: Array.from({ length: 5 }, () => Array(5).fill(0)), pieces };
+        const page = puzzleHtml(input).replaceAll('<img src="square.gif">',
+            '<img src="//images.neopets.com/medieval/shapeshifter/square.gif" width=10 height=10 border=0>');
+        assert(page.length - page.indexOf('ACTIVE SHAPE') > 2000);
+        assert.deepEqual(parseShapeshifterHtml(page), { ...input, icons: expected.icons });
+    });
+}
+
+test('shape parsing stops at the game instructions', () => {
+    const footer = '<table border=0 cellpadding=0 cellspacing=0><tr><td><img src="square.gif"></td></tr></table>';
+    assert.deepEqual(parseShapeshifterHtml(html + footer), expected);
+});
+
+test('missing level and incomplete piece sections fail instead of guessing', () => {
+    assert.throws(() => parseShapeshifterHtml(html.replace('LEVEL 100', '')),
+        /Could not find the level/);
+    assert.throws(() => parseShapeshifterHtml(html.slice(0, html.indexOf('<a href="shapeshifter_instruct'))),
+        /Could not find the end of the piece list/);
+    assert.throws(() => parseShapeshifterHtml(html.replace('ACTIVE SHAPE', '')),
+        /Could not find any pieces/);
+});
