@@ -7,7 +7,7 @@ window.addEventListener('message', async event => {
     const port = event.ports[0];
     client = new SolverClient({ onStatus: status => port.postMessage({ type: 'status', status }) });
     try {
-        const result = await client.solve(event.data.puzzle);
+        const result = await client.solve(event.data.puzzle, event.data.budgetMs);
         port.postMessage({ type: 'result', result });
     } catch (error) {
         port.postMessage({ type: 'error', message: error.message });

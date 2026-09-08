@@ -1,6 +1,8 @@
 import { parseShapeshifterHtml } from './parser.js';
 import { runMoves } from './move-script.js';
 
+const SEARCH_BUDGET_MS = 10000; // Temporary budget for testing timeout recovery.
+
 async function solveInFrame(puzzle, control) {
     control.report('Starting the solver in 3 seconds. Close DevTools for best WebAssembly performance.');
     await new Promise(resolve => setTimeout(resolve, 3000));
@@ -29,7 +31,7 @@ async function solveInFrame(puzzle, control) {
         }
         control.onStop = () => finish({ cancelled: true });
         frame.addEventListener('load', () => {
-            if (!finished) frame.contentWindow.postMessage({ type: 'shapeshifter:solve', puzzle }, url.origin, [port2]);
+            if (!finished) frame.contentWindow.postMessage({ type: 'shapeshifter:solve', puzzle, budgetMs: SEARCH_BUDGET_MS }, url.origin, [port2]);
         }, { once: true });
         port1.onmessage = ({ data }) => {
             if (data.type === 'result') finish(data.result);
@@ -42,7 +44,7 @@ async function solveInFrame(puzzle, control) {
                     control.report(`Solver ready: ${status.workers} search workers.`);
                     if (!status.threaded) control.report('Shared memory is unavailable here; this run uses one worker.', 'warn');
                 } else if (status.type === 'preparing') control.report('Preparing puzzle…');
-                else if (status.type === 'searching') control.report('Searching (2 minute budget)…');
+                else if (status.type === 'searching') control.report(`Searching (${SEARCH_BUDGET_MS / 1000} second budget)…`);
             }
         };
         document.body.append(frame);

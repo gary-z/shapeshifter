@@ -37,8 +37,9 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             throw new Error('The live board or remaining pieces do not match this solution.');
         }
     }
-    async function read(url) {
+    async function read(url, options = {}) {
         const response = await fetch(url, {
+            ...options,
             mode: 'same-origin', credentials: 'same-origin', cache: 'no-store',
             referrer: gameUrl.href, referrerPolicy: 'same-origin',
             signal: AbortSignal.timeout(30000),
@@ -48,28 +49,22 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
         if (/from the wrong place/i.test(html)) throw new Error('Neopets rejected the request: wrong place.');
         return html;
     }
-    try {
-        control.report(`Checking the live puzzle. Delay between moves: ${delayMs} ms. Stop with shapeshifterMoves.stop().`);
-        let html = await read(gameUrl);
-        let current = parseHtml(html);
-        if (solve) {
-            if (control.stopped) {
-                control.report('Solver stopped.');
-                return;
-            }
-            puzzle = current;
-            const result = await solve(puzzle, control);
-            control.result = result;
-            if (control.stopped || result.cancelled) {
-                control.report('Solver stopped.');
-                return;
-            }
-            if (!result.solved) throw new Error(result.timed_out
-                ? 'No solution found within 2 minutes.' : 'No solution found.');
-            placements = result.placements;
-            html = await read(gameUrl);
-            current = parseHtml(html);
+    async function restart(html) {
+        const level = Number(html.match(/LEVEL\s+(\d+)/)?.[1]);
+        const page = new DOMParser().parseFromString(html, 'text/html');
+        const form = page.querySelector('form[name="start_game"]');
+        const action = form?.getAttribute('action');
+        const url = action && new URL(action, gameUrl);
+        if (!url || url.origin !== gameUrl.origin || url.pathname !== '/medieval/process_shapeshifter.phtml'
+            || url.searchParams.get('type') !== 'init' || form.method !== 'post') {
+            throw new Error('Could not find the game’s Try Again form.');
         }
+        control.report('Neopets confirmed the loss. Starting a new puzzle…');
+        const next = await read(url, { method: 'POST', body: new URLSearchParams(new FormData(form)) });
+        if (parseHtml(next).level !== level) throw new Error('Try Again returned a different level.');
+        return next;
+    }
+    async function play(html, current, forfeiting) {
         expected = puzzle.board.map(row => [...row]);
         let index = puzzle.pieces.length - current.pieces.length;
         if (index < 0 || index >= placements.length) throw new Error('This solution does not match the live puzzle.');
@@ -91,21 +86,56 @@ export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, on
             html = await read(url);
             apply(index);
             const last = index + 1 === placements.length;
+            const won = html.includes('You Won!');
             if (last) {
-                if (!html.includes('You Won!') || Number(html.match(/LEVEL\s+(\d+)/)?.[1]) !== puzzle.level) {
-                    throw new Error('The final response did not confirm that this level was solved.');
+                if (!(won || (forfeiting && html.includes('You Lost!')))
+                    || Number(html.match(/LEVEL\s+(\d+)/)?.[1]) !== puzzle.level) {
+                    throw new Error('The final response did not confirm the expected game result.');
                 }
             } else {
                 check(parseHtml(html), index + 1);
             }
             control.completed = index + 1;
             control.report(`Confirmed ${control.completed}/${placements.length} pieces.`);
-            if (last) {
+            if (last) return { html, won };
+            if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        return null;
+    }
+    try {
+        control.report(`Checking the live puzzle. Delay between moves: ${delayMs} ms. Stop with shapeshifterMoves.stop().`);
+        let html = await read(gameUrl);
+        while (!control.stopped) {
+            if (solve && html.includes('You Lost!')) {
+                html = await restart(html);
+                continue;
+            }
+            let current = parseHtml(html);
+            let forfeiting = false;
+            if (solve) {
+                puzzle = current;
+                control.completed = 0;
+                const result = await solve(puzzle, control);
+                control.result = result;
+                if (control.stopped || result.cancelled) {
+                    control.report('Solver stopped.');
+                    return;
+                }
+                if (!result.solved && !result.timed_out) throw new Error('No solution found.');
+                forfeiting = !result.solved;
+                if (forfeiting) control.report('Search timed out. Placing the remaining pieces at the top left to start a new puzzle…');
+                placements = forfeiting ? puzzle.pieces.map(() => [0, 0]) : result.placements;
+                html = await read(gameUrl);
+                current = parseHtml(html);
+            }
+            const outcome = await play(html, current, forfeiting);
+            if (!outcome) break;
+            if (outcome.won) {
                 control.report('Neopets confirmed the level is solved. Refreshing the game page.');
                 location.assign(gameUrl.href);
                 return;
             }
-            if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
+            html = outcome.html;
         }
         control.report('Move script stopped. Refresh the game page before continuing.');
     } catch (error) {
