@@ -25,6 +25,8 @@ test('server supplies WASM MIME and isolation headers, with fallback and failure
             assert.equal(response.headers.get('content-type'), 'application/wasm');
             assert.equal(response.headers.get('cross-origin-opener-policy'), isolated ? 'same-origin' : null);
             assert.equal(response.headers.get('cross-origin-embedder-policy'), isolated ? 'require-corp' : null);
+            assert.equal(response.headers.get('document-isolation-policy'), isolated ? 'isolate-and-require-corp' : null);
+            assert.equal(response.headers.get('access-control-allow-origin'), '*');
             assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from([0, 97, 115, 109]));
             const head = await fetch(server.url + '/', { method: 'HEAD' });
             assert.equal(head.status, 200);

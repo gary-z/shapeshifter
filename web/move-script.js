@@ -1,7 +1,8 @@
 import { parseShapeshifterHtml } from './parser.js';
+import { copyOnClick } from './copy-button.js';
 
 // Serialized into the console script; keep this function self-contained.
-async function runMoves(puzzle, placements, parseHtml, delayMs) {
+export async function runMoves(puzzle, placements, parseHtml, delayMs, solve, onStatus) {
     if (location.protocol !== 'https:' || !['www.neopets.com', 'neopets.com'].includes(location.hostname)
         || location.pathname !== '/medieval/shapeshifter.phtml') {
         console.error('Run this script in the console of your Neopets Shapeshifter game tab.');
@@ -12,12 +13,17 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
         return;
     }
     const control = window.shapeshifterMoves = {
-        running: true, stopped: false, completed: 0,
-        stop() { this.stopped = true; },
+        running: true, stopped: false, completed: 0, message: '', result: null, error: null,
+        stop() { this.stopped = true; this.onStop?.(); onStatus?.(this.message, this); },
+        report(message, level = 'warn') {
+            this.message = message;
+            if (message) console[level](message);
+            onStatus?.(message, this);
+        },
     };
     const gameUrl = new URL('/medieval/shapeshifter.phtml', location.origin);
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    const expected = puzzle.board.map(row => [...row]);
+    let expected;
     function apply(index) {
         const [row, col] = placements[index];
         puzzle.pieces[index].forEach((cells, r) => cells.forEach((active, c) => {
@@ -31,8 +37,9 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
             throw new Error('The live board or remaining pieces do not match this solution.');
         }
     }
-    async function read(url) {
+    async function read(url, options = {}) {
         const response = await fetch(url, {
+            ...options,
             mode: 'same-origin', credentials: 'same-origin', cache: 'no-store',
             referrer: gameUrl.href, referrerPolicy: 'same-origin',
             signal: AbortSignal.timeout(30000),
@@ -42,10 +49,22 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
         if (/from the wrong place/i.test(html)) throw new Error('Neopets rejected the request: wrong place.');
         return html;
     }
-    try {
-        console.log(`Checking the live puzzle. Delay between moves: ${delayMs} ms. Stop with shapeshifterMoves.stop().`);
-        let html = await read(gameUrl);
-        const current = parseHtml(html);
+    async function restart(html) {
+        const level = Number(html.match(/LEVEL\s+(\d+)/)?.[1]);
+        const page = new DOMParser().parseFromString(html, 'text/html');
+        const form = page.querySelector('form[name="start_game"]');
+        const action = form?.getAttribute('action');
+        const url = action && new URL(action, gameUrl);
+        if (!url || url.origin !== gameUrl.origin || url.pathname !== '/medieval/process_shapeshifter.phtml'
+            || url.searchParams.get('type') !== 'init' || form.method !== 'post') {
+            throw new Error('Could not find the game’s Try Again form.');
+        }
+        const next = await read(url, { method: 'POST', body: new URLSearchParams(new FormData(form)) });
+        if (parseHtml(next).level !== level) throw new Error('Try Again returned a different level.');
+        return next;
+    }
+    async function play(html, current, forfeiting) {
+        expected = puzzle.board.map(row => [...row]);
         let index = puzzle.pieces.length - current.pieces.length;
         if (index < 0 || index >= placements.length) throw new Error('This solution does not match the live puzzle.');
         for (let i = 0; i < index; i++) apply(i);
@@ -62,31 +81,64 @@ async function runMoves(puzzle, placements, parseHtml, delayMs) {
                 || url.searchParams.get('posx') !== String(col) || url.searchParams.get('posy') !== String(row)) {
                 throw new Error(`Could not find the game's placement link at row ${row}, column ${col}.`);
             }
-            console.log(`Placing piece ${index + 1}/${placements.length} at row ${row}, column ${col}…`);
             html = await read(url);
             apply(index);
             const last = index + 1 === placements.length;
+            const won = html.includes('You Won!');
             if (last) {
-                if (!html.includes('You Won!') || Number(html.match(/LEVEL\s+(\d+)/)?.[1]) !== puzzle.level) {
-                    throw new Error('The final response did not confirm that this level was solved.');
+                if (!(won || (forfeiting && html.includes('You Lost!')))
+                    || Number(html.match(/LEVEL\s+(\d+)/)?.[1]) !== puzzle.level) {
+                    throw new Error('The final response did not confirm the expected game result.');
                 }
             } else {
                 check(parseHtml(html), index + 1);
             }
             control.completed = index + 1;
-            console.log(`Confirmed ${control.completed}/${placements.length} pieces.`);
-            if (last) {
-                console.log('Neopets confirmed the level is solved. Refreshing the game page.');
+            if (last) return { html, won };
+            if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        return null;
+    }
+    try {
+        control.report('');
+        let html = await read(gameUrl);
+        while (!control.stopped) {
+            control.report('');
+            if (solve && html.includes('You Lost!')) {
+                html = await restart(html);
+                continue;
+            }
+            let current = parseHtml(html);
+            let forfeiting = false;
+            if (solve) {
+                puzzle = current;
+                control.completed = 0;
+                const result = await solve(puzzle, control);
+                control.result = result;
+                if (control.stopped || result.cancelled) {
+                    return;
+                }
+                if (!result.solved && !result.timed_out) throw new Error('No solution found.');
+                forfeiting = !result.solved;
+                if (forfeiting) control.report('Search timed out. Starting a new puzzle.');
+                placements = forfeiting ? puzzle.pieces.map(() => [0, 0]) : result.placements;
+                html = await read(gameUrl);
+                current = parseHtml(html);
+            }
+            const outcome = await play(html, current, forfeiting);
+            if (!outcome) break;
+            if (outcome.won) {
                 location.assign(gameUrl.href);
                 return;
             }
-            if (!control.stopped) await new Promise(resolve => setTimeout(resolve, delayMs));
+            html = outcome.html;
         }
-        console.log('Move script stopped. Refresh the game page before continuing.');
     } catch (error) {
-        console.error(`Move script stopped: ${error.message} No move was retried. Refresh the game page before continuing.`);
+        control.error = error.message;
+        control.report(`Stopped: ${error.message}`, 'error');
     } finally {
         control.running = false;
+        onStatus?.(control.message, control);
     }
 }
 
@@ -103,18 +155,6 @@ export function addMoveScript(container, puzzle, placements) {
     const button = document.createElement('button');
     button.textContent = 'Copy move script';
     button.className = 'copy-move-script';
-    button.setAttribute('aria-live', 'polite');
     container.querySelector('.step-nav').append(button);
-
-    let reset;
-    button.addEventListener('click', async () => {
-        try {
-            await navigator.clipboard.writeText(script);
-            button.textContent = 'Copied!';
-        } catch {
-            button.textContent = 'Copy failed';
-        }
-        clearTimeout(reset);
-        reset = setTimeout(() => { button.textContent = 'Copy move script'; }, 2000);
-    });
+    copyOnClick(button, script);
 }
