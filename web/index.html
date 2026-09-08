@@ -5,111 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Shapeshifter Solver</title>
 <style>
-    *, *::before, *::after { box-sizing: border-box; }
-
-    body {
-        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-        background: #1a1a2e;
-        color: #e0e0e0;
-        margin: 0;
-        padding: 0;
-        min-height: 100vh;
-    }
-
-    .container {
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 30px 20px;
-    }
-
-    h1 { text-align: center; color: #e94560; font-size: 2em; margin-bottom: 5px; }
-    #status { text-align: center; padding: 8px; font-size: 0.85em; color: #aaa; margin-bottom: 20px; min-height: 1.5em; }
-
-    .input-row {
-        display: flex; gap: 12px; align-items: stretch; margin-bottom: 25px;
-    }
-    .input-row label { display: block; font-weight: 600; margin-bottom: 8px; color: #ccc; }
-    .input-row .input-field { flex: 1; }
-
-    textarea {
-        width: 100%; height: 40px;
-        background: #16213e; color: #e0e0e0;
-        border: 1px solid #333; border-radius: 8px;
-        padding: 12px;
-        font-family: 'Consolas', 'Fira Code', monospace; font-size: 12px;
-        resize: none; outline: none; transition: border-color 0.2s;
-    }
-    textarea:focus { border-color: #e94560; }
-
-    .input-row button {
-        background: #e94560; color: #fff; border: none; border-radius: 8px;
-        padding: 0 30px; font-size: 1.1em; font-weight: 600;
-        cursor: pointer; transition: background 0.2s, transform 0.1s;
-        align-self: flex-end; height: 40px;
-    }
-    button#solve-btn:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
-    button#solve-btn:disabled { background: #555; cursor: not-allowed; }
-    button#cancel-btn { background: #555; }
-    button#cancel-btn:disabled { opacity: 0.6; cursor: wait; }
-
-    .results-section {
-        background: #16213e; border-radius: 10px;
-        padding: 20px; border: 1px solid #2a2a4a;
-    }
-
-    /* Step navigation */
-    .step-nav {
-        display: flex; align-items: center; justify-content: center;
-        flex-wrap: wrap;
-        gap: 15px; margin-bottom: 15px;
-    }
-    .step-nav button {
-        background: #2a2a4a; color: #e0e0e0; border: 1px solid #444;
-        border-radius: 6px; padding: 8px 20px; font-size: 1em;
-        cursor: pointer; transition: background 0.2s;
-    }
-    .step-nav button:hover:not(:disabled) { background: #3a3a5a; }
-    .step-nav button:disabled { color: #555; cursor: not-allowed; }
-    .step-label {
-        font-size: 1em; color: #ccc; min-width: 180px; text-align: center;
-    }
-
-    /* Board grid */
-    .board {
-        display: inline-grid; gap: 0; padding: 0;
-        margin: 0 auto; display: grid; justify-content: center;
-    }
-    .cell { width: 50px; height: 50px; position: relative; line-height: 0; }
-    .cell img { width: 50px; height: 50px; display: block; }
-    .cell.click-here { outline: 4px solid #2ecc40; outline-offset: -4px; }
-
-    .solved { color: #2ecc71; font-size: 24px; text-align: center; font-weight: bold; padding: 20px; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; text-align: center; }
+    main { padding: 30px 20px; }
+    h1 { color: #e94560; }
+    button { background: #e94560; color: white; border: 0; border-radius: 8px;
+        min-width: 240px; padding: 12px 24px; font-size: 1.1em; cursor: pointer; }
+    button:hover { background: #c0392b; }
+    a { color: #aaa; font-size: 0.9em; }
 </style>
 </head>
 <body>
-<div class="container">
-    <h1><a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" style="color:#e94560;text-decoration:none">Shapeshifter</a> Solver</h1>
-    <div id="status"></div>
-
-    <p style="text-align:center"><a href="console.html" style="color:#e94560">Console solver</a></p>
-
-    <div class="input-row">
-        <div class="input-field">
-            <label for="puzzle-input">1. Go to <a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" style="color:#e94560">Shapeshifter</a> &nbsp; 2. Right-click &rarr; View Page Source &nbsp; 3. Select All &rarr; Copy &rarr; Paste below</label>
-            <textarea id="puzzle-input" placeholder="Paste Shapeshifter page HTML source here"></textarea>
-        </div>
-        <button id="solve-btn" hidden disabled>Solve</button>
-        <button id="cancel-btn" hidden>Cancel</button>
-    </div>
-
-    <div class="results-section">
-        <div id="results-content" aria-live="polite"></div>
-    </div>
-
-    <p style="text-align:center;margin-top:20px;font-size:0.85em"><a href="https://github.com/gary-z/shapeshifter" target="_blank" style="color:#888">GitHub</a></p>
-</div>
-
-<script src="board.js"></script>
-<script type="module" src="solver.js"></script>
+<main>
+    <h1>Shapeshifter Solver</h1>
+    <button id="copy-console-script">Copy auto-solve script</button>
+    <p><a href="https://www.neopets.com/medieval/shapeshifter.phtml" target="_blank" rel="noopener">Open Shapeshifter</a> · <a href="https://github.com/gary-z/shapeshifter" target="_blank" rel="noopener">GitHub</a></p>
+</main>
+<script type="module" src="console-page.js"></script>
 </body>
 </html>

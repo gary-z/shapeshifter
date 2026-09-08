@@ -2,9 +2,8 @@
 
 A browser solver for [Shapeshifter](https://www.neopets.com/medieval/shapeshifter.phtml), the Neopets placement puzzle.
 
-[Open the browser solver](https://shapeshifter.pages.dev/) to paste a saved game
-page and view a step-by-step solution. Search uses all browser-reported CPU cores
-when the host enables cross-origin isolation.
+[Open the solver page](https://shapeshifter.pages.dev/), copy the auto-solve script,
+and paste it into the console on your Shapeshifter game tab.
 
 ## Tools and documentation
 
@@ -54,7 +53,7 @@ correctness and browser behavior without asserting machine-dependent timings.
 | `src/core/` | SIMD bitboard, board, and piece representations. |
 | `src/solver/` | Search algorithms, preparation, and pruning bounds. |
 | `src/bin/` | Puzzle generator, benchmark CLI, and native measurement driver. |
-| `web/` | Static site: HTML, JavaScript, WASM packages, images, and hosting headers. |
+| `web/` | Static site: HTML, JavaScript, WASM packages, and hosting headers. |
 | `scripts/` | Build, packaging, serving, and browser benchmark tools. |
 | `tests/` | Rust integration tests and browser tests with local fixtures. |
 | `benchmarks/` | Hard-puzzle corpus, captured puzzle history, and reference results. |

@@ -22,7 +22,7 @@ Cloudflare Pages serves the app as a static site:
 The saved Cloudflare build command forwards to
 [`scripts/package-site.sh`](../scripts/package-site.sh), also available as
 `npm run build:site`. It packages the static site from `web/` into a clean `dist/`,
-including the committed WASM packages, JavaScript, images, favicon, and
+including the committed WASM packages, JavaScript, favicon, and
 [`_headers`](../web/_headers). Cloudflare does not need Rust to deploy.
 The headers enable shared memory on HTTPS or localhost:
 
@@ -31,8 +31,8 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Keep WASM files, worker scripts, and images on the same origin. Verify that the
-page reports “Ready · N search workers.” Other static hosts need the same
+Keep WASM files and worker scripts on the same origin. The game status panel
+shows the search worker count. Other static hosts need the same
 headers for parallel search. Without cross-origin isolation, or if pool startup
 fails, the app uses one worker with the same search policy.
 
@@ -72,8 +72,8 @@ npm test
 npm run test:browser
 ```
 
-`npm test` checks the local server, solution replay, seed handling, and generated
-file normalization. Browser tests run Chromium and Firefox sequentially; select
+`npm test` checks HTML parsing, the local server, solution replay, seed handling,
+and generated file normalization. Browser tests run Chromium and Firefox sequentially; select
 one with `npm run test:browser -- --browser firefox`.
 
 To check an isolated deployment, pass `--url`:
@@ -87,9 +87,9 @@ also test the single-worker mode and injected startup failure.
 
 Tests and fixtures live in `tests/browser/`; fixtures are read locally and are
 not deployed. Tests serve the app with and without isolation headers. They
-replay solutions, check invalid-input recovery, enforce a short search budget,
-cancel and reuse the solver, check UI responsiveness and image loading, and
-force parallel startup failure.
+replay solutions, enforce a short search budget, cancel and reuse the solver,
+and force parallel startup failure. They also check the copy button, clipboard
+errors, console autoplay, timeout recovery, progress, and error diagnostics.
 Tests and benchmarks log the actual browser version.
 
 For performance measurements, see [benchmarking](benchmarking.md).
