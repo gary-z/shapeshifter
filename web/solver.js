@@ -1,5 +1,6 @@
 import { SolverClient } from './search-client.js';
 import { parseShapeshifterHtml } from './parser.js';
+import { addMoveScript } from './move-script.js';
 
 const ASSETS_DIR = 'assets';
 const DEFAULT_ICONS = ['swo', 'hel'];
@@ -74,7 +75,10 @@ async function solvePuzzle() {
     try {
         const result = await solver.solve(puzzle);
         if (result.cancelled) message('Search cancelled.');
-        else if (result.solved) boardShowSolution(results, puzzle, result.placements, ASSETS_DIR);
+        else if (result.solved) {
+            boardShowSolution(results, puzzle, result.placements, ASSETS_DIR);
+            addMoveScript(results, puzzle, result.placements);
+        }
         else if (result.timed_out) message('No solution found within 2 minutes. You can try again.');
         else message('No solution found.');
         status.textContent = result.search_ms === undefined ? 'Search cancelled.'

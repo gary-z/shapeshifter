@@ -60,6 +60,7 @@
     /* Step navigation */
     .step-nav {
         display: flex; align-items: center; justify-content: center;
+        flex-wrap: wrap;
         gap: 15px; margin-bottom: 15px;
     }
     .step-nav button {
@@ -72,6 +73,9 @@
     .step-label {
         font-size: 1em; color: #ccc; min-width: 180px; text-align: center;
     }
+    .move-script-help { margin-bottom: 15px; font-size: 0.9em; }
+    .move-script-help summary { cursor: pointer; color: #ccc; }
+    .move-script-source { height: 160px; resize: vertical; }
 
     /* Board grid */
     .board {
